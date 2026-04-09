@@ -152,7 +152,7 @@ async function uploadImages(files, productId) {
 
 // ── 新增商品 ────────────────────────────────────────────
 function AddProductSheet({ onClose, onSaved }) {
-  const [form, setForm] = useState({ name:'', sku:'', quantity:'', unit:'個', cost:'', currency:'TWD' })
+  const [form, setForm] = useState({ name:'', sku:'', quantity:'', unit:'個', cost:'', currency:'TWD', source:'' })
   const [saving, setSaving] = useState(false)
   const [imageFiles, setImageFiles] = useState([])
   const [previews, setPreviews] = useState([])
@@ -190,6 +190,7 @@ function AddProductSheet({ onClose, onSaved }) {
       cost: Number(form.cost),
       currency: form.currency,
       category_id: selectedCategory ? Number(selectedCategory) : null,
+      source: form.source.trim() || null,
     }).select('id').single()
 
     if (imageFiles.length > 0 && inserted) {
@@ -245,6 +246,10 @@ function AddProductSheet({ onClose, onSaved }) {
           </select>
         </div>
       )}
+      <div className="form-group">
+        <label className="form-label">採購來源（品牌/店家）</label>
+        <input className="form-input" placeholder="例：UNIQLO、GU、ABC-MART" value={form.source} onChange={e => set('source', e.target.value)} />
+      </div>
       <div className="form-group">
         <label className="form-label">SKU 代碼</label>
         <input className="form-input" placeholder="例：SPRAY-001" value={form.sku} onChange={e => set('sku', e.target.value)} style={{textTransform:'uppercase'}} />
@@ -407,6 +412,9 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete }) {
         <div className="stat"><div className="stat-val fs15">{product.sku}</div><div className="stat-lbl">SKU</div></div>
       </div>
 
+      {/* 採購來源 */}
+      <SourceField productId={product.id} initialSource={product.source || ''} canEdit={canEdit} />
+
       {canEdit && (
         <>
           <div className="form-group">
@@ -491,6 +499,31 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete }) {
         <button className="btn btn-danger" onClick={deleteProduct} style={{marginTop:8}}>刪除商品</button>
       )}
     </Sheet>
+  )
+}
+
+function SourceField({ productId, initialSource, canEdit }) {
+  const [source, setSource] = useState(initialSource)
+  const [saved, setSaved] = useState(false)
+  async function save() {
+    await supabase.from('products').update({ source: source.trim() || null }).eq('id', productId)
+    setSaved(true)
+    setTimeout(() => setSaved(false), 1500)
+  }
+  return (
+    <div className="form-group" style={{ marginBottom: 20 }}>
+      <label className="form-label">採購來源（品牌/店家）</label>
+      {canEdit ? (
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input className="form-input" placeholder="例：UNIQLO" value={source} onChange={e => setSource(e.target.value)} style={{ flex: 1 }} />
+          <button className="btn" onClick={save} style={{ fontSize: 13, padding: '9px 16px', marginBottom: 0, flexShrink: 0 }}>
+            {saved ? '✓' : '儲存'}
+          </button>
+        </div>
+      ) : (
+        <div className="fs14" style={{ color: source ? 'var(--text)' : 'var(--text-3)' }}>{source || '未設定'}</div>
+      )}
+    </div>
   )
 }
 
