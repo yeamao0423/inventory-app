@@ -179,12 +179,13 @@ function AddProductSheet({ onClose, onSaved }) {
   }
 
   async function save() {
-    if (!form.name || !form.sku || form.quantity === '') return
+    if (!form.name || !form.sku) return
     setSaving(true)
+    const qty = Number(form.quantity) || 0
     const { data: inserted } = await supabase.from('products').insert({
       name: form.name,
       sku: form.sku.toUpperCase(),
-      quantity: Number(form.quantity),
+      quantity: qty,
       unit: form.unit,
       cost: Number(form.cost),
       currency: form.currency,
@@ -195,11 +196,13 @@ function AddProductSheet({ onClose, onSaved }) {
       await uploadImages(imageFiles, inserted.id)
     }
 
-    await supabase.from('history').insert({
-      sku: form.sku.toUpperCase(),
-      change: Number(form.quantity),
-      reason: '初始建立',
-    })
+    if (qty > 0) {
+      await supabase.from('history').insert({
+        sku: form.sku.toUpperCase(),
+        change: qty,
+        reason: '初始建立',
+      })
+    }
     setSaving(false)
     onSaved()
     onClose()
@@ -248,7 +251,7 @@ function AddProductSheet({ onClose, onSaved }) {
       </div>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
         <div className="form-group">
-          <label className="form-label">初始數量</label>
+          <label className="form-label">初始數量（收單商品可填 0）</label>
           <input className="form-input" type="number" placeholder="0" value={form.quantity} onChange={e => set('quantity', e.target.value)} />
         </div>
         <div className="form-group">

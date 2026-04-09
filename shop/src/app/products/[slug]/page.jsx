@@ -70,13 +70,21 @@ export default function ProductDetailPage() {
   const name = lang === 'en' && sp.name_en ? sp.name_en : p.name
   const desc = lang === 'en' ? sp.desc_en : sp.desc_zh
   const sortedImages = [...(p.product_images || [])].sort((a, b) => a.sort_order - b.sort_order)
+  const zh = lang === 'zh'
+
+  // Collection / sold_out status
+  const isCollection = !!sp.collection_end
+  const collectionExpired = isCollection && new Date(sp.collection_end) < new Date()
+  const markedSoldOut = sp.sold_out
 
   // Find current variant based on selected options
   const currentVariant = variants.find(v =>
     Object.entries(selectedOptions).every(([tid, vid]) => v.options?.[tid] === vid)
   )
   const stock = currentVariant?.stock ?? (variants.length === 0 ? p.quantity : 0)
-  const isSoldOut = stock <= 0
+  const stockSoldOut = stock <= 0 && !isCollection // only check stock for non-collection items
+  const isSoldOut = markedSoldOut || stockSoldOut
+  const isUnavailable = isSoldOut || collectionExpired
   const price = sp.shop_price + (currentVariant?.price_adjustment || 0)
 
   // Human-readable label for cart
@@ -100,7 +108,7 @@ export default function ProductDetailPage() {
   }
 
   function handleAddToCart() {
-    if (isSoldOut) return
+    if (isUnavailable) return
     addItem({
       id: p.id,
       sku: p.sku,
@@ -174,19 +182,50 @@ export default function ProductDetailPage() {
             )
           })}
 
+          {/* Collection notice */}
+          {isCollection && !collectionExpired && !markedSoldOut && (
+            <div style={{ background: 'var(--amber-bg)', borderRadius: 12, padding: '12px 16px', marginBottom: 8 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--amber)', marginBottom: 4 }}>
+                {zh ? '限時收單商品' : 'Limited-Time Collection'}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--amber)' }}>
+                {zh ? '收單截止：' : 'Deadline: '}
+                {new Date(sp.collection_end).toLocaleString(zh ? 'zh-TW' : 'en-US', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              </div>
+            </div>
+          )}
+
+          {collectionExpired && !markedSoldOut && (
+            <div style={{ background: 'var(--border-light)', borderRadius: 12, padding: '12px 16px', marginBottom: 8 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-3)' }}>
+                {zh ? '收單已截止' : 'Collection period has ended'}
+              </div>
+            </div>
+          )}
+
+          {markedSoldOut && (
+            <div style={{ background: 'var(--red-bg)', borderRadius: 12, padding: '12px 16px', marginBottom: 8 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--red)' }}>
+                {zh ? '缺貨中' : 'Out of Stock'}
+              </div>
+            </div>
+          )}
+
           {/* Qty */}
           <div className="spec-group">
             <div className="spec-label">{t('product.qty')}</div>
             <div className="qty-wrap">
-              <button className="qty-btn" onClick={() => setQty(q => Math.max(1, q - 1))}>−</button>
+              <button className="qty-btn" onClick={() => setQty(q => Math.max(1, q - 1))} disabled={isUnavailable}>−</button>
               <span className="qty-num">{qty}</span>
-              <button className="qty-btn" onClick={() => setQty(q => Math.min(stock, q + 1))}>+</button>
-              <span style={{ fontSize: 13, color: 'var(--text-3)' }}>
-                {isSoldOut
-                  ? <span style={{ color: 'var(--red)' }}>{t('product.sold_out')}</span>
-                  : <span style={{ color: 'var(--green)' }}>{t('product.in_stock')} ({stock})</span>
-                }
-              </span>
+              <button className="qty-btn" onClick={() => setQty(q => isCollection ? q + 1 : Math.min(stock, q + 1))} disabled={isUnavailable}>+</button>
+              {!isCollection && (
+                <span style={{ fontSize: 13, color: 'var(--text-3)' }}>
+                  {isSoldOut
+                    ? <span style={{ color: 'var(--red)' }}>{t('product.sold_out')}</span>
+                    : <span style={{ color: 'var(--green)' }}>{t('product.in_stock')} ({stock})</span>
+                  }
+                </span>
+              )}
             </div>
           </div>
 
@@ -218,9 +257,18 @@ export default function ProductDetailPage() {
           <button
             className="add-btn"
             onClick={handleAddToCart}
-            disabled={isSoldOut}
+            disabled={isUnavailable}
           >
-            {added ? '✓ ' + (lang === 'zh' ? '已加入' : 'Added!') : isSoldOut ? t('product.sold_out') : t('product.add_to_cart')}
+            {added
+              ? '✓ ' + (zh ? '已加入' : 'Added!')
+              : markedSoldOut
+                ? (zh ? '缺貨中' : 'Out of Stock')
+                : collectionExpired
+                  ? (zh ? '收單已截止' : 'Collection Ended')
+                  : stockSoldOut
+                    ? t('product.sold_out')
+                    : t('product.add_to_cart')
+            }
           </button>
         </div>
       </div>

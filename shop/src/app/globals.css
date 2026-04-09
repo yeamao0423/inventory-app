@@ -64,6 +64,10 @@ input, textarea, select { font-family: inherit; }
 .product-price { font-size: 17px; font-weight: 700; }
 .product-price-old { font-size: 13px; color: var(--text-3); text-decoration: line-through; margin-left: 6px; font-weight: 400; }
 .product-variants-hint { font-size: 12px; color: var(--text-3); margin-top: 4px; }
+.product-badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 20px; line-height: 1.4; }
+.product-badge-soldout { background: var(--red-bg); color: var(--red); }
+.product-badge-expired { background: var(--border-light); color: var(--text-3); }
+.product-badge-collection { background: var(--amber-bg); color: var(--amber); }
 
 /* ── Filter pills / tags ─────────────────── */
 .filter-pill {

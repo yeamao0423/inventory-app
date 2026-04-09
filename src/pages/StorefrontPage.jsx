@@ -103,9 +103,49 @@ export default function StorefrontPage() {
     fetchAll()
   }
 
+  // Check if product has any stock (base qty or any variant stock > 0)
+  function hasStock(item) {
+    const baseQty = item.products?.quantity || 0
+    // variants are loaded in ListingSheet, but for listing display we check base qty
+    // For a more accurate check we'd need to query variants, but base qty is sufficient for toggle
+    return baseQty > 0
+  }
+
+  const [collectionPrompt, setCollectionPrompt] = useState(null) // { item, collectionEnd }
+
   async function togglePublish(item) {
+    if (!item.published) {
+      // Going from unpublished → published: check stock
+      const { data: vars } = await supabase
+        .from('product_variants').select('stock').eq('product_id', item.product_id)
+      const hasVariantStock = (vars || []).some(v => v.stock > 0)
+      const baseQty = item.products?.quantity || 0
+      const hasAnyStock = baseQty > 0 || hasVariantStock
+
+      if (!hasAnyStock && !item.collection_end) {
+        // No stock → prompt for collection end time
+        setCollectionPrompt({ item, collectionEnd: '' })
+        return
+      }
+    }
     await supabase.from('storefront_products')
       .update({ published: !item.published })
+      .eq('id', item.id)
+    fetchAll()
+  }
+
+  async function confirmCollectionPublish() {
+    if (!collectionPrompt?.collectionEnd) return
+    await supabase.from('storefront_products')
+      .update({ published: true, collection_end: localToISO(collectionPrompt.collectionEnd) })
+      .eq('id', collectionPrompt.item.id)
+    setCollectionPrompt(null)
+    fetchAll()
+  }
+
+  async function toggleSoldOut(item) {
+    await supabase.from('storefront_products')
+      .update({ sold_out: !item.sold_out })
       .eq('id', item.id)
     fetchAll()
   }
@@ -168,41 +208,58 @@ export default function StorefrontPage() {
           {listings.length === 0 && (
             <div className="empty">尚未上架任何商品，點右上角 + 開始上架</div>
           )}
-          {listings.map(item => (
-            <div className="card" key={item.id}>
-              <div className="card-row" style={{ flexWrap: 'wrap', gap: 8 }}>
-                <div className="item-icon">🛍️</div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div className="fw600 fs15" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    {item.products?.name}
-                    <span className={`badge ${item.published ? 'badge-ok' : 'badge-warn'}`}>
-                      {item.published ? '上架中' : '已下架'}
-                    </span>
+          {listings.map(item => {
+            const isCollection = !!item.collection_end
+            const collectionExpired = isCollection && new Date(item.collection_end) < new Date()
+            const modeLabel = item.sold_out
+              ? '缺貨中'
+              : isCollection
+                ? (collectionExpired ? '已截止' : `收單至 ${new Date(item.collection_end).toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}`)
+                : '現貨'
+            const modeBadge = item.sold_out
+              ? 'badge-low'
+              : (isCollection && collectionExpired) ? 'badge-warn' : 'badge-blue'
+
+            return (
+              <div className="card" key={item.id}>
+                <div className="card-row" style={{ flexWrap: 'wrap', gap: 8 }}>
+                  <div className="item-icon">🛍️</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="fw600 fs15" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      {item.products?.name}
+                      <span className={`badge ${item.published ? 'badge-ok' : 'badge-warn'}`}>
+                        {item.published ? '上架中' : '已下架'}
+                      </span>
+                      <span className={`badge ${modeBadge}`}>{modeLabel}</span>
+                    </div>
+                    <div className="muted fs12 mt8">
+                      {item.products?.sku} · 售價 NT${Number(item.shop_price).toLocaleString()}
+                    </div>
+                    {item.name_en && <div className="muted fs12">{item.name_en}</div>}
                   </div>
-                  <div className="muted fs12 mt8">
-                    {item.products?.sku} · 售價 NT${Number(item.shop_price).toLocaleString()}
+                  <div style={{ display: 'flex', gap: 8, flexShrink: 0, flexWrap: 'wrap' }}>
+                    {can('edit') && (
+                      <>
+                        <button onClick={() => setSheet(item)} style={smallBtn}>設定</button>
+                        <button onClick={() => toggleSoldOut(item)} style={{ ...smallBtn, background: item.sold_out ? '#e8f7ee' : '#fff0e8', color: item.sold_out ? 'var(--green)' : 'var(--red)', borderColor: 'transparent' }}>
+                          {item.sold_out ? '恢復' : '缺貨'}
+                        </button>
+                        <button
+                          onClick={() => togglePublish(item)}
+                          style={{ ...smallBtn, background: item.published ? '#fff0e8' : '#e8f7ee', color: item.published ? 'var(--red)' : 'var(--green)', borderColor: 'transparent' }}
+                        >
+                          {item.published ? '下架' : '上架'}
+                        </button>
+                      </>
+                    )}
+                    {can('delete') && (
+                      <button onClick={() => deleteListing(item.id)} style={{ ...smallBtn, color: 'var(--red)' }}>刪除</button>
+                    )}
                   </div>
-                  {item.name_en && <div className="muted fs12">{item.name_en}</div>}
-                </div>
-                <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
-                  {can('edit') && (
-                    <>
-                      <button onClick={() => setSheet(item)} style={smallBtn}>設定</button>
-                      <button
-                        onClick={() => togglePublish(item)}
-                        style={{ ...smallBtn, background: item.published ? '#fff0e8' : '#e8f7ee', color: item.published ? 'var(--red)' : 'var(--green)', borderColor: 'transparent' }}
-                      >
-                        {item.published ? '下架' : '上架'}
-                      </button>
-                    </>
-                  )}
-                  {can('delete') && (
-                    <button onClick={() => deleteListing(item.id)} style={{ ...smallBtn, color: 'var(--red)' }}>刪除</button>
-                  )}
                 </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </>
       )}
 
@@ -373,6 +430,34 @@ export default function StorefrontPage() {
         </div>
       )}
 
+      {/* Collection end prompt */}
+      {collectionPrompt && (
+        <div className="sheet-overlay" onClick={e => e.target === e.currentTarget && setCollectionPrompt(null)}>
+          <div className="sheet" style={{ maxHeight: '50vh' }}>
+            <div className="sheet-handle" />
+            <div className="sheet-title">設定收單截止時間</div>
+            <div className="muted fs13" style={{ marginBottom: 16 }}>此商品目前無庫存，將以「限時收單」模式上架。請設定收單截止時間。</div>
+            <div className="form-group">
+              <label className="form-label">收單截止時間</label>
+              <input
+                className="form-input"
+                type="datetime-local"
+                value={collectionPrompt.collectionEnd}
+                onChange={e => setCollectionPrompt(p => ({ ...p, collectionEnd: e.target.value }))}
+              />
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button className="btn" onClick={confirmCollectionPublish} disabled={!collectionPrompt.collectionEnd} style={{ flex: 1 }}>
+                確認上架
+              </button>
+              <button className="btn" onClick={() => setCollectionPrompt(null)} style={{ flex: 1, background: 'var(--surface)', color: 'var(--text-2)' }}>
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Add/Edit listing sheet */}
       {sheet && (
         <ListingSheet
@@ -399,6 +484,20 @@ const smallBtn = {
   cursor: 'pointer', transition: 'all .15s',
 }
 
+// Convert UTC ISO string to local datetime-local value (YYYY-MM-DDTHH:mm)
+function utcToLocal(isoStr) {
+  if (!isoStr) return ''
+  const d = new Date(isoStr)
+  const pad = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+// Convert datetime-local value to ISO string with timezone
+function localToISO(localStr) {
+  if (!localStr) return null
+  return new Date(localStr).toISOString()
+}
+
 // ── Add/Edit listing sheet ─────────────────────────────
 function ListingSheet({ item, products, onClose, onSaved }) {
   const isEdit = !!item
@@ -409,6 +508,8 @@ function ListingSheet({ item, products, onClose, onSaved }) {
     desc_zh: item?.desc_zh || '',
     desc_en: item?.desc_en || '',
     published: item?.published ?? false,
+    collection_end: utcToLocal(item?.collection_end),
+    sold_out: item?.sold_out ?? false,
   })
   const [variants, setVariants] = useState([])
   const [optionTypes, setOptionTypes] = useState([])
@@ -441,22 +542,21 @@ function ListingSheet({ item, products, onClose, onSaved }) {
   async function save() {
     if (!form.product_id || !form.shop_price) return
     setSaving(true)
+    const payload = {
+      shop_price: Number(form.shop_price),
+      name_en: form.name_en,
+      desc_zh: form.desc_zh,
+      desc_en: form.desc_en,
+      published: form.published,
+      collection_end: localToISO(form.collection_end),
+      sold_out: form.sold_out,
+    }
     if (isEdit) {
-      await supabase.from('storefront_products').update({
-        shop_price: Number(form.shop_price),
-        name_en: form.name_en,
-        desc_zh: form.desc_zh,
-        desc_en: form.desc_en,
-        published: form.published,
-      }).eq('id', item.id)
+      await supabase.from('storefront_products').update(payload).eq('id', item.id)
     } else {
       await supabase.from('storefront_products').insert({
+        ...payload,
         product_id: Number(form.product_id),
-        shop_price: Number(form.shop_price),
-        name_en: form.name_en,
-        desc_zh: form.desc_zh,
-        desc_en: form.desc_en,
-        published: form.published,
       })
     }
     setSaving(false)
@@ -519,6 +619,31 @@ function ListingSheet({ item, products, onClose, onSaved }) {
         <div className="form-group">
           <label className="form-label">英文描述</label>
           <input className="form-input" placeholder="Product description in English" value={form.desc_en} onChange={e => set('desc_en', e.target.value)} />
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">收單截止時間（留空 = 現貨模式）</label>
+          <input className="form-input" type="datetime-local" value={form.collection_end} onChange={e => set('collection_end', e.target.value)} />
+          <div className="muted fs12" style={{ marginTop: 4 }}>無庫存商品建議設定收單時間，有庫存商品可留空</div>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+          <label className="form-label" style={{ margin: 0 }}>標記缺貨</label>
+          <div
+            onClick={() => set('sold_out', !form.sold_out)}
+            style={{
+              width: 44, height: 26, borderRadius: 13, cursor: 'pointer', transition: 'background .2s',
+              background: form.sold_out ? 'var(--red)' : 'var(--border)',
+              position: 'relative',
+            }}
+          >
+            <div style={{
+              width: 20, height: 20, borderRadius: '50%', background: '#fff',
+              position: 'absolute', top: 3, transition: 'left .2s',
+              left: form.sold_out ? 21 : 3,
+            }} />
+          </div>
+          <span className="muted fs13">{form.sold_out ? '缺貨中' : '正常'}</span>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>

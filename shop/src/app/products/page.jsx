@@ -119,12 +119,35 @@ function ProductCard({ sp, t, lang }) {
   const name = lang === 'en' && sp.name_en ? sp.name_en : p.name
   const desc = lang === 'en' ? sp.desc_en : sp.desc_zh
   const thumb = [...(p.product_images || [])].sort((a, b) => a.sort_order - b.sort_order)[0]?.url
+  const zh = lang === 'zh'
+
+  // Status logic
+  const isSoldOut = sp.sold_out
+  const isCollection = !!sp.collection_end
+  const collectionExpired = isCollection && new Date(sp.collection_end) < new Date()
+  const unavailable = isSoldOut || collectionExpired
+
+  let statusBadge = null
+  if (isSoldOut) {
+    statusBadge = <span className="product-badge product-badge-soldout">{zh ? '缺貨中' : 'Sold Out'}</span>
+  } else if (isCollection && collectionExpired) {
+    statusBadge = <span className="product-badge product-badge-expired">{zh ? '收單已截止' : 'Collection Ended'}</span>
+  } else if (isCollection) {
+    const end = new Date(sp.collection_end)
+    const dateStr = end.toLocaleDateString(zh ? 'zh-TW' : 'en-US', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    statusBadge = <span className="product-badge product-badge-collection">{zh ? `收單至 ${dateStr}` : `Until ${dateStr}`}</span>
+  }
 
   return (
-    <Link href={`/products/${p.sku}`} className="product-card">
-      {thumb
-        ? <img src={thumb} alt={name} className="product-img-placeholder" style={{objectFit:'cover'}} />
-        : <div className="product-img-placeholder">📦</div>}
+    <Link href={`/products/${p.sku}`} className="product-card" style={unavailable ? { opacity: 0.6 } : {}}>
+      <div style={{ position: 'relative' }}>
+        {thumb
+          ? <img src={thumb} alt={name} className="product-img-placeholder" style={{objectFit:'cover'}} />
+          : <div className="product-img-placeholder">📦</div>}
+        {statusBadge && (
+          <div style={{ position: 'absolute', top: 8, left: 8 }}>{statusBadge}</div>
+        )}
+      </div>
       <div className="product-info">
         <div className="product-name">{name}</div>
         {desc && <div className="product-desc">{desc}</div>}
@@ -132,7 +155,10 @@ function ProductCard({ sp, t, lang }) {
           <span className="product-price">NT${Number(sp.shop_price || 0).toLocaleString()}</span>
         </div>
         <div className="product-variants-hint">
-          {lang === 'zh' ? '點擊選擇規格' : 'Click to select variant'}
+          {unavailable
+            ? (isSoldOut ? (zh ? '缺貨中' : 'Sold Out') : (zh ? '收單已截止' : 'Collection Ended'))
+            : (zh ? '點擊選擇規格' : 'Click to select variant')
+          }
         </div>
       </div>
     </Link>
