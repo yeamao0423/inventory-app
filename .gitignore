@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.local
+shop/.env.local
+shop/node_modules/
+shop/.next/
+.claude/
+logs/
+supabase/.temp/
+backend-update/
+*.md
+*.docx
+migrate_roles.sql
+migration_*.sql

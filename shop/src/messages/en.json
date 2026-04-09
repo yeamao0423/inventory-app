@@ -1,0 +1,64 @@
+{
+  "nav": {
+    "home": "Home",
+    "products": "All Products",
+    "cart": "Cart",
+    "order": "My Order"
+  },
+  "home": {
+    "hero_title": "Curated Collection",
+    "hero_sub": "Quality guaranteed, fast shipping",
+    "shop_now": "Shop Now",
+    "featured": "Featured Products",
+    "all_products": "View All Products"
+  },
+  "product": {
+    "select_color": "Select Color",
+    "select_size": "Select Size",
+    "custom_note": "Customization Request",
+    "custom_placeholder": "Enter special requests (e.g. custom size, print text)",
+    "add_to_cart": "Add to Cart",
+    "sold_out": "Out of Stock",
+    "in_stock": "In Stock",
+    "qty": "Qty",
+    "price": "Price",
+    "back": "Back to Products"
+  },
+  "cart": {
+    "title": "Shopping Cart",
+    "empty": "Your cart is empty",
+    "empty_sub": "Browse our products and find something you love!",
+    "continue": "Continue Shopping",
+    "checkout": "Proceed to Checkout",
+    "remove": "Remove",
+    "subtotal": "Subtotal",
+    "total": "Total",
+    "items": "items"
+  },
+  "checkout": {
+    "title": "Your Information",
+    "name": "Full Name",
+    "phone": "Phone Number",
+    "email": "Email Address",
+    "address": "Shipping Address",
+    "note": "Note (payment method, delivery request)",
+    "note_placeholder": "e.g. Prefer bank transfer, please leave at door…",
+    "submit": "Place Order",
+    "submitting": "Submitting…",
+    "order_summary": "Order Summary",
+    "required": "This field is required"
+  },
+  "order": {
+    "success_title": "Order Placed!",
+    "success_sub": "We will contact you shortly to confirm payment",
+    "order_no": "Order Number",
+    "contact": "We will reach out within 24 hours via email or phone",
+    "back_home": "Back to Home",
+    "items": "Items Ordered"
+  },
+  "common": {
+    "twd": "NT$",
+    "loading": "Loading…",
+    "error": "Something went wrong, please try again"
+  }
+}

@@ -14,7 +14,10 @@ export default function InventoryPage() {
   useEffect(() => { fetchProducts() }, [])
 
   async function fetchProducts() {
-    const { data } = await supabase.from('products').select('*').order('name')
+    const { data } = await supabase
+      .from('products')
+      .select('*, product_images(id, url, sort_order), categories(id, name), product_tags(tag_id)')
+      .order('name')
     setProducts(data || [])
     setLoading(false)
   }
@@ -103,10 +106,15 @@ export default function InventoryPage() {
 }
 
 function ProductRow({ product: p, onTap, low }) {
+  const thumb = p.product_images?.sort((a, b) => a.sort_order - b.sort_order)[0]?.url
   return (
     <div className="card" onClick={onTap} style={{cursor:'pointer'}}>
       <div className="card-row">
-        <div className="item-icon">📦</div>
+        <div className="item-icon" style={{overflow:'hidden',borderRadius:8,flexShrink:0}}>
+          {thumb
+            ? <img src={thumb} style={{width:40,height:40,objectFit:'cover',borderRadius:8,display:'block'}} />
+            : '📦'}
+        </div>
         <div style={{flex:1,minWidth:0}}>
           <div className="fw600 fs15" style={{whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{p.name}</div>
           <div className="muted fs12 mt8">{p.sku} · {p.cost} {p.currency}</div>
@@ -122,22 +130,71 @@ function ProductRow({ product: p, onTap, low }) {
   )
 }
 
+// ── 上傳圖片到 Storage，寫入 product_images ──────────────
+async function uploadImages(files, productId) {
+  const results = []
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i]
+    const ext = file.name.split('.').pop().toLowerCase()
+    const path = `${productId}/${Date.now()}-${i}.${ext}`
+    const { error } = await supabase.storage.from('product-images').upload(path, file)
+    if (!error) {
+      const { data: { publicUrl } } = supabase.storage.from('product-images').getPublicUrl(path)
+      results.push(publicUrl)
+    }
+  }
+  if (results.length > 0) {
+    await supabase.from('product_images').insert(
+      results.map((url, idx) => ({ product_id: productId, url, sort_order: idx }))
+    )
+  }
+}
+
+// ── 新增商品 ────────────────────────────────────────────
 function AddProductSheet({ onClose, onSaved }) {
   const [form, setForm] = useState({ name:'', sku:'', quantity:'', unit:'個', cost:'', currency:'TWD' })
   const [saving, setSaving] = useState(false)
+  const [imageFiles, setImageFiles] = useState([])
+  const [previews, setPreviews] = useState([])
+  const [categories, setCategories] = useState([])
+  const [selectedCategory, setSelectedCategory] = useState('')
   const set = (k, v) => setForm(f => ({...f, [k]: v}))
+
+  useEffect(() => {
+    supabase.from('categories').select('*').order('sort_order')
+      .then(({ data }) => setCategories(data || []))
+  }, [])
+
+  function onImagesChange(e) {
+    const files = Array.from(e.target.files)
+    if (!files.length) return
+    setImageFiles(prev => [...prev, ...files])
+    setPreviews(prev => [...prev, ...files.map(f => URL.createObjectURL(f))])
+    e.target.value = ''   // allow re-selecting same file
+  }
+
+  function removePreview(idx) {
+    setImageFiles(prev => prev.filter((_, i) => i !== idx))
+    setPreviews(prev => prev.filter((_, i) => i !== idx))
+  }
 
   async function save() {
     if (!form.name || !form.sku || form.quantity === '') return
     setSaving(true)
-    await supabase.from('products').insert({
+    const { data: inserted } = await supabase.from('products').insert({
       name: form.name,
       sku: form.sku.toUpperCase(),
       quantity: Number(form.quantity),
       unit: form.unit,
       cost: Number(form.cost),
       currency: form.currency,
-    })
+      category_id: selectedCategory ? Number(selectedCategory) : null,
+    }).select('id').single()
+
+    if (imageFiles.length > 0 && inserted) {
+      await uploadImages(imageFiles, inserted.id)
+    }
+
     await supabase.from('history').insert({
       sku: form.sku.toUpperCase(),
       change: Number(form.quantity),
@@ -150,10 +207,41 @@ function AddProductSheet({ onClose, onSaved }) {
 
   return (
     <Sheet title="新增商品" onClose={onClose}>
+      {/* 圖片區 */}
+      <div className="form-group">
+        <label className="form-label">商品圖片</label>
+        {previews.length > 0 && (
+          <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:10}}>
+            {previews.map((src, i) => (
+              <div key={i} style={{position:'relative'}}>
+                <img src={src} style={{width:72,height:72,objectFit:'cover',borderRadius:8,display:'block'}} />
+                <button
+                  onClick={() => removePreview(i)}
+                  style={{position:'absolute',top:-6,right:-6,width:20,height:20,borderRadius:'50%',background:'var(--red)',color:'#fff',border:'none',cursor:'pointer',fontSize:12,lineHeight:'20px',textAlign:'center',padding:0}}
+                >×</button>
+              </div>
+            ))}
+          </div>
+        )}
+        <label style={{display:'flex',alignItems:'center',justifyContent:'center',gap:6,padding:'11px',border:'1.5px dashed var(--border)',borderRadius:10,cursor:'pointer',fontSize:13,color:'var(--text-3)'}}>
+          📷 新增圖片
+          <input type="file" accept="image/*" multiple style={{display:'none'}} onChange={onImagesChange} />
+        </label>
+      </div>
+
       <div className="form-group">
         <label className="form-label">商品名稱</label>
         <input className="form-input" placeholder="例：防水噴霧 500ml" value={form.name} onChange={e => set('name', e.target.value)} />
       </div>
+      {categories.length > 0 && (
+        <div className="form-group">
+          <label className="form-label">分類</label>
+          <select className="form-select" value={selectedCategory} onChange={e => setSelectedCategory(e.target.value)}>
+            <option value="">— 無分類 —</option>
+            {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+      )}
       <div className="form-group">
         <label className="form-label">SKU 代碼</label>
         <input className="form-input" placeholder="例：SPRAY-001" value={form.sku} onChange={e => set('sku', e.target.value)} style={{textTransform:'uppercase'}} />
@@ -185,16 +273,82 @@ function AddProductSheet({ onClose, onSaved }) {
   )
 }
 
+// ── 商品詳情 ────────────────────────────────────────────
 function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete }) {
   const [change, setChange] = useState('')
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
   const [history, setHistory] = useState([])
+  const [images, setImages] = useState(
+    [...(product.product_images || [])].sort((a, b) => a.sort_order - b.sort_order)
+  )
+  const [uploading, setUploading] = useState(false)
+  const [categories, setCategories] = useState([])
+  const [allTags, setAllTags] = useState([])
+  const [selectedCategory, setSelectedCategory] = useState(product.category_id || '')
+  const [selectedTags, setSelectedTags] = useState(
+    (product.product_tags || []).map(pt => pt.tag_id)
+  )
 
   useEffect(() => {
     supabase.from('history').select('*').eq('sku', product.sku).order('created_at', {ascending:false}).limit(10)
       .then(({ data }) => setHistory(data || []))
+    Promise.all([
+      supabase.from('categories').select('*').order('sort_order'),
+      supabase.from('tags').select('*').order('sort_order'),
+    ]).then(([{ data: cats }, { data: tgs }]) => {
+      setCategories(cats || [])
+      setAllTags(tgs || [])
+    })
   }, [product.sku])
+
+  async function saveCategory(catId) {
+    await supabase.from('products')
+      .update({ category_id: catId ? Number(catId) : null })
+      .eq('id', product.id)
+    setSelectedCategory(catId)
+  }
+
+  async function toggleTag(tagId, checked) {
+    if (checked) {
+      await supabase.from('product_tags').insert({ product_id: product.id, tag_id: tagId })
+      setSelectedTags(prev => [...prev, tagId])
+    } else {
+      await supabase.from('product_tags').delete().eq('product_id', product.id).eq('tag_id', tagId)
+      setSelectedTags(prev => prev.filter(id => id !== tagId))
+    }
+  }
+
+  async function onImagesChange(e) {
+    const files = Array.from(e.target.files)
+    if (!files.length) return
+    setUploading(true)
+    e.target.value = ''
+    const startOrder = images.length
+    const newUrls = []
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+      const ext = file.name.split('.').pop().toLowerCase()
+      const path = `${product.id}/${Date.now()}-${i}.${ext}`
+      const { error } = await supabase.storage.from('product-images').upload(path, file)
+      if (!error) {
+        const { data: { publicUrl } } = supabase.storage.from('product-images').getPublicUrl(path)
+        newUrls.push({ url: publicUrl, sort_order: startOrder + i })
+      }
+    }
+    if (newUrls.length > 0) {
+      const { data: inserted } = await supabase.from('product_images')
+        .insert(newUrls.map(r => ({ ...r, product_id: product.id })))
+        .select('id, url, sort_order')
+      setImages(prev => [...prev, ...(inserted || [])])
+    }
+    setUploading(false)
+  }
+
+  async function deleteImage(imgId, idx) {
+    await supabase.from('product_images').delete().eq('id', imgId)
+    setImages(prev => prev.filter((_, i) => i !== idx))
+  }
 
   async function updateStock() {
     if (!change) return
@@ -217,6 +371,33 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete }) {
 
   return (
     <Sheet title={product.name} onClose={onClose}>
+
+      {/* 圖片管理 */}
+      <div className="form-group">
+        <label className="form-label">商品圖片 ({images.length} 張)</label>
+        {images.length > 0 && (
+          <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:10}}>
+            {images.map((img, idx) => (
+              <div key={img.id ?? idx} style={{position:'relative'}}>
+                <img src={img.url} style={{width:72,height:72,objectFit:'cover',borderRadius:8,display:'block'}} />
+                {canEdit && (
+                  <button
+                    onClick={() => deleteImage(img.id, idx)}
+                    style={{position:'absolute',top:-6,right:-6,width:20,height:20,borderRadius:'50%',background:'var(--red)',color:'#fff',border:'none',cursor:'pointer',fontSize:12,lineHeight:'20px',textAlign:'center',padding:0}}
+                  >×</button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        {canEdit && (
+          <label style={{display:'flex',alignItems:'center',justifyContent:'center',gap:6,padding:'11px',border:'1.5px dashed var(--border)',borderRadius:10,cursor:'pointer',fontSize:13,color:'var(--text-3)'}}>
+            {uploading ? '上傳中…' : '📷 新增圖片'}
+            <input type="file" accept="image/*" multiple style={{display:'none'}} onChange={onImagesChange} disabled={uploading} />
+          </label>
+        )}
+      </div>
+
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:20}}>
         <div className="stat"><div className="stat-val">{product.quantity}</div><div className="stat-lbl">{product.unit}</div></div>
         <div className="stat"><div className="stat-val fs15">{product.cost}</div><div className="stat-lbl">{product.currency}</div></div>
@@ -255,6 +436,51 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete }) {
               </div>
             ))}
           </div>
+        </>
+      )}
+
+      {/* 分類 & 標籤 */}
+      {(categories.length > 0 || allTags.length > 0) && (
+        <>
+          <div className="sec">分類 & 標籤</div>
+          {categories.length > 0 && (
+            <div className="form-group">
+              <label className="form-label">分類</label>
+              <select
+                className="form-select"
+                value={selectedCategory}
+                onChange={e => saveCategory(e.target.value)}
+                disabled={!canEdit}
+              >
+                <option value="">— 無分類 —</option>
+                {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+          )}
+          {allTags.length > 0 && (
+            <div className="form-group">
+              <label className="form-label">標籤（可複選）</label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
+                {allTags.map(tag => {
+                  const checked = selectedTags.includes(tag.id)
+                  return (
+                    <button
+                      key={tag.id}
+                      onClick={() => canEdit && toggleTag(tag.id, !checked)}
+                      style={{
+                        padding: '5px 14px', borderRadius: 20, fontSize: 13, fontWeight: 500,
+                        border: `0.5px solid ${checked ? 'var(--text)' : 'var(--border)'}`,
+                        background: checked ? 'var(--text)' : 'transparent',
+                        color: checked ? '#fff' : 'var(--text-2)',
+                        cursor: canEdit ? 'pointer' : 'default',
+                        transition: 'all .15s',
+                      }}
+                    >{tag.name}</button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
         </>
       )}
 

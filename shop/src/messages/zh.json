@@ -1,0 +1,64 @@
+{
+  "nav": {
+    "home": "首頁",
+    "products": "全部商品",
+    "cart": "購物車",
+    "order": "查看訂單"
+  },
+  "home": {
+    "hero_title": "精選商品",
+    "hero_sub": "品質保證，快速出貨",
+    "shop_now": "立即選購",
+    "featured": "熱門商品",
+    "all_products": "查看全部商品"
+  },
+  "product": {
+    "select_color": "選擇顏色",
+    "select_size": "選擇尺寸",
+    "custom_note": "客製化需求",
+    "custom_placeholder": "請輸入特殊需求（例如：特殊尺寸、印字內容）",
+    "add_to_cart": "加入購物車",
+    "sold_out": "此規格已售完",
+    "in_stock": "有庫存",
+    "qty": "數量",
+    "price": "售價",
+    "back": "返回商品列表"
+  },
+  "cart": {
+    "title": "購物車",
+    "empty": "購物車是空的",
+    "empty_sub": "去挑選您喜歡的商品吧！",
+    "continue": "繼續購物",
+    "checkout": "前往結帳",
+    "remove": "移除",
+    "subtotal": "小計",
+    "total": "合計",
+    "items": "件商品"
+  },
+  "checkout": {
+    "title": "填寫資料",
+    "name": "收件人姓名",
+    "phone": "聯絡電話",
+    "email": "電子郵件",
+    "address": "收件地址",
+    "note": "備注（付款方式、配送需求）",
+    "note_placeholder": "例如：希望銀行轉帳、請留在門口…",
+    "submit": "確認下單",
+    "submitting": "送出中…",
+    "order_summary": "訂單摘要",
+    "required": "此欄位為必填"
+  },
+  "order": {
+    "success_title": "訂單已送出！",
+    "success_sub": "我們將盡快與您聯繫確認付款方式",
+    "order_no": "訂單編號",
+    "contact": "我們會在 24 小時內透過 Email 或電話與您聯繫",
+    "back_home": "回到首頁",
+    "items": "訂購商品"
+  },
+  "common": {
+    "twd": "NT$",
+    "loading": "載入中…",
+    "error": "發生錯誤，請重試"
+  }
+}

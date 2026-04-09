@@ -4,61 +4,129 @@ import { useAuth } from '../hooks/useAuth'
 
 export default function OrdersPage() {
   const { can } = useAuth()
+  const [tab, setTab] = useState('internal')
   const [orders, setOrders] = useState([])
+  const [consumerOrders, setConsumerOrders] = useState([])
   const [loading, setLoading] = useState(true)
   const [sheet, setSheet] = useState(null)
 
-  useEffect(() => { fetchOrders() }, [])
+  useEffect(() => { fetchAll() }, [])
 
-  async function fetchOrders() {
-    const { data } = await supabase.from('orders').select('*').order('created_at', {ascending:false})
-    setOrders(data || [])
+  async function fetchAll() {
+    setLoading(true)
+    const [{ data: ord }, { data: cord }] = await Promise.all([
+      supabase.from('orders').select('*').order('created_at', { ascending: false }),
+      supabase.from('consumer_orders').select('*').order('created_at', { ascending: false }),
+    ])
+    setOrders(ord || [])
+    setConsumerOrders(cord || [])
     setLoading(false)
   }
 
   const unpaid = orders.filter(o => o.payment_status !== '已付清')
   const paid   = orders.filter(o => o.payment_status === '已付清')
+  const pendingConsumer = consumerOrders.filter(o => o.status === '待確認').length
 
   return (
     <div className="page">
       <div className="ph">
         <div>
           <div className="ph-title">訂單管理</div>
-          <div className="ph-sub">共 {orders.length} 筆</div>
+          <div className="ph-sub">
+            {tab === 'internal' ? `自建 ${orders.length} 筆` : `商城 ${consumerOrders.length} 筆`}
+          </div>
         </div>
-        {can('add') && <button className="icon-btn" onClick={() => setSheet('add')}>+</button>}
+        {tab === 'internal' && can('add') && <button className="icon-btn" onClick={() => setSheet('add')}>+</button>}
       </div>
 
-      <div className="stats">
-        <div className="stat">
-          <div className="stat-val text-amber">{unpaid.length}</div>
-          <div className="stat-lbl"><span className="dot" style={{background:'var(--amber)'}} />待付款</div>
-        </div>
-        <div className="stat">
-          <div className="stat-val text-green">{paid.length}</div>
-          <div className="stat-lbl"><span className="dot" style={{background:'var(--green)'}} />已付清</div>
-        </div>
+      {/* Tab switcher */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        <button
+          onClick={() => setTab('internal')}
+          style={{
+            flex: 1, padding: '9px 0', borderRadius: 10, border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600,
+            background: tab === 'internal' ? 'var(--text)' : 'var(--card)',
+            color: tab === 'internal' ? '#fff' : 'var(--text-2)',
+          }}
+        >自建訂單</button>
+        <button
+          onClick={() => setTab('consumer')}
+          style={{
+            flex: 1, padding: '9px 0', borderRadius: 10, border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600,
+            background: tab === 'consumer' ? 'var(--text)' : 'var(--card)',
+            color: tab === 'consumer' ? '#fff' : 'var(--text-2)',
+            position: 'relative',
+          }}
+        >
+          商城訂單
+          {pendingConsumer > 0 && (
+            <span style={{
+              position: 'absolute', top: 6, right: 12,
+              background: 'var(--red)', color: '#fff',
+              borderRadius: '50%', width: 18, height: 18, fontSize: 11,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700,
+            }}>{pendingConsumer}</span>
+          )}
+        </button>
       </div>
 
       {loading && <div className="empty">載入中…</div>}
 
-      {unpaid.length > 0 && (
+      {/* Internal orders tab */}
+      {!loading && tab === 'internal' && (
         <>
-          <div className="sec">待付款</div>
-          {unpaid.map(o => <OrderCard key={o.id} order={o} onTap={() => setSheet(o)} />)}
+          <div className="stats">
+            <div className="stat">
+              <div className="stat-val text-amber">{unpaid.length}</div>
+              <div className="stat-lbl"><span className="dot" style={{background:'var(--amber)'}} />待付款</div>
+            </div>
+            <div className="stat">
+              <div className="stat-val text-green">{paid.length}</div>
+              <div className="stat-lbl"><span className="dot" style={{background:'var(--green)'}} />已付清</div>
+            </div>
+          </div>
+          {unpaid.length > 0 && (
+            <>
+              <div className="sec">待付款</div>
+              {unpaid.map(o => <OrderCard key={o.id} order={o} onTap={() => setSheet(o)} />)}
+            </>
+          )}
+          {paid.length > 0 && (
+            <>
+              <div className="sec">已付清</div>
+              {paid.map(o => <OrderCard key={o.id} order={o} onTap={() => setSheet(o)} />)}
+            </>
+          )}
+          {orders.length === 0 && <div className="empty">還沒有訂單</div>}
         </>
       )}
-      {paid.length > 0 && (
-        <>
-          <div className="sec">已付清</div>
-          {paid.map(o => <OrderCard key={o.id} order={o} onTap={() => setSheet(o)} />)}
-        </>
-      )}
-      {orders.length === 0 && !loading && <div className="empty">還沒有訂單</div>}
 
-      {sheet === 'add' && <AddOrderSheet onClose={() => setSheet(null)} onSaved={fetchOrders} />}
-      {sheet && sheet !== 'add' && (
-        <OrderDetailSheet order={sheet} onClose={() => setSheet(null)} onSaved={fetchOrders} canEdit={can('pay')} />
+      {/* Consumer orders tab */}
+      {!loading && tab === 'consumer' && (
+        <>
+          <div className="stats">
+            <div className="stat">
+              <div className="stat-val text-amber">{consumerOrders.filter(o => o.status === '待確認').length}</div>
+              <div className="stat-lbl"><span className="dot" style={{background:'var(--amber)'}} />待確認</div>
+            </div>
+            <div className="stat">
+              <div className="stat-val text-green">{consumerOrders.filter(o => o.payment_status === '已付清').length}</div>
+              <div className="stat-lbl"><span className="dot" style={{background:'var(--green)'}} />已付清</div>
+            </div>
+          </div>
+          {consumerOrders.length === 0 && <div className="empty">還沒有商城訂單</div>}
+          {consumerOrders.map(o => (
+            <ConsumerOrderCard key={o.id} order={o} onTap={() => setSheet({ _type: 'consumer', ...o })} />
+          ))}
+        </>
+      )}
+
+      {sheet === 'add' && <AddOrderSheet onClose={() => setSheet(null)} onSaved={fetchAll} />}
+      {sheet && sheet !== 'add' && !sheet._type && (
+        <OrderDetailSheet order={sheet} onClose={() => setSheet(null)} onSaved={fetchAll} canEdit={can('pay')} />
+      )}
+      {sheet && sheet._type === 'consumer' && (
+        <ConsumerOrderDetailSheet order={sheet} onClose={() => setSheet(null)} onSaved={fetchAll} canEdit={can('pay')} />
       )}
     </div>
   )
@@ -92,6 +160,396 @@ function OrderCard({ order: o, onTap }) {
         </div>
       )}
     </div>
+  )
+}
+
+function consumerStatusBadge(s) {
+  if (s === '已出貨') return <span className="badge badge-ok">已出貨</span>
+  if (s === '處理中') return <span className="badge badge-warn">處理中</span>
+  if (s === '完成')   return <span className="badge badge-ok">完成</span>
+  return <span className="badge badge-low">待確認</span>
+}
+
+function ConsumerOrderCard({ order: o, onTap }) {
+  return (
+    <div className="card" onClick={onTap} style={{ cursor: 'pointer' }}>
+      <div className="card-row">
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="row-sb">
+            <span className="fw600 fs15">{o.customer_name}</span>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {consumerStatusBadge(o.status)}
+              {o.payment_status === '已付清'
+                ? <span className="badge badge-ok">已付清</span>
+                : <span className="badge badge-low">未付</span>}
+            </div>
+          </div>
+          <div className="muted fs12 mt8">#{o.id?.toString().slice(-6)} · {o.items}</div>
+          <div className="muted fs12">{o.phone} · {new Date(o.created_at).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
+        </div>
+      </div>
+      {o.total_amount && (
+        <div className="card-row row-sb" style={{ background: 'var(--bg)' }}>
+          <div><span className="muted fs12">總額 </span><span className="fw600">NT${Number(o.total_amount).toLocaleString()}</span></div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+const FREE_SHIPPING_THRESHOLD = 1000
+const DEFAULT_SHIPPING_FEE = 60
+
+function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
+  const [status, setStatus] = useState(o.status || '待確認')
+  const [payStatus, setPayStatus] = useState(o.payment_status || '未付')
+  const [saving, setSaving] = useState(false)
+
+  // 從 items_json 初始化，已有 status: 'cancelled' 的保留取消狀態
+  const [itemStatuses, setItemStatuses] = useState(
+    (Array.isArray(o.items_json) ? o.items_json : []).map(item => ({
+      ...item,
+      _cancelled: item.status === 'cancelled',
+      _originalQty: item.originalQty || item.qty,
+    }))
+  )
+  const [shippingFee, setShippingFee] = useState(o.shipping_fee || DEFAULT_SHIPPING_FEE)
+
+  // 加購商品欄位
+  const [addItemName, setAddItemName] = useState('')
+  const [addItemPrice, setAddItemPrice] = useState('')
+  const [addItemQty, setAddItemQty] = useState(1)
+
+  // 計算邏輯
+  const activeItems = itemStatuses.filter(i => !i._cancelled)
+  const cancelledItems = itemStatuses.filter(i => i._cancelled)
+  const activeSubtotal = activeItems.reduce((sum, i) => sum + (Number(i.price) || 0) * (Number(i.qty) || 0), 0)
+  const hasAnyCancel = cancelledItems.length > 0
+  const hasQtyChange = activeItems.some(i => i.qty < i._originalQty)
+  const hasAnyChange = hasAnyCancel || hasQtyChange
+  const meetsThreshold = activeSubtotal >= FREE_SHIPPING_THRESHOLD
+  const effectiveShippingFee = !hasAnyChange ? 0 : (meetsThreshold ? 0 : shippingFee)
+  const newTotal = activeSubtotal + effectiveShippingFee
+
+  const hasItems = itemStatuses.length > 0
+
+  async function triggerStatusEmail({ activeItems, cancelledItems, shippingFee, newTotal, fulfillment_type }) {
+    try {
+      const shopUrl = import.meta.env.VITE_SHOP_URL || 'http://localhost:3000'
+      console.log(`[triggerStatusEmail] type=${fulfillment_type} email=${o.email} url=${shopUrl}/api/send-status-email`)
+      const res = await fetch(`${shopUrl}/api/send-status-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          order: {
+            id: o.id,
+            email: o.email,
+            name: o.customer_name,
+            phone: o.phone,
+            address: o.address,
+            note: o.note,
+          },
+          activeItems,
+          cancelledItems,
+          shippingFee,
+          newTotal,
+          fulfillment_type,
+          lang: 'zh',
+        }),
+      })
+      console.log(`[triggerStatusEmail] response status=${res.status}`, await res.json().catch(() => ''))
+    } catch (e) {
+      console.error('[triggerStatusEmail] failed:', e)
+    }
+  }
+
+  async function save() {
+    const active = itemStatuses.filter(i => !i._cancelled)
+    const cancelled = itemStatuses.filter(i => i._cancelled)
+    const qtyReduced = active.some(i => i.qty < i._originalQty)
+    const itemsChanged = cancelled.length > 0 || qtyReduced
+
+    // 如果有商品異動，但狀態還不是「已出貨」或「已取消」，自動詢問
+    let finalStatus = status
+    if (itemsChanged && status !== '已出貨' && status !== '已取消') {
+      if (active.length === 0) {
+        // 全部取消
+        if (window.confirm('所有商品都已標記缺貨，是否將訂單標記為「已取消」並通知消費者？')) {
+          finalStatus = '已取消'
+          setStatus('已取消')
+        }
+      } else {
+        // 部分取消 / 數量調整
+        if (window.confirm('商品有異動（缺貨/數量調整），是否同時標記「已出貨」並寄送通知 Email 給消費者？\n\n選擇「確定」→ 標記出貨 + 寄通知\n選擇「取消」→ 僅儲存異動，不寄信')) {
+          finalStatus = '已出貨'
+          setStatus('已出貨')
+        }
+      }
+    }
+
+    setSaving(true)
+
+    // 判斷 fulfillment_type
+    let fulfillment_type = o.fulfillment_type || null
+    if (finalStatus === '已出貨') {
+      if (cancelled.length === 0 && !qtyReduced) fulfillment_type = 'full'
+      else if (active.length > 0) fulfillment_type = 'partial'
+      else fulfillment_type = 'cancelled'
+    } else if (finalStatus === '已取消') {
+      fulfillment_type = 'cancelled'
+    }
+
+    const updatedTotal = active.length > 0 ? newTotal : 0
+
+    // items_json：所有商品都保留，以 status 欄位區分
+    // originalQty 記住消費者原訂數量，方便日後查看
+    const updatedItemsJson = itemStatuses.map(({ _cancelled, _added, _originalQty, ...item }) => ({
+      ...item,
+      originalQty: _originalQty,
+      status: _cancelled ? 'cancelled' : 'active',
+    }))
+
+    await supabase.from('consumer_orders').update({
+      status: finalStatus,
+      payment_status: payStatus,
+      items_json: updatedItemsJson,
+      shipping_fee: hasAnyChange ? effectiveShippingFee : 0,
+      total_amount: updatedTotal,
+      fulfillment_type,
+    }).eq('id', o.id)
+
+    // 出貨或取消時觸發通知 Email
+    if (finalStatus === '已出貨' || finalStatus === '已取消') {
+      await triggerStatusEmail({
+        activeItems: active.map(({ _cancelled, _added, _originalQty, ...item }) => ({
+          ...item,
+          ...(item.qty < _originalQty ? { note: `原訂 ${_originalQty}，到貨 ${item.qty}` } : {}),
+        })),
+        cancelledItems: cancelled.map(({ _cancelled, _added, _originalQty, ...item }) => item),
+        shippingFee: effectiveShippingFee,
+        newTotal: updatedTotal,
+        fulfillment_type,
+      })
+    }
+
+    setSaving(false)
+    onSaved()
+    onClose()
+  }
+
+  return (
+    <Sheet title={`${o.customer_name} 的訂單`} onClose={onClose}>
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-row row-sb">
+          <span className="muted fs13">訂單編號</span>
+          <span className="fw600 fs13">#{o.id?.toString().slice(-6)}</span>
+        </div>
+        <div className="card-row row-sb">
+          <span className="muted fs13">下單時間</span>
+          <span className="fs13">{new Date(o.created_at).toLocaleString('zh-TW')}</span>
+        </div>
+        <div className="card-row row-sb">
+          <span className="muted fs13">總金額</span>
+          <span className="fw600">NT${Number(hasAnyChange ? newTotal : (o.total_amount || 0)).toLocaleString()}</span>
+        </div>
+      </div>
+
+      <div className="sec" style={{ marginTop: 0 }}>聯絡資訊</div>
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-row row-sb">
+          <span className="muted fs13">姓名</span><span className="fs13">{o.customer_name}</span>
+        </div>
+        <div className="card-row row-sb">
+          <span className="muted fs13">電話</span><span className="fs13">{o.phone}</span>
+        </div>
+        <div className="card-row row-sb">
+          <span className="muted fs13">Email</span><span className="fs13">{o.email}</span>
+        </div>
+        <div className="card-row row-sb">
+          <span className="muted fs13">地址</span><span className="fs13" style={{ textAlign: 'right', maxWidth: '65%' }}>{o.address}</span>
+        </div>
+        {o.note && (
+          <div className="card-row"><span className="muted fs13">備註：{o.note}</span></div>
+        )}
+      </div>
+
+      <div className="sec" style={{ marginTop: 0 }}>訂購商品</div>
+      <div className="card" style={{ marginBottom: 16 }}>
+        {hasItems ? itemStatuses.map((item, i) => (
+          <div key={i} className="card-row" style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
+            opacity: item._cancelled ? 0.4 : 1,
+            background: item._cancelled ? '#fff5f5' : undefined,
+          }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="fs13 fw600" style={{
+                textDecoration: item._cancelled ? 'line-through' : 'none',
+              }}>
+                {item.name}
+                {item._added && <span style={{ fontSize: 10, color: 'var(--blue)', marginLeft: 4 }}>(加購)</span>}
+              </div>
+              {(item.color || item.size) && (
+                <div className="muted fs12">{[item.color, item.size].filter(Boolean).join(' / ')}</div>
+              )}
+              {item.customNote && <div className="muted fs12">備註：{item.customNote}</div>}
+              {item._cancelled && (
+                <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 2 }}>✕ 缺貨取消</div>
+              )}
+            </div>
+            <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0, marginLeft: 8 }}>
+              {/* 數量：可編輯時顯示調整器，否則僅顯示 */}
+              {canEdit && !item._cancelled ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <button style={{
+                    width: 22, height: 22, borderRadius: 6, border: '1px solid var(--border)',
+                    background: 'var(--bg)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 0,
+                  }} onClick={() => setItemStatuses(prev => prev.map((it, idx) =>
+                    idx === i ? { ...it, qty: Math.max(1, it.qty - 1) } : it
+                  ))}>-</button>
+                  <span className="fs13 fw600" style={{ minWidth: 20, textAlign: 'center' }}>{item.qty}</span>
+                  <button style={{
+                    width: 22, height: 22, borderRadius: 6, border: '1px solid var(--border)',
+                    background: 'var(--bg)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 0,
+                  }} onClick={() => setItemStatuses(prev => prev.map((it, idx) =>
+                    idx === i ? { ...it, qty: Math.min(it._originalQty, it.qty + 1) } : it
+                  ))}>+</button>
+                </div>
+              ) : (
+                <div className="fs13">× {item.qty}</div>
+              )}
+              <div className="muted fs12">NT${((Number(item.price) || 0) * (Number(item.qty) || 0)).toLocaleString()}</div>
+              {/* 數量被調低時顯示提示 */}
+              {!item._cancelled && item.qty < item._originalQty && (
+                <div style={{ fontSize: 10, color: 'var(--amber)' }}>原訂 {item._originalQty}，到貨 {item.qty}</div>
+              )}
+              {canEdit && (
+                <button
+                  style={{
+                    fontSize: 11, padding: '2px 8px', borderRadius: 6, border: 'none', cursor: 'pointer',
+                    background: item._cancelled ? 'var(--green)' : 'var(--red)',
+                    color: '#fff',
+                  }}
+                  onClick={() => setItemStatuses(prev => prev.map((it, idx) =>
+                    idx === i ? { ...it, _cancelled: !it._cancelled, qty: it._cancelled ? it._originalQty : it.qty } : it
+                  ))}
+                >
+                  {item._cancelled ? '恢復' : '缺貨取消'}
+                </button>
+              )}
+            </div>
+          </div>
+        )) : (
+          <div className="card-row"><span className="fs13">{o.items}</span></div>
+        )}
+      </div>
+
+      {/* 加購商品區塊 */}
+      {canEdit && hasAnyChange && activeItems.length > 0 && (
+        <>
+          <div className="sec" style={{ marginTop: 0 }}>加購商品（選填）</div>
+          <div className="card" style={{ marginBottom: 16, padding: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 8 }}>
+              <input className="form-input" placeholder="商品名稱" value={addItemName}
+                onChange={e => setAddItemName(e.target.value)} style={{ fontSize: 13 }} />
+              <input className="form-input" type="number" placeholder="單價" value={addItemPrice}
+                onChange={e => setAddItemPrice(e.target.value)} style={{ fontSize: 13 }} />
+              <input className="form-input" type="number" min={1} placeholder="數量" value={addItemQty}
+                onChange={e => setAddItemQty(Number(e.target.value))} style={{ fontSize: 13 }} />
+            </div>
+            <button style={{
+              marginTop: 8, width: '100%', padding: '6px 0', borderRadius: 8,
+              border: '1px dashed var(--border)', background: 'none', cursor: 'pointer',
+              fontSize: 13, color: 'var(--text-2)',
+            }} onClick={() => {
+              if (!addItemName || !addItemPrice) return
+              setItemStatuses(prev => [...prev, {
+                name: addItemName,
+                price: Number(addItemPrice),
+                qty: addItemQty || 1,
+                _cancelled: false,
+                _added: true,
+              }])
+              setAddItemName('')
+              setAddItemPrice('')
+              setAddItemQty(1)
+            }}>
+              + 加入訂單
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* 免運門檻提示 */}
+      {canEdit && hasAnyChange && activeItems.length > 0 && (
+        <div style={{
+          background: meetsThreshold ? '#f0fff4' : '#fff8e8',
+          borderRadius: 12, padding: '14px 16px', marginBottom: 16,
+          fontSize: 13, lineHeight: 1.6,
+          color: meetsThreshold ? '#1a7a3a' : '#8a5c00',
+        }}>
+          {meetsThreshold
+            ? `✅ 有貨商品小計 NT$${activeSubtotal.toLocaleString()}，符合免運門檻（NT$${FREE_SHIPPING_THRESHOLD.toLocaleString()}），運費 NT$0`
+            : `⚠️ 有貨商品小計 NT$${activeSubtotal.toLocaleString()}，未達免運門檻（NT$${FREE_SHIPPING_THRESHOLD.toLocaleString()}）。請透過 Line / Email 聯繫消費者確認後，再更新運費或加購商品。`
+          }
+          {!meetsThreshold && (
+            <div style={{ marginTop: 10 }}>
+              <label className="form-label fs12">運費（NT$）</label>
+              <input className="form-input" type="number" min={0} value={shippingFee}
+                onChange={e => setShippingFee(Number(e.target.value))} style={{ fontSize: 13 }} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 更新後金額摘要 */}
+      {hasAnyChange && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div className="card-row row-sb">
+            <span className="muted fs13">有貨商品小計</span>
+            <span className="fs13">NT${activeSubtotal.toLocaleString()}</span>
+          </div>
+          {effectiveShippingFee > 0 && (
+            <div className="card-row row-sb">
+              <span className="muted fs13">運費</span>
+              <span className="fs13">NT${effectiveShippingFee.toLocaleString()}</span>
+            </div>
+          )}
+          {cancelledItems.length > 0 && (
+            <div className="card-row row-sb">
+              <span className="muted fs13" style={{ color: 'var(--red)' }}>取消商品（{cancelledItems.length} 件）</span>
+              <span className="fs13" style={{ color: 'var(--red)', textDecoration: 'line-through' }}>
+                -NT${cancelledItems.reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.qty) || 0), 0).toLocaleString()}
+              </span>
+            </div>
+          )}
+          <div className="card-row row-sb" style={{ borderTop: '1.5px solid var(--text)', paddingTop: 10 }}>
+            <span className="fw600 fs13">更新後總金額</span>
+            <span className="fw600">NT${newTotal.toLocaleString()}</span>
+          </div>
+        </div>
+      )}
+
+      {canEdit && (
+        <>
+          <div className="sec" style={{ marginTop: 0 }}>更新狀態</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
+            <div>
+              <label className="form-label fs12">訂單狀態</label>
+              <select className="form-select" value={status} onChange={e => setStatus(e.target.value)}>
+                {['待確認', '處理中', '已出貨', '完成', '已取消'].map(s => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="form-label fs12">付款狀態</label>
+              <select className="form-select" value={payStatus} onChange={e => setPayStatus(e.target.value)}>
+                {['未付', '已付清'].map(s => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+          </div>
+          <button className="btn" onClick={save} disabled={saving}>{saving ? '更新中…' : '儲存'}</button>
+        </>
+      )}
+    </Sheet>
   )
 }
 

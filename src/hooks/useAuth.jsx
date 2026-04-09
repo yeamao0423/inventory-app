@@ -5,7 +5,7 @@ const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
-  const [profile, setProfile] = useState(null)
+  const [profile, setProfile] = useState(null)   // { role, name }
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -23,12 +23,11 @@ export function AuthProvider({ children }) {
   }, [])
 
   async function fetchProfile(userId) {
-    const { data } = await supabase
-      .from('profiles')
-      .select('name, role')
-      .eq('id', userId)
-      .single()
-    setProfile(data ?? { name: 'User', role: 'viewer' })
+    const [{ data: profileData }, { data: roleData }] = await Promise.all([
+      supabase.from('profiles').select('name, email').eq('id', userId).single(),
+      supabase.from('user_store_roles').select('role, store_id').eq('user_id', userId).eq('store_id', 1).single(),
+    ])
+    setProfile({ ...profileData, role: roleData?.role ?? null })
     setLoading(false)
   }
 
@@ -37,20 +36,39 @@ export function AuthProvider({ children }) {
     return { error }
   }
 
+  async function signUp(email, password, name) {
+    const { error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { name } },
+    })
+    return { error }
+  }
+
+  async function sendPasswordReset(email) {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin,
+    })
+    return { error }
+  }
+
   async function signOut() {
     await supabase.auth.signOut()
   }
 
+  // 權限檢查
+  // actions: 'view' | 'add' | 'edit' | 'delete' | 'pay' | 'manage_users'
   function can(action) {
     const role = profile?.role
-    if (role === 'admin') return true
+    if (role === 'super_admin') return true
+    if (role === 'admin') return action !== 'manage_users'
     if (role === 'editor') return ['view', 'add', 'edit', 'pay'].includes(action)
     if (role === 'viewer') return action === 'view'
     return false
   }
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, signIn, signOut, can }}>
+    <AuthContext.Provider value={{ user, profile, loading, signIn, signUp, sendPasswordReset, signOut, can }}>
       {children}
     </AuthContext.Provider>
   )
