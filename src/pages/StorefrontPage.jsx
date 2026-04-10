@@ -532,6 +532,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
   const [optionTypes, setOptionTypes] = useState([])
   const [saving, setSaving] = useState(false)
   const [createdItem, setCreatedItem] = useState(null)
+  const [showVariants, setShowVariants] = useState(false)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   const editingItem = item || createdItem
@@ -552,9 +553,13 @@ function ListingSheet({ item, products, onClose, onSaved }) {
   useEffect(() => {
     if (activeProductId) {
       supabase.from('product_variants').select('*').eq('product_id', activeProductId)
-        .then(({ data }) => setVariants(data || []))
+        .then(({ data }) => {
+          setVariants(data || [])
+          if ((data || []).length > 0) setShowVariants(true)
+        })
     } else {
       setVariants([])
+      setShowVariants(false)
     }
   }, [activeProductId])
 
@@ -643,16 +648,37 @@ function ListingSheet({ item, products, onClose, onSaved }) {
           <input className="form-input" type="number" placeholder="0" value={form.shop_price} onChange={e => set('shop_price', e.target.value)} />
         </div>
 
-        {/* ── 3. 商品規格（選了商品就出現）── */}
+        {/* ── 3. 商品規格（可選）── */}
         {activeProductId && (
-          <VariantManager
-            variants={variants}
-            setVariants={setVariants}
-            optionTypes={optionTypes}
-            productId={activeProductId}
-            shopPrice={Number(form.shop_price) || 0}
-            resolveVariantLabel={resolveVariantLabel}
-          />
+          <>
+            <div
+              onClick={() => setShowVariants(v => !v)}
+              style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                padding: '12px 16px', borderRadius: 10, cursor: 'pointer',
+                background: 'var(--surface)', border: '0.5px solid var(--border)',
+                marginBottom: showVariants ? 12 : 0,
+              }}
+            >
+              <div>
+                <span className="fw600 fs14">商品規格</span>
+                <span className="muted fs12" style={{ marginLeft: 8 }}>
+                  {variants.length > 0 ? `${variants.length} 種組合` : '無規格（單一品項）'}
+                </span>
+              </div>
+              <span style={{ fontSize: 13, color: 'var(--text-3)' }}>{showVariants ? '收起 ▲' : '展開 ▼'}</span>
+            </div>
+            {showVariants && (
+              <VariantManager
+                variants={variants}
+                setVariants={setVariants}
+                optionTypes={optionTypes}
+                productId={activeProductId}
+                shopPrice={Number(form.shop_price) || 0}
+                resolveVariantLabel={resolveVariantLabel}
+              />
+            )}
+          </>
         )}
 
         {/* ── 4. 銷售模式 ── */}
