@@ -45,7 +45,7 @@
     "store_name_placeholder": "Store name",
     "store_number_placeholder": "Store number",
     "line_id": "LINE ID",
-    "line_id_placeholder": "Optional, for easier communication",
+    "line_id_placeholder": "For easier communication",
     "remittance_last5": "Last 5 digits of remittance",
     "remittance_last5_placeholder": "Enter the last 5 digits of your transfer account",
     "note": "Note (payment method, delivery request)",

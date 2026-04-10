@@ -7,7 +7,11 @@ export default function CartPage() {
   const { t, lang } = useI18n()
   const { cart, removeItem } = useCart()
 
-  const total = cart.reduce((s, i) => s + i.price * i.qty, 0)
+  const subtotal = cart.reduce((s, i) => s + i.price * i.qty, 0)
+  const FREE_SHIPPING_THRESHOLD = 3980
+  const SHIPPING_FEE = 60
+  const shippingFee = subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : SHIPPING_FEE
+  const total = subtotal + shippingFee
 
   if (cart.length === 0) return (
     <div className="cart-wrap">
@@ -50,8 +54,23 @@ export default function CartPage() {
       <div className="cart-total">
         <div className="cart-total-row">
           <span>{t('cart.subtotal')}</span>
-          <span>NT${total.toLocaleString()}</span>
+          <span>NT${subtotal.toLocaleString()}</span>
         </div>
+        <div className="cart-total-row">
+          <span>{lang === 'zh' ? '運費' : 'Shipping'}</span>
+          <span>{shippingFee === 0
+            ? (lang === 'zh' ? '免運費' : 'Free')
+            : `NT$${shippingFee}`
+          }</span>
+        </div>
+        {shippingFee > 0 && (
+          <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 8 }}>
+            {lang === 'zh'
+              ? `滿 NT$${FREE_SHIPPING_THRESHOLD.toLocaleString()} 免運費`
+              : `Free shipping over NT$${FREE_SHIPPING_THRESHOLD.toLocaleString()}`
+            }
+          </div>
+        )}
         <div className="cart-total-final">
           <span>{t('cart.total')}</span>
           <span>NT${total.toLocaleString()}</span>

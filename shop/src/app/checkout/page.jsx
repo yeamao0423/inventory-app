@@ -35,7 +35,11 @@ export default function CheckoutPage() {
     loadProfile()
   }, [user])
 
-  const total = cart.reduce((s, i) => s + i.price * i.qty, 0)
+  const subtotal = cart.reduce((s, i) => s + i.price * i.qty, 0)
+  const FREE_SHIPPING_THRESHOLD = 3980
+  const SHIPPING_FEE = 60
+  const shippingFee = subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : SHIPPING_FEE
+  const total = subtotal + shippingFee
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   function validate() {
@@ -43,6 +47,7 @@ export default function CheckoutPage() {
     if (!form.name.trim()) e.name = t('checkout.required')
     if (!form.phone.trim()) e.phone = t('checkout.required')
     if (!form.email.trim()) e.email = t('checkout.required')
+    if (!form.line_id.trim()) e.line_id = t('checkout.required')
     if (!form.store_name.trim()) e.store_name = t('checkout.required')
     if (!form.store_number.trim()) e.store_number = t('checkout.required')
     if (!form.remittance_last5.trim() || !/^\d{5}$/.test(form.remittance_last5.trim())) {
@@ -145,7 +150,7 @@ export default function CheckoutPage() {
             { key: 'name', label: t('checkout.name'), type: 'text', required: true },
             { key: 'phone', label: t('checkout.phone'), type: 'tel', required: true },
             { key: 'email', label: t('checkout.email'), type: 'email', required: true },
-            { key: 'line_id', label: t('checkout.line_id'), type: 'text', required: false, placeholder: t('checkout.line_id_placeholder') },
+            { key: 'line_id', label: t('checkout.line_id'), type: 'text', required: true, placeholder: t('checkout.line_id_placeholder') },
             { key: 'remittance_last5', label: t('checkout.remittance_last5'), type: 'text', required: true, placeholder: t('checkout.remittance_last5_placeholder'), maxLength: 5, inputMode: 'numeric' },
           ].map(({ key, label, type, required, placeholder, maxLength, inputMode }) => (
             <div className="form-group" key={key}>
@@ -226,6 +231,25 @@ export default function CheckoutPage() {
               </div>
             ))}
             <hr className="order-summary-divider" />
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, color: 'var(--text-2)', marginBottom: 8 }}>
+              <span>{lang === 'zh' ? '小計' : 'Subtotal'}</span>
+              <span>NT${subtotal.toLocaleString()}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, color: 'var(--text-2)', marginBottom: 8 }}>
+              <span>{lang === 'zh' ? '運費' : 'Shipping'}</span>
+              <span>{shippingFee === 0
+                ? (lang === 'zh' ? '免運費' : 'Free')
+                : `NT$${shippingFee}`
+              }</span>
+            </div>
+            {shippingFee > 0 && (
+              <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 8 }}>
+                {lang === 'zh'
+                  ? `滿 NT$${FREE_SHIPPING_THRESHOLD.toLocaleString()} 免運費，還差 NT$${(FREE_SHIPPING_THRESHOLD - subtotal).toLocaleString()}`
+                  : `Free shipping over NT$${FREE_SHIPPING_THRESHOLD.toLocaleString()}, NT$${(FREE_SHIPPING_THRESHOLD - subtotal).toLocaleString()} away`
+                }
+              </div>
+            )}
             <div className="order-summary-total">
               <span>{t('cart.total')}</span>
               <span>NT${total.toLocaleString()}</span>
