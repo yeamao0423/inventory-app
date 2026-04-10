@@ -35,7 +35,7 @@ export default function InventoryPage() {
         <div>
           <div className="ph-title">庫存總覽</div>
           <div className="ph-sub">
-            {profile?.name || '成員'} · {profile?.role === 'admin' ? '管理員' : profile?.role === 'editor' ? '編輯' : '檢視者'}
+            {profile?.name || '成員'}
           </div>
         </div>
         <div style={{display:'flex',gap:8,alignItems:'center'}}>
