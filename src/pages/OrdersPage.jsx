@@ -336,8 +336,9 @@ function ConsumerOrderCard({ order: o, onTap }) {
   )
 }
 
-const FREE_SHIPPING_THRESHOLD = 3960
+const FREE_SHIPPING_THRESHOLD = 3980
 const DEFAULT_SHIPPING_FEE = 60
+const notifyBtn = { padding: '8px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }
 
 function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
   const [status, setStatus] = useState(o.status || '待確認')
@@ -404,46 +405,64 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
     }
   }
 
+  // Build email payload helper
+  function buildEmailPayload(type) {
+    const active = itemStatuses.filter(i => !i._cancelled)
+    const cancelled = itemStatuses.filter(i => i._cancelled)
+    const qtyReduced = active.some(i => i.qty < i._originalQty)
+
+    let fulfillment_type = type
+    if (type === 'shipped') {
+      if (cancelled.length === 0 && !qtyReduced) fulfillment_type = 'full'
+      else if (active.length > 0) fulfillment_type = 'partial'
+      else fulfillment_type = 'cancelled'
+    }
+
+    return {
+      activeItems: active.map(({ _cancelled, _added, _originalQty, ...item }) => ({
+        ...item,
+        ...(item.qty < _originalQty ? { note: `原訂 ${_originalQty}，到貨 ${item.qty}` } : {}),
+      })),
+      cancelledItems: cancelled.map(({ _cancelled, _added, _originalQty, ...item }) => item),
+      shippingFee: effectiveShippingFee,
+      newTotal: activeItems.length > 0 ? newTotal : 0,
+      fulfillment_type,
+      trackingNumber: trackingNumber || null,
+    }
+  }
+
+  // Manual email triggers
+  async function sendPaymentReceivedEmail() {
+    if (!window.confirm('確定寄出「已收款」通知 Email 給消費者？')) return
+    await triggerStatusEmail(buildEmailPayload('payment_received'))
+    alert('已收款通知已寄出')
+  }
+
+  async function sendOrderModifiedEmail() {
+    if (!window.confirm('確定寄出「訂單修改」通知 Email 給消費者？')) return
+    await triggerStatusEmail(buildEmailPayload('order_modified'))
+    alert('訂單修改通知已寄出')
+  }
+
   async function save() {
     const active = itemStatuses.filter(i => !i._cancelled)
     const cancelled = itemStatuses.filter(i => i._cancelled)
     const qtyReduced = active.some(i => i.qty < i._originalQty)
-    const itemsChanged = cancelled.length > 0 || qtyReduced
-
-    // 如果有商品異動，但狀態還不是「已出貨」或「已取消」，自動詢問
-    let finalStatus = status
-    if (itemsChanged && status !== '已出貨' && status !== '已取消') {
-      if (active.length === 0) {
-        // 全部取消
-        if (window.confirm('所有商品都已標記缺貨，是否將訂單標記為「已取消」並通知消費者？')) {
-          finalStatus = '已取消'
-          setStatus('已取消')
-        }
-      } else {
-        // 部分取消 / 數量調整
-        if (window.confirm('商品有異動（缺貨/數量調整），是否同時標記「已出貨」並寄送通知 Email 給消費者？\n\n選擇「確定」→ 標記出貨 + 寄通知\n選擇「取消」→ 僅儲存異動，不寄信')) {
-          finalStatus = '已出貨'
-          setStatus('已出貨')
-        }
-      }
-    }
 
     setSaving(true)
 
     // 判斷 fulfillment_type
     let fulfillment_type = o.fulfillment_type || null
-    if (finalStatus === '已出貨') {
+    if (status === '已出貨') {
       if (cancelled.length === 0 && !qtyReduced) fulfillment_type = 'full'
       else if (active.length > 0) fulfillment_type = 'partial'
       else fulfillment_type = 'cancelled'
-    } else if (finalStatus === '已取消') {
+    } else if (status === '已取消') {
       fulfillment_type = 'cancelled'
     }
 
     const updatedTotal = active.length > 0 ? newTotal : 0
 
-    // items_json：所有商品都保留，以 status 欄位區分
-    // originalQty 記住消費者原訂數量，方便日後查看
     const updatedItemsJson = itemStatuses.map(({ _cancelled, _added, _originalQty, ...item }) => ({
       ...item,
       originalQty: _originalQty,
@@ -451,7 +470,7 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
     }))
 
     await supabase.from('consumer_orders').update({
-      status: finalStatus,
+      status,
       payment_status: payStatus,
       items_json: updatedItemsJson,
       shipping_fee: hasAnyChange ? effectiveShippingFee : 0,
@@ -460,19 +479,18 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
       tracking_number: trackingNumber || null,
     }).eq('id', o.id)
 
-    // 出貨或取消時觸發通知 Email
-    if (finalStatus === '已出貨' || finalStatus === '已取消') {
-      await triggerStatusEmail({
-        activeItems: active.map(({ _cancelled, _added, _originalQty, ...item }) => ({
-          ...item,
-          ...(item.qty < _originalQty ? { note: `原訂 ${_originalQty}，到貨 ${item.qty}` } : {}),
-        })),
-        cancelledItems: cancelled.map(({ _cancelled, _added, _originalQty, ...item }) => item),
-        shippingFee: effectiveShippingFee,
-        newTotal: updatedTotal,
-        fulfillment_type,
-        trackingNumber: trackingNumber || null,
-      })
+    // 半自動出貨通知：已收款 + 狀態改為已出貨 → 詢問是否寄出貨通知
+    if (status === '已出貨' && payStatus === '已付清') {
+      if (window.confirm('訂單已標記為「已出貨」且「已收款」，是否寄出出貨通知 Email 給消費者？')) {
+        await triggerStatusEmail(buildEmailPayload('shipped'))
+      }
+    }
+
+    // 全數取消 → 自動詢問
+    if (status === '已取消') {
+      if (window.confirm('訂單已標記為「已取消」，是否寄出取消通知 Email 給消費者？')) {
+        await triggerStatusEmail(buildEmailPayload('cancelled'))
+      }
     }
 
     setSaving(false)
@@ -714,6 +732,26 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
             </div>
           )}
           <button className="btn" onClick={save} disabled={saving}>{saving ? '更新中…' : '儲存'}</button>
+
+          {/* 手動寄信區塊 */}
+          <div className="sec" style={{ marginTop: 20 }}>手動寄送通知</div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              onClick={sendPaymentReceivedEmail}
+              style={{ ...notifyBtn, background: '#e8f7ee', color: '#1a7a3a', border: '0.5px solid #c5e8d2' }}
+            >
+              ✉️ 寄出已收款通知
+            </button>
+            <button
+              onClick={sendOrderModifiedEmail}
+              style={{ ...notifyBtn, background: '#fff8e8', color: '#8a5c00', border: '0.5px solid #f0ddb0' }}
+            >
+              ✉️ 寄出訂單修改通知
+            </button>
+          </div>
+          <div className="muted fs12" style={{ marginTop: 6 }}>
+            出貨通知會在儲存時自動詢問（需已收款 + 狀態為已出貨）
+          </div>
         </>
       )}
     </Sheet>

@@ -314,7 +314,7 @@ function AddProductSheet({ onClose, onSaved }) {
         <div className="form-group">
           <label className="form-label">幣別</label>
           <select className="form-select" value={form.currency} onChange={e => set('currency', e.target.value)}>
-            <option>TWD</option><option>USD</option><option>JPY</option><option>EUR</option>
+            <option>TWD</option><option>USD</option><option>JPY</option><option>EUR</option><option>VND</option>
           </select>
         </div>
       </div>

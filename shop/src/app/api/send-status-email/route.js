@@ -26,9 +26,11 @@ export async function POST(request) {
   const orderNo = order.id?.toString().slice(-6)
 
   const subjectMap = {
-    full:      zh ? `【已出貨】訂單 #${orderNo} 已全數出貨` : `[Shipped] Order #${orderNo} has shipped`,
-    partial:   zh ? `【部分出貨】訂單 #${orderNo} 處理結果通知` : `[Partial Shipment] Order #${orderNo} update`,
-    cancelled: zh ? `【訂單取消】訂單 #${orderNo} 已全數取消` : `[Cancelled] Order #${orderNo} has been cancelled`,
+    full:              zh ? `【已出貨】訂單 #${orderNo} 已全數出貨` : `[Shipped] Order #${orderNo} has shipped`,
+    partial:           zh ? `【部分出貨】訂單 #${orderNo} 處理結果通知` : `[Partial Shipment] Order #${orderNo} update`,
+    cancelled:         zh ? `【訂單取消】訂單 #${orderNo} 已全數取消` : `[Cancelled] Order #${orderNo} has been cancelled`,
+    payment_received:  zh ? `【已收款】訂單 #${orderNo} 款項已確認` : `[Payment Received] Order #${orderNo} payment confirmed`,
+    order_modified:    zh ? `【訂單修改】訂單 #${orderNo} 內容已更新` : `[Order Updated] Order #${orderNo} has been modified`,
   }
   const subject = subjectMap[fulfillment_type] || subjectMap.full
 
@@ -58,7 +60,76 @@ export async function POST(request) {
       </div>
   ` : ''
 
-  if (fulfillment_type === 'full') {
+  if (fulfillment_type === 'payment_received') {
+    bodyHtml = `
+      <div style="background:#f0fff4;border-radius:12px;padding:16px 20px;margin-bottom:24px;text-align:center;">
+        <div style="font-size:32px;margin-bottom:8px;">&#9989;</div>
+        <div style="font-size:16px;font-weight:700;color:#1a7a3a;">${zh ? '您的款項已確認收到！' : 'Your payment has been received!'}</div>
+      </div>
+      <div style="background:#fafaf8;border-radius:12px;padding:16px 20px;margin-bottom:24px;">
+        <div style="font-size:14px;color:#555;line-height:1.7;">
+          ${zh
+            ? '感謝您的付款，我們將盡快為您處理訂單並安排出貨，届時會再寄出出貨通知。'
+            : 'Thank you for your payment! We will process your order and arrange shipment as soon as possible. A shipping notification will follow.'}
+        </div>
+      </div>
+      <div style="font-size:13px;font-weight:600;color:#999;margin-bottom:10px;">${zh ? '訂購商品' : 'Ordered Items'}</div>
+      <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;">
+        ${renderItems(activeItems)}
+      </table>
+      <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
+        <tr>
+          <td style="padding:12px 0;border-top:1.5px solid #1a1a1a;">
+            <span style="font-size:15px;font-weight:700;">${zh ? '總金額' : 'Total'}</span>
+          </td>
+          <td style="padding:12px 0;border-top:1.5px solid #1a1a1a;text-align:right;">
+            <span style="font-size:18px;font-weight:700;">NT$${(newTotal || 0).toLocaleString()}</span>
+          </td>
+        </tr>
+      </table>
+    `
+  } else if (fulfillment_type === 'order_modified') {
+    bodyHtml = `
+      <div style="background:#fff8e8;border-radius:12px;padding:16px 20px;margin-bottom:24px;text-align:center;">
+        <div style="font-size:32px;margin-bottom:8px;">&#128221;</div>
+        <div style="font-size:16px;font-weight:700;color:#8a5c00;">${zh ? '您的訂單內容已更新' : 'Your order has been updated'}</div>
+      </div>
+      <div style="font-size:13px;font-weight:600;color:#1a7a3a;margin-bottom:10px;">&#10004; ${zh ? '目前商品' : 'Current Items'}</div>
+      <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;">
+        ${renderItems(activeItems)}
+      </table>
+      ${(cancelledItems || []).length > 0 ? `
+        <div style="font-size:13px;font-weight:600;color:#cc3333;margin-bottom:10px;">&#10005; ${zh ? '取消商品（缺貨）' : 'Cancelled Items (Out of Stock)'}</div>
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;">
+          ${renderItems(cancelledItems, true)}
+        </table>
+      ` : ''}
+      ${shippingFee > 0 ? `
+      <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:8px;">
+        <tr>
+          <td style="font-size:13px;color:#999;padding:6px 0;">${zh ? '運費' : 'Shipping'}</td>
+          <td style="text-align:right;font-size:13px;color:#999;padding:6px 0;">NT$${shippingFee.toLocaleString()}</td>
+        </tr>
+      </table>` : ''}
+      <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
+        <tr>
+          <td style="padding:12px 0;border-top:1.5px solid #1a1a1a;">
+            <span style="font-size:15px;font-weight:700;">${zh ? '更新後總金額' : 'Updated Total'}</span>
+          </td>
+          <td style="padding:12px 0;border-top:1.5px solid #1a1a1a;text-align:right;">
+            <span style="font-size:18px;font-weight:700;">NT$${(newTotal || 0).toLocaleString()}</span>
+          </td>
+        </tr>
+      </table>
+      <div style="background:#fafaf8;border-radius:12px;padding:14px 18px;margin-bottom:16px;">
+        <div style="font-size:13px;color:#666;line-height:1.7;">
+          ${zh
+            ? '如有任何疑問，請透過 LINE 或 Email 與我們聯繫。'
+            : 'If you have any questions, please contact us via LINE or Email.'}
+        </div>
+      </div>
+    `
+  } else if (fulfillment_type === 'full') {
     bodyHtml = `
       <div style="background:#f0fff4;border-radius:12px;padding:16px 20px;margin-bottom:24px;text-align:center;">
         <div style="font-size:32px;margin-bottom:8px;">&#127881;</div>

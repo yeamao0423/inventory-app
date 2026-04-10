@@ -8,7 +8,7 @@ export default function CartPage() {
   const { cart, removeItem } = useCart()
 
   const subtotal = cart.reduce((s, i) => s + i.price * i.qty, 0)
-  const FREE_SHIPPING_THRESHOLD = 3960
+  const FREE_SHIPPING_THRESHOLD = 3980
   const SHIPPING_FEE = 60
   const shippingFee = subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : SHIPPING_FEE
   const total = subtotal + shippingFee
