@@ -336,7 +336,7 @@ function ConsumerOrderCard({ order: o, onTap }) {
   )
 }
 
-const FREE_SHIPPING_THRESHOLD = 1000
+const FREE_SHIPPING_THRESHOLD = 3960
 const DEFAULT_SHIPPING_FEE = 60
 
 function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
