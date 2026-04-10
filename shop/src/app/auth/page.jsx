@@ -42,8 +42,8 @@ export default function AuthPage() {
       setError(error.message)
     } else if (data.user && !data.session) {
       setMessage(zh
-        ? '驗證信已寄出！請至信箱（或 Inbucket http://127.0.0.1:54324）點擊確認連結後再登入'
-        : 'Confirmation email sent. Check your inbox (or Inbucket at http://127.0.0.1:54324) and click the link.')
+        ? '驗證信已寄出！請至信箱點擊確認連結後再登入'
+        : 'Confirmation email sent! Please check your inbox and click the link to continue.')
     } else {
       router.push('/account')
     }
@@ -58,8 +58,8 @@ export default function AuthPage() {
     })
     if (error) setError(error.message)
     else setMessage(zh
-      ? '重設連結已寄出！請至信箱（或 Inbucket http://127.0.0.1:54324）點擊連結'
-      : 'Reset link sent. Check your inbox (or Inbucket at http://127.0.0.1:54324).')
+      ? '重設連結已寄出！請至信箱點擊連結'
+      : 'Reset link sent! Please check your inbox.')
     setLoading(false)
   }
 
