@@ -1025,7 +1025,7 @@ function VariantManager({ variants, setVariants, optionTypes, productId, shopPri
                   </thead>
                   <tbody>
                     {variants.map(v => (
-                      <tr key={v.id} style={{ borderBottom: '1px solid var(--border-light, #f0f0f0)' }}>
+                      <tr key={`${v.id}-${v.stock}-${v.variant_price}`} style={{ borderBottom: '1px solid var(--border-light, #f0f0f0)' }}>
                         <td style={tdStyle}>
                           <span className="fw600">{resolveVariantLabel(v.options)}</span>
                         </td>
