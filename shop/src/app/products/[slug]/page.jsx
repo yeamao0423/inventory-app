@@ -111,6 +111,11 @@ export default function ProductDetailPage() {
   }
 
   function handleAddToCart() {
+    // 即時再檢查一次收單是否已截止
+    if (sp.collection_end && new Date(sp.collection_end) < new Date()) {
+      alert(lang === 'zh' ? '收單已截止，無法加入購物車' : 'Collection period has ended')
+      return
+    }
     if (isUnavailable) return
     addItem({
       id: p.id,
