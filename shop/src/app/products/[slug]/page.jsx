@@ -117,10 +117,12 @@ export default function ProductDetailPage() {
       sku: p.sku,
       name,
       price,
+      variantId: currentVariant?.id || null,
       variantLabel,
       customNote,
       qty,
       image: null,
+      isCollection: !!sp.collection_end,
     })
     setAdded(true)
     setTimeout(() => setAdded(false), 2000)

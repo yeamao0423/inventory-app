@@ -109,6 +109,18 @@ export default function CheckoutPage() {
       return
     }
 
+    // 扣減現貨商品庫存（收單模式不扣）
+    for (const item of cart) {
+      if (item.isCollection) continue // 收單模式不扣庫存
+      if (item.variantId) {
+        // 有規格：扣 product_variants.stock
+        await supabase.rpc('decrement_variant_stock', { vid: item.variantId, qty: item.qty })
+      } else {
+        // 無規格：扣 products.quantity
+        await supabase.rpc('decrement_product_stock', { pid: item.id, qty: item.qty })
+      }
+    }
+
     // 寄訂單確認信（不阻斷成功流程，失敗靜默處理）
     fetch('/api/send-order-email', {
       method: 'POST',
