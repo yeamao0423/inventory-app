@@ -549,7 +549,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
       .then(({ data }) => setOptionTypes(data || []))
   }, [])
 
-  // Load variants whenever activeProductId changes
+  // Load variants and base stock whenever activeProductId changes
   useEffect(() => {
     if (activeProductId) {
       supabase.from('product_variants').select('*').eq('product_id', activeProductId)
@@ -557,6 +557,8 @@ function ListingSheet({ item, products, onClose, onSaved }) {
           setVariants(data || [])
           if ((data || []).length > 0) setShowVariants(true)
         })
+      supabase.from('products').select('quantity').eq('id', activeProductId).single()
+        .then(({ data }) => { if (data) set('base_stock', String(data.quantity || 0)) })
     } else {
       setVariants([])
       setShowVariants(false)
@@ -585,6 +587,12 @@ function ListingSheet({ item, products, onClose, onSaved }) {
       collection_end: localToISO(form.collection_end),
       sold_out: form.sold_out,
     }
+
+    // 無規格商品：儲存基礎庫存到 products.quantity
+    if (variants.length === 0 && form.base_stock !== undefined) {
+      await supabase.from('products').update({ quantity: Number(form.base_stock) || 0 }).eq('id', activeProductId)
+    }
+
     if (isEditing) {
       await supabase.from('storefront_products').update(payload).eq('id', editingItem.id)
       setSaving(false)
@@ -613,9 +621,14 @@ function ListingSheet({ item, products, onClose, onSaved }) {
   function validate() {
     if (!form.product_id && !editingItem) { alert('請選擇商品'); return false }
     if (!form.shop_price) { alert('請填寫商城售價'); return false }
-    if (sellingMode === 'stock' && variants.length > 0) {
-      const totalStock = variants.reduce((sum, v) => sum + (v.stock || 0), 0)
-      if (totalStock <= 0) { alert('現貨模式下至少需要一個規格有庫存，或改用收單模式'); return false }
+    if (sellingMode === 'stock') {
+      if (variants.length > 0) {
+        const totalStock = variants.reduce((sum, v) => sum + (v.stock || 0), 0)
+        if (totalStock <= 0) { alert('現貨模式下至少需要一個規格有庫存，或改用收單模式'); return false }
+      } else if ((Number(form.base_stock) || 0) <= 0) {
+        alert('現貨模式請填寫庫存數量，或改用收單模式')
+        return false
+      }
     }
     return true
   }
@@ -677,6 +690,21 @@ function ListingSheet({ item, products, onClose, onSaved }) {
                 shopPrice={Number(form.shop_price) || 0}
                 resolveVariantLabel={resolveVariantLabel}
               />
+            )}
+
+            {/* 無規格 + 現貨模式 → 顯示庫存欄位 */}
+            {variants.length === 0 && !showVariants && sellingMode === 'stock' && (
+              <div className="form-group" style={{ marginTop: 12 }}>
+                <label className="form-label">庫存數量</label>
+                <input
+                  className="form-input"
+                  type="number"
+                  placeholder="0"
+                  value={form.base_stock ?? ''}
+                  onChange={e => set('base_stock', e.target.value)}
+                  style={{ width: 140 }}
+                />
+              </div>
             )}
           </>
         )}
