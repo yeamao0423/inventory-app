@@ -384,10 +384,10 @@ export default function StorefrontPage() {
             {optionTypes.map(type => {
               const values = [...(type.variant_option_values || [])].sort((a, b) => a.sort_order - b.sort_order)
               return (
-                <div key={type.id} className="card" style={{ marginBottom: 10 }}>
-                  <div className="card-row row-sb" style={{ marginBottom: 8 }}>
+                <div key={type.id} style={{ background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 12, padding: 16, marginBottom: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: values.length > 0 || can('add') ? 12 : 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span className="fw600 fs14">{type.name}</span>
+                      <span className="fw600 fs15">{type.name}</span>
                       <span className="muted fs12">{values.length} 個選項</span>
                     </div>
                     {can('delete') && (
@@ -396,19 +396,21 @@ export default function StorefrontPage() {
                   </div>
 
                   {/* Existing values as chips */}
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: can('add') ? 10 : 0 }}>
-                    {values.map(v => (
-                      <div key={v.id} style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 16, padding: '4px 10px' }}>
-                        <span className="fs13">{v.value}</span>
-                        {can('delete') && (
-                          <button onClick={() => deleteOptionValue(v.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', fontSize: 13, padding: '0 0 0 2px', lineHeight: 1 }}>×</button>
-                        )}
-                      </div>
-                    ))}
-                    {values.length === 0 && (
-                      <span className="muted fs12">尚無選項值，請在下方新增</span>
-                    )}
-                  </div>
+                  {(values.length > 0 || !can('add')) && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: can('add') ? 14 : 0 }}>
+                      {values.map(v => (
+                        <div key={v.id} style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--bg)', border: '0.5px solid var(--border)', borderRadius: 16, padding: '5px 12px' }}>
+                          <span className="fs13">{v.value}</span>
+                          {can('delete') && (
+                            <button onClick={() => deleteOptionValue(v.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', fontSize: 13, padding: '0 0 0 2px', lineHeight: 1 }}>×</button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {values.length === 0 && can('add') && (
+                    <div className="muted fs12" style={{ marginBottom: 12 }}>尚無選項值，請在下方新增</div>
+                  )}
 
                   {/* Add value input */}
                   {can('add') && (
@@ -433,9 +435,9 @@ export default function StorefrontPage() {
 
             {/* Create new option type */}
             {can('add') && (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginTop: 4 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginTop: 8, paddingTop: 8, borderTop: '0.5px solid var(--border)' }}>
                 <div>
-                  <label className="form-label fs12">規格類型名稱 *</label>
+                  <label className="form-label fs12">新增規格類型</label>
                   <input className="form-input" placeholder="例：顏色" value={newOptTypeName} onChange={e => setNewOptTypeName(e.target.value)} onKeyDown={e => e.key === 'Enter' && addOptionType()} style={{ width: 140 }} />
                 </div>
                 <button className="btn" onClick={addOptionType} style={{ fontSize: 13, padding: '9px 16px', marginBottom: 0 }}>建立類型</button>
