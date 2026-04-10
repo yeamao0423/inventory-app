@@ -325,10 +325,7 @@ function AddProductSheet({ onClose, onSaved }) {
 
 // ── 商品詳情 ────────────────────────────────────────────
 function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete }) {
-  const [change, setChange] = useState('')
-  const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
-  const [history, setHistory] = useState([])
   const [images, setImages] = useState(
     [...(product.product_images || [])].sort((a, b) => a.sort_order - b.sort_order)
   )
@@ -341,8 +338,6 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete }) {
   )
 
   useEffect(() => {
-    supabase.from('history').select('*').eq('sku', product.sku).order('created_at', {ascending:false}).limit(10)
-      .then(({ data }) => setHistory(data || []))
     Promise.all([
       supabase.from('categories').select('*').order('sort_order'),
       supabase.from('tags').select('*').order('sort_order'),
@@ -400,18 +395,6 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete }) {
     setImages(prev => prev.filter((_, i) => i !== idx))
   }
 
-  async function updateStock() {
-    if (!change) return
-    setSaving(true)
-    const delta = Number(change)
-    const newQty = Math.max(0, product.quantity + delta)
-    await supabase.from('products').update({ quantity: newQty }).eq('id', product.id)
-    await supabase.from('history').insert({ sku: product.sku, change: delta, reason: reason || '手動調整' })
-    setSaving(false)
-    onSaved()
-    onClose()
-  }
-
   async function deleteProduct() {
     if (!window.confirm(`確定刪除「${product.name}」？`)) return
     await supabase.from('products').delete().eq('id', product.id)
@@ -448,49 +431,13 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete }) {
         )}
       </div>
 
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:20}}>
-        <div className="stat"><div className="stat-val">{product.quantity}</div><div className="stat-lbl">{product.unit}</div></div>
-        <div className="stat"><div className="stat-val fs15">{product.cost}</div><div className="stat-lbl">{product.currency}</div></div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:20}}>
+        <div className="stat"><div className="stat-val fs15">{product.cost} {product.currency}</div><div className="stat-lbl">進貨成本</div></div>
         <div className="stat"><div className="stat-val fs15">{product.sku}</div><div className="stat-lbl">SKU</div></div>
       </div>
 
       {/* 採購來源 */}
       <SourceField productId={product.id} initialSource={product.source || ''} canEdit={canEdit} onSaved={onSaved} />
-
-      {canEdit && (
-        <>
-          <div className="form-group">
-            <label className="form-label">數量變動（正數入庫，負數出庫）</label>
-            <input className="form-input" type="number" placeholder="+50 或 -10" value={change} onChange={e => setChange(e.target.value)} />
-          </div>
-          <div className="form-group">
-            <label className="form-label">原因</label>
-            <input className="form-input" placeholder="進貨 / 銷售 / 盤點…" value={reason} onChange={e => setReason(e.target.value)} />
-          </div>
-          <button className="btn" onClick={updateStock} disabled={saving} style={{marginBottom:16}}>
-            {saving ? '更新中…' : '更新庫存'}
-          </button>
-        </>
-      )}
-
-      {history.length > 0 && (
-        <>
-          <div className="sec">異動紀錄</div>
-          <div className="card">
-            {history.map((h, i) => (
-              <div key={i} className="card-row row-sb">
-                <div>
-                  <div className="fs13 fw600" style={{color: h.change > 0 ? 'var(--green)' : 'var(--red)'}}>
-                    {h.change > 0 ? '+' : ''}{h.change}
-                  </div>
-                  <div className="fs12 muted">{h.reason}</div>
-                </div>
-                <div className="fs12 muted">{h.created_at?.slice(0,16)}</div>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
 
       {/* 分類 & 標籤 */}
       {(categories.length > 0 || allTags.length > 0) && (
