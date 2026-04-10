@@ -24,7 +24,7 @@ export default function App() {
   const location = useLocation()
 
   if (loading) return (
-    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', fontSize:28 }}>📦</div>
+    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh' }}><img src="/logo.png" alt="Daigogo" style={{ height: 48 }} /></div>
   )
   if (location.pathname === '/invite') return <InvitePage />
   if (!user) return <LoginPage />

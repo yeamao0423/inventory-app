@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import Link from 'next/link'
 import { supabase } from '../../lib/supabase'
 import { useI18n } from '../layout'
@@ -13,6 +13,8 @@ export default function ProductsPage() {
   const [search, setSearch] = useState('')
   const [activeCat, setActiveCat] = useState(null)   // null = 全部
   const [activeTags, setActiveTags] = useState([])   // multi-select, OR logic
+  const [activeSource, setActiveSource] = useState(null) // null = 全部
+  const [filterOpen, setFilterOpen] = useState(false)
 
   useEffect(() => {
     Promise.all([
@@ -31,6 +33,9 @@ export default function ProductsPage() {
     })
   }, [])
 
+  // Distinct sources from published products
+  const sources = [...new Set(products.map(sp => sp.products?.source).filter(Boolean))].sort()
+
   const filtered = products.filter(sp => {
     const name = (lang === 'en' && sp.name_en ? sp.name_en : sp.products?.name) || ''
     const matchSearch = name.toLowerCase().includes(search.toLowerCase()) ||
@@ -38,7 +43,8 @@ export default function ProductsPage() {
     const matchCat = activeCat === null || sp.products?.categories?.id === activeCat
     const productTagIds = (sp.products?.product_tags || []).map(pt => pt.tag_id)
     const matchTag = activeTags.length === 0 || activeTags.some(tid => productTagIds.includes(tid))
-    return matchSearch && matchCat && matchTag
+    const matchSource = activeSource === null || (sp.products?.source || '') === activeSource
+    return matchSearch && matchCat && matchTag && matchSource
   })
 
   function toggleTag(id) {
@@ -48,52 +54,109 @@ export default function ProductsPage() {
   return (
     <div className="section">
       <div className="container">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <h1 className="section-title" style={{ marginBottom: 0 }}>{t('nav.products')}</h1>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#ebebeb', borderRadius: 10, padding: '8px 14px', minWidth: 220 }}>
-            <span>🔍</span>
-            <input
-              style={{ border: 'none', background: 'transparent', outline: 'none', fontSize: 14, color: 'var(--text)', flex: 1 }}
-              placeholder={lang === 'zh' ? '搜尋商品…' : 'Search products…'}
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-            />
-          </div>
+          <button
+            className="filter-toggle-btn"
+            onClick={() => setFilterOpen(v => !v)}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="20" y2="12" /><line x1="12" y1="18" x2="20" y2="18" />
+              <circle cx="6" cy="12" r="1.5" fill="currentColor" /><circle cx="10" cy="18" r="1.5" fill="currentColor" />
+            </svg>
+            {lang === 'zh' ? '篩選' : 'Filter'}
+            {(activeCat || activeSource || activeTags.length > 0 || search) && (
+              <span className="filter-toggle-dot" />
+            )}
+          </button>
         </div>
 
-        {/* Category filter */}
-        {categories.length > 0 && (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-            <button
-              onClick={() => setActiveCat(null)}
-              className={activeCat === null ? 'filter-pill filter-pill-active' : 'filter-pill'}
-            >
-              {lang === 'zh' ? '全部' : 'All'}
-            </button>
-            {categories.map(c => (
-              <button
-                key={c.id}
-                onClick={() => setActiveCat(activeCat === c.id ? null : c.id)}
-                className={activeCat === c.id ? 'filter-pill filter-pill-active' : 'filter-pill'}
-              >
-                {lang === 'en' && c.name_en ? c.name_en : c.name}
-              </button>
-            ))}
+        {/* Collapsible filter bar */}
+        {filterOpen && (
+          <div className="filter-bar">
+            {/* Search */}
+            <div className="filter-search">
+              <span style={{ color: 'var(--text-3)', fontSize: 15, flexShrink: 0 }}>🔍</span>
+              <input
+                style={{ border: 'none', background: 'transparent', outline: 'none', fontSize: 15, color: 'var(--text)', flex: 1, minWidth: 0 }}
+                placeholder={lang === 'zh' ? '搜尋商品…' : 'Search…'}
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                autoFocus
+              />
+              {search && (
+                <button onClick={() => setSearch('')} style={{ background: 'none', border: 'none', fontSize: 16, color: 'var(--text-3)', cursor: 'pointer', padding: 0 }}>×</button>
+              )}
+            </div>
+
+            {/* Dropdowns row */}
+            <div className="filter-dropdowns">
+              {categories.length > 0 && (
+                <FilterDropdown
+                  label={lang === 'zh' ? '所有分類' : 'All Categories'}
+                  value={activeCat}
+                  options={categories.map(c => ({
+                    value: c.id,
+                    label: lang === 'en' && c.name_en ? c.name_en : c.name,
+                  }))}
+                  onChange={setActiveCat}
+                />
+              )}
+              {sources.length > 0 && (
+                <FilterDropdown
+                  label={lang === 'zh' ? '所有品牌' : 'All Brands'}
+                  value={activeSource}
+                  options={sources.map(src => ({ value: src, label: src }))}
+                  onChange={setActiveSource}
+                />
+              )}
+            </div>
+
+            {/* Tags */}
+            {tags.length > 0 && (
+              <div className="filter-tags-row">
+                {tags.map(tg => (
+                  <button
+                    key={tg.id}
+                    onClick={() => toggleTag(tg.id)}
+                    className={activeTags.includes(tg.id) ? 'filter-tag filter-tag-active' : 'filter-tag'}
+                  >
+                    {lang === 'en' && tg.name_en ? tg.name_en : tg.name}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
-        {/* Tag filter */}
-        {tags.length > 0 && (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 24 }}>
-            {tags.map(tg => (
-              <button
-                key={tg.id}
-                onClick={() => toggleTag(tg.id)}
-                className={activeTags.includes(tg.id) ? 'filter-tag filter-tag-active' : 'filter-tag'}
-              >
-                {lang === 'en' && tg.name_en ? tg.name_en : tg.name}
-              </button>
-            ))}
+        {/* Active filter summary */}
+        {(activeCat || activeSource || activeTags.length > 0) && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16, alignItems: 'center' }}>
+            <span style={{ fontSize: 12, color: 'var(--text-3)' }}>{lang === 'zh' ? '篩選中：' : 'Filtered:'}</span>
+            {activeCat && (
+              <span className="filter-chip" onClick={() => setActiveCat(null)}>
+                {(lang === 'en' && categories.find(c => c.id === activeCat)?.name_en) || categories.find(c => c.id === activeCat)?.name} ×
+              </span>
+            )}
+            {activeSource && (
+              <span className="filter-chip" onClick={() => setActiveSource(null)}>
+                {activeSource} ×
+              </span>
+            )}
+            {activeTags.map(tid => {
+              const tg = tags.find(t => t.id === tid)
+              return tg ? (
+                <span key={tid} className="filter-chip" onClick={() => toggleTag(tid)}>
+                  {lang === 'en' && tg.name_en ? tg.name_en : tg.name} ×
+                </span>
+              ) : null
+            })}
+            <button
+              onClick={() => { setActiveCat(null); setActiveSource(null); setActiveTags([]) }}
+              style={{ fontSize: 12, color: 'var(--red)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 6px' }}
+            >
+              {lang === 'zh' ? '清除全部' : 'Clear all'}
+            </button>
           </div>
         )}
 
@@ -105,7 +168,7 @@ export default function ProductsPage() {
           </div>
         ) : (
           <div className="product-grid">
-            {filtered.map(sp => <ProductCard key={sp.id} sp={sp} t={t} lang={lang} />)}
+            {filtered.map(sp => <ProductCard key={sp.id} sp={sp} t={t} lang={lang} allTags={tags} />)}
           </div>
         )}
       </div>
@@ -113,13 +176,17 @@ export default function ProductsPage() {
   )
 }
 
-function ProductCard({ sp, t, lang }) {
+function ProductCard({ sp, t, lang, allTags }) {
   const p = sp.products
   if (!p) return null
   const name = lang === 'en' && sp.name_en ? sp.name_en : p.name
   const desc = lang === 'en' ? sp.desc_en : sp.desc_zh
   const thumb = [...(p.product_images || [])].sort((a, b) => a.sort_order - b.sort_order)[0]?.url
   const zh = lang === 'zh'
+
+  // Resolve tag names
+  const productTagIds = (p.product_tags || []).map(pt => pt.tag_id)
+  const productTags = (allTags || []).filter(tg => productTagIds.includes(tg.id))
 
   // Status logic
   const isSoldOut = sp.sold_out
@@ -150,6 +217,15 @@ function ProductCard({ sp, t, lang }) {
       </div>
       <div className="product-info">
         <div className="product-name">{name}</div>
+        {productTags.length > 0 && (
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 4, marginBottom: 2 }}>
+            {productTags.map(tg => (
+              <span key={tg.id} className="product-tag">
+                {lang === 'en' && tg.name_en ? tg.name_en : tg.name}
+              </span>
+            ))}
+          </div>
+        )}
         {desc && <div className="product-desc">{desc}</div>}
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
           <span className="product-price">NT${Number(sp.shop_price || 0).toLocaleString()}</span>
@@ -162,5 +238,50 @@ function ProductCard({ sp, t, lang }) {
         </div>
       </div>
     </Link>
+  )
+}
+
+function FilterDropdown({ label, value, options, onChange }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    function handleClick(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+    }
+    if (open) document.addEventListener('pointerdown', handleClick)
+    return () => document.removeEventListener('pointerdown', handleClick)
+  }, [open])
+
+  const selected = options.find(o => o.value === value)
+
+  return (
+    <div className="custom-dropdown" ref={ref}>
+      <button className="custom-dropdown-btn" onClick={() => setOpen(v => !v)}>
+        <span className={selected ? 'custom-dropdown-selected' : ''}>{selected ? selected.label : label}</span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ flexShrink: 0, transition: 'transform .2s', transform: open ? 'rotate(180deg)' : '' }}>
+          <path d="M6 9l6 6 6-6" />
+        </svg>
+      </button>
+      {open && (
+        <div className="custom-dropdown-menu">
+          <div
+            className={`custom-dropdown-item ${!value ? 'active' : ''}`}
+            onClick={() => { onChange(null); setOpen(false) }}
+          >
+            {label}
+          </div>
+          {options.map(opt => (
+            <div
+              key={opt.value}
+              className={`custom-dropdown-item ${value === opt.value ? 'active' : ''}`}
+              onClick={() => { onChange(opt.value); setOpen(false) }}
+            >
+              {opt.label}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }

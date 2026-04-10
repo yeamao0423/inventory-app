@@ -17,6 +17,7 @@ export default function ProductDetailPage() {
   const [customOptions, setCustomOptions] = useState([])
   const [customNote, setCustomNote] = useState('')
   const [qty, setQty] = useState(1)
+  const [productTags, setProductTags] = useState([])
   const [loading, setLoading] = useState(true)
   const [added, setAdded] = useState(false)
 
@@ -31,18 +32,20 @@ export default function ProductDetailPage() {
       if (!spData) { setLoading(false); return }
       setSp(spData)
 
-      const [{ data: varData }, { data: optData }, { data: optTypes }] = await Promise.all([
+      const [{ data: varData }, { data: optData }, { data: optTypes }, { data: ptData }] = await Promise.all([
         supabase.from('product_variants').select('*').eq('product_id', spData.product_id),
         supabase.from('custom_options').select('*').eq('product_id', spData.product_id),
         supabase.from('variant_option_types')
           .select('*, variant_option_values(id, value, sort_order)')
           .order('sort_order'),
+        supabase.from('product_tags').select('tag_id, tags(id, name, name_en)').eq('product_id', spData.product_id),
       ])
 
       const vars = varData || []
       const types = optTypes || []
       setVariants(vars)
       setCustomOptions(optData || [])
+      setProductTags((ptData || []).map(pt => pt.tags).filter(Boolean))
 
       // Determine which option types are used by this product's variants
       const usedTypeIds = new Set()
@@ -125,8 +128,15 @@ export default function ProductDetailPage() {
 
   return (
     <div style={{ minHeight: '70vh' }}>
-      <div className="container" style={{ paddingTop: 24 }}>
-        <Link href="/products" className="back-link">← {t('product.back')}</Link>
+      {/* Sticky sub-nav */}
+      <div className="detail-subnav">
+        <div className="container" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Link href="/products" className="detail-back-btn">
+            ← {zh ? '所有商品' : 'All Products'}
+          </Link>
+          <span className="detail-subnav-divider" />
+          <span className="detail-subnav-name">{name}</span>
+        </div>
       </div>
 
       <div className="detail-wrap">
@@ -138,6 +148,15 @@ export default function ProductDetailPage() {
         {/* Info */}
         <div>
           <h1 className="detail-name">{name}</h1>
+          {productTags.length > 0 && (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+              {productTags.map(tg => (
+                <span key={tg.id} className="product-tag" style={{ fontSize: 12, padding: '3px 10px' }}>
+                  {lang === 'en' && tg.name_en ? tg.name_en : tg.name}
+                </span>
+              ))}
+            </div>
+          )}
           <div className="detail-price">NT${Number(price).toLocaleString()}</div>
           {desc && <p className="detail-desc">{desc}</p>}
 

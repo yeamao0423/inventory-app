@@ -1,17 +1,39 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
-import { useI18n } from '../layout'
-import { useCart } from '../layout'
+import { useI18n, useCart, useUser } from '../layout'
 
 export default function CheckoutPage() {
   const { t, lang } = useI18n()
   const { cart, clearCart } = useCart()
+  const { user } = useUser()
   const router = useRouter()
-  const [form, setForm] = useState({ name: '', phone: '', email: '', address: '', note: '' })
+  const [form, setForm] = useState({ name: '', phone: '', email: '', store_name: '', store_number: '', line_id: '', remittance_last5: '', note: '' })
   const [errors, setErrors] = useState({})
   const [submitting, setSubmitting] = useState(false)
+  const [profileLoaded, setProfileLoaded] = useState(false)
+
+  // 登入用戶自動帶入個人資料
+  useEffect(() => {
+    if (!user || profileLoaded) return
+    async function loadProfile() {
+      const { data } = await supabase.from('consumers').select('name, phone, line_id').eq('id', user.id).single()
+      if (data) {
+        setForm(f => ({
+          ...f,
+          name: f.name || data.name || '',
+          phone: f.phone || data.phone || '',
+          email: f.email || user.email || '',
+          line_id: f.line_id || data.line_id || '',
+        }))
+      } else {
+        setForm(f => ({ ...f, email: f.email || user.email || '' }))
+      }
+      setProfileLoaded(true)
+    }
+    loadProfile()
+  }, [user])
 
   const total = cart.reduce((s, i) => s + i.price * i.qty, 0)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
@@ -21,7 +43,11 @@ export default function CheckoutPage() {
     if (!form.name.trim()) e.name = t('checkout.required')
     if (!form.phone.trim()) e.phone = t('checkout.required')
     if (!form.email.trim()) e.email = t('checkout.required')
-    if (!form.address.trim()) e.address = t('checkout.required')
+    if (!form.store_name.trim()) e.store_name = t('checkout.required')
+    if (!form.store_number.trim()) e.store_number = t('checkout.required')
+    if (!form.remittance_last5.trim() || !/^\d{5}$/.test(form.remittance_last5.trim())) {
+      e.remittance_last5 = lang === 'zh' ? '請輸入 5 位數字' : 'Please enter exactly 5 digits'
+    }
     setErrors(e)
     return Object.keys(e).length === 0
   }
@@ -59,7 +85,11 @@ export default function CheckoutPage() {
       customer_name: form.name,
       email: form.email,
       phone: form.phone,
-      address: form.address,
+      address: `${form.store_name} (${form.store_number})`,
+      store_name: form.store_name.trim(),
+      store_number: form.store_number.trim(),
+      line_id: form.line_id || null,
+      remittance_last5: form.remittance_last5.trim(),
       note: form.note,
       items: itemsStr,
       items_json: cart,
@@ -84,7 +114,9 @@ export default function CheckoutPage() {
           email: form.email,
           name: form.name,
           phone: form.phone,
-          address: form.address,
+          store_name: form.store_name,
+          store_number: form.store_number,
+          remittance_last5: form.remittance_last5.trim(),
           note: form.note,
         },
         items: cart,
@@ -110,23 +142,56 @@ export default function CheckoutPage() {
           <h1 className="form-title">{t('checkout.title')}</h1>
 
           {[
-            { key: 'name', label: t('checkout.name'), type: 'text' },
-            { key: 'phone', label: t('checkout.phone'), type: 'tel' },
-            { key: 'email', label: t('checkout.email'), type: 'email' },
-            { key: 'address', label: t('checkout.address'), type: 'text' },
-          ].map(({ key, label, type }) => (
+            { key: 'name', label: t('checkout.name'), type: 'text', required: true },
+            { key: 'phone', label: t('checkout.phone'), type: 'tel', required: true },
+            { key: 'email', label: t('checkout.email'), type: 'email', required: true },
+            { key: 'line_id', label: t('checkout.line_id'), type: 'text', required: false, placeholder: t('checkout.line_id_placeholder') },
+            { key: 'remittance_last5', label: t('checkout.remittance_last5'), type: 'text', required: true, placeholder: t('checkout.remittance_last5_placeholder'), maxLength: 5, inputMode: 'numeric' },
+          ].map(({ key, label, type, required, placeholder, maxLength, inputMode }) => (
             <div className="form-group" key={key}>
-              <label className="form-label">{label} *</label>
+              <label className="form-label">{label}{required ? ' *' : ''}</label>
               <input
                 className="form-input"
                 type={type}
                 value={form[key]}
                 onChange={e => set(key, e.target.value)}
+                placeholder={placeholder || ''}
+                maxLength={maxLength}
+                inputMode={inputMode}
                 style={errors[key] ? { borderColor: 'var(--red)' } : {}}
               />
               {errors[key] && <div className="form-error">{errors[key]}</div>}
             </div>
           ))}
+
+          {/* 7-11 取貨門市 */}
+          <div style={{ marginBottom: 16 }}>
+            <label className="form-label">{t('checkout.store_section')} *</label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div>
+                <input
+                  className="form-input"
+                  type="text"
+                  value={form.store_name}
+                  onChange={e => set('store_name', e.target.value)}
+                  placeholder={t('checkout.store_name_placeholder')}
+                  style={errors.store_name ? { borderColor: 'var(--red)' } : {}}
+                />
+                {errors.store_name && <div className="form-error">{errors.store_name}</div>}
+              </div>
+              <div>
+                <input
+                  className="form-input"
+                  type="text"
+                  value={form.store_number}
+                  onChange={e => set('store_number', e.target.value)}
+                  placeholder={t('checkout.store_number_placeholder')}
+                  style={errors.store_number ? { borderColor: 'var(--red)' } : {}}
+                />
+                {errors.store_number && <div className="form-error">{errors.store_number}</div>}
+              </div>
+            </div>
+          </div>
 
           <div className="form-group">
             <label className="form-label">{t('checkout.note')}</label>

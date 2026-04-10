@@ -14,7 +14,7 @@ export async function OPTIONS() {
 }
 
 export async function POST(request) {
-  const { order, activeItems, cancelledItems, shippingFee, newTotal, fulfillment_type, lang } = await request.json()
+  const { order, activeItems, cancelledItems, shippingFee, newTotal, fulfillment_type, trackingNumber, lang } = await request.json()
   const zh = lang !== 'en'
 
   console.log(`[send-status-email] type=${fulfillment_type} to=${order?.email} active=${activeItems?.length} cancelled=${cancelledItems?.length} total=${newTotal}`)
@@ -51,12 +51,20 @@ export async function POST(request) {
 
   let bodyHtml = ''
 
+  const trackingHtml = trackingNumber ? `
+      <div style="background:#f5f5ff;border-radius:12px;padding:14px 18px;margin-bottom:24px;">
+        <div style="font-size:13px;color:#666;margin-bottom:4px;">${zh ? '📦 物流追蹤單號' : '📦 Tracking Number'}</div>
+        <div style="font-size:16px;font-weight:700;color:#1a1a1a;letter-spacing:0.5px;">${trackingNumber}</div>
+      </div>
+  ` : ''
+
   if (fulfillment_type === 'full') {
     bodyHtml = `
       <div style="background:#f0fff4;border-radius:12px;padding:16px 20px;margin-bottom:24px;text-align:center;">
         <div style="font-size:32px;margin-bottom:8px;">&#127881;</div>
         <div style="font-size:16px;font-weight:700;color:#1a7a3a;">${zh ? '您的商品已全數出貨！' : 'Your order has shipped!'}</div>
       </div>
+      ${trackingHtml}
       <div style="font-size:13px;font-weight:600;color:#999;margin-bottom:10px;">${zh ? '出貨商品' : 'Shipped Items'}</div>
       <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;">
         ${renderItems(activeItems)}
@@ -84,6 +92,7 @@ export async function POST(request) {
             : 'Some items were out of stock. Please see the shipment and cancellation details below. Refunds for cancelled items will be arranged separately.'}
         </div>
       </div>
+      ${trackingHtml}
       <div style="font-size:13px;font-weight:600;color:#1a7a3a;margin-bottom:10px;">&#10004; ${zh ? '出貨商品' : 'Shipped Items'}</div>
       <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;">
         ${renderItems(activeItems)}
@@ -151,7 +160,7 @@ export async function POST(request) {
     <tr><td align="center">
       <table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;">
         <tr><td style="background:#1a1a1a;border-radius:16px 16px 0 0;padding:28px 32px;text-align:center;">
-          <div style="font-size:22px;font-weight:700;color:#fff;letter-spacing:-0.5px;">&#128230; Shop</div>
+          <div style="font-size:22px;font-weight:700;color:#fff;letter-spacing:-0.5px;">Daigogo</div>
           <div style="font-size:13px;color:rgba(255,255,255,0.5);margin-top:4px;">${zh ? '訂單' : 'Order'} #${orderNo}</div>
         </td></tr>
         <tr><td style="background:#fff;padding:32px;border-left:0.5px solid #e8e8e0;border-right:0.5px solid #e8e8e0;">
@@ -160,8 +169,8 @@ export async function POST(request) {
         <tr><td style="background:#f0f0ea;border-radius:0 0 16px 16px;padding:20px 32px;text-align:center;border:0.5px solid #e8e8e0;border-top:none;">
           <div style="font-size:12px;color:#aaa;line-height:1.7;">
             ${zh
-              ? '如有任何問題，歡迎透過以下方式聯繫我們：<br>LINE：<a href="https://line.me/R/ti/p/@705wgspe" style="color:#aaa;">@705wgspe</a>&nbsp;&nbsp;|&nbsp;&nbsp;Email：<a href="mailto:daigogosg@gmail.com" style="color:#aaa;">daigogosg@gmail.com</a><br><br>&copy; 2026 Daigo. All rights reserved.'
-              : 'If you have any questions, feel free to contact us:<br>LINE: <a href="https://line.me/R/ti/p/@705wgspe" style="color:#aaa;">@705wgspe</a>&nbsp;&nbsp;|&nbsp;&nbsp;Email: <a href="mailto:daigogosg@gmail.com" style="color:#aaa;">daigogosg@gmail.com</a><br><br>&copy; 2026 Daigo. All rights reserved.'}
+              ? '如有任何問題，歡迎透過以下方式聯繫我們：<br>LINE：<a href="https://line.me/R/ti/p/@705wgspe" style="color:#aaa;">@705wgspe</a>&nbsp;&nbsp;|&nbsp;&nbsp;Email：<a href="mailto:daigogosg@gmail.com" style="color:#aaa;">daigogosg@gmail.com</a><br><br>&copy; 2026 Daigogo. All rights reserved.'
+              : 'If you have any questions, feel free to contact us:<br>LINE: <a href="https://line.me/R/ti/p/@705wgspe" style="color:#aaa;">@705wgspe</a>&nbsp;&nbsp;|&nbsp;&nbsp;Email: <a href="mailto:daigogosg@gmail.com" style="color:#aaa;">daigogosg@gmail.com</a><br><br>&copy; 2026 Daigogo. All rights reserved.'}
           </div>
         </td></tr>
       </table>
@@ -171,7 +180,7 @@ export async function POST(request) {
 </html>`
 
   const { error } = await resend.emails.send({
-    from: 'Daigo Shop <no-reply@daigogotw.com>',
+    from: 'Daigogo <no-reply@daigogotw.com>',
     to: order.email,
     subject,
     html,

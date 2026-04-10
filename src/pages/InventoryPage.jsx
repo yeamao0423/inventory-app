@@ -130,14 +130,55 @@ function ProductRow({ product: p, onTap, low }) {
   )
 }
 
+// ── 圖片壓縮：縮放 + 轉 WebP ────────────────────────────
+const MAX_WIDTH = 1200
+const MAX_HEIGHT = 1200
+const QUALITY = 0.75
+
+function compressImage(file) {
+  return new Promise((resolve) => {
+    // 如果已經很小（< 100KB），直接用
+    if (file.size < 100 * 1024) { resolve(file); return }
+
+    const img = new Image()
+    const url = URL.createObjectURL(file)
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      let { width, height } = img
+      if (width > MAX_WIDTH || height > MAX_HEIGHT) {
+        const ratio = Math.min(MAX_WIDTH / width, MAX_HEIGHT / height)
+        width = Math.round(width * ratio)
+        height = Math.round(height * ratio)
+      }
+      const canvas = document.createElement('canvas')
+      canvas.width = width
+      canvas.height = height
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height)
+      canvas.toBlob(
+        (blob) => {
+          if (blob && blob.size < file.size) {
+            resolve(new File([blob], file.name.replace(/\.\w+$/, '.webp'), { type: 'image/webp' }))
+          } else {
+            resolve(file) // 壓縮後反而更大就用原檔
+          }
+        },
+        'image/webp',
+        QUALITY,
+      )
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file) }
+    img.src = url
+  })
+}
+
 // ── 上傳圖片到 Storage，寫入 product_images ──────────────
 async function uploadImages(files, productId) {
   const results = []
   for (let i = 0; i < files.length; i++) {
-    const file = files[i]
-    const ext = file.name.split('.').pop().toLowerCase()
+    const compressed = await compressImage(files[i])
+    const ext = compressed.name.split('.').pop().toLowerCase()
     const path = `${productId}/${Date.now()}-${i}.${ext}`
-    const { error } = await supabase.storage.from('product-images').upload(path, file)
+    const { error } = await supabase.storage.from('product-images').upload(path, compressed)
     if (!error) {
       const { data: { publicUrl } } = supabase.storage.from('product-images').getPublicUrl(path)
       results.push(publicUrl)
@@ -335,10 +376,10 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete }) {
     const startOrder = images.length
     const newUrls = []
     for (let i = 0; i < files.length; i++) {
-      const file = files[i]
-      const ext = file.name.split('.').pop().toLowerCase()
+      const compressed = await compressImage(files[i])
+      const ext = compressed.name.split('.').pop().toLowerCase()
       const path = `${product.id}/${Date.now()}-${i}.${ext}`
-      const { error } = await supabase.storage.from('product-images').upload(path, file)
+      const { error } = await supabase.storage.from('product-images').upload(path, compressed)
       if (!error) {
         const { data: { publicUrl } } = supabase.storage.from('product-images').getPublicUrl(path)
         newUrls.push({ url: publicUrl, sort_order: startOrder + i })
@@ -413,7 +454,7 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete }) {
       </div>
 
       {/* 採購來源 */}
-      <SourceField productId={product.id} initialSource={product.source || ''} canEdit={canEdit} />
+      <SourceField productId={product.id} initialSource={product.source || ''} canEdit={canEdit} onSaved={onSaved} />
 
       {canEdit && (
         <>
@@ -502,26 +543,34 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete }) {
   )
 }
 
-function SourceField({ productId, initialSource, canEdit }) {
+function SourceField({ productId, initialSource, canEdit, onSaved }) {
   const [source, setSource] = useState(initialSource)
+  const [dirty, setDirty] = useState(false)
   const [saved, setSaved] = useState(false)
+  function onChange(e) { setSource(e.target.value); setDirty(true); setSaved(false) }
   async function save() {
     await supabase.from('products').update({ source: source.trim() || null }).eq('id', productId)
-    setSaved(true)
+    setDirty(false); setSaved(true)
+    if (onSaved) onSaved()
     setTimeout(() => setSaved(false), 1500)
   }
   return (
-    <div className="form-group" style={{ marginBottom: 20 }}>
-      <label className="form-label">採購來源（品牌/店家）</label>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20, background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 10, padding: '8px 12px' }}>
+      <span className="fs12 muted" style={{ flexShrink: 0 }}>採購來源</span>
       {canEdit ? (
-        <div style={{ display: 'flex', gap: 8 }}>
-          <input className="form-input" placeholder="例：UNIQLO" value={source} onChange={e => setSource(e.target.value)} style={{ flex: 1 }} />
-          <button className="btn" onClick={save} style={{ fontSize: 13, padding: '9px 16px', marginBottom: 0, flexShrink: 0 }}>
-            {saved ? '✓' : '儲存'}
-          </button>
-        </div>
+        <>
+          <input
+            value={source}
+            onChange={onChange}
+            onBlur={() => dirty && save()}
+            onKeyDown={e => e.key === 'Enter' && dirty && save()}
+            placeholder="例：UNIQLO"
+            style={{ flex: 1, border: 'none', background: 'transparent', outline: 'none', fontSize: 14, fontWeight: 600, color: 'var(--text)', minWidth: 0 }}
+          />
+          {saved && <span className="fs12" style={{ color: 'var(--green)', flexShrink: 0 }}>✓</span>}
+        </>
       ) : (
-        <div className="fs14" style={{ color: source ? 'var(--text)' : 'var(--text-3)' }}>{source || '未設定'}</div>
+        <span className="fs14 fw600" style={{ color: source ? 'var(--text)' : 'var(--text-3)' }}>{source || '未設定'}</span>
       )}
     </div>
   )

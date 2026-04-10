@@ -7,10 +7,10 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['icon-192.png', 'icon-512.png'],
+      includeAssets: ['icon-192.png', 'icon-512.png', 'logo.png'],
       manifest: {
-        name: '庫存管理系統',
-        short_name: '庫存管理',
+        name: 'Daigogo 庫存管理系統',
+        short_name: 'Daigogo',
         theme_color: '#1a1a1a',
         background_color: '#f5f5f0',
         display: 'standalone',

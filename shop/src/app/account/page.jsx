@@ -254,6 +254,12 @@ function OrderDetailModal({ order: o, zh, onClose, onCancel, cancelling }) {
           <span className="modal-label">{zh ? '訂單狀態' : 'Status'}</span>
           <span className="modal-value" style={{ color: statusColor(o.status), fontWeight: 600 }}>{o.status}</span>
         </div>
+        {o.tracking_number && (
+          <div className="modal-row">
+            <span className="modal-label">{zh ? '物流單號' : 'Tracking'}</span>
+            <span className="modal-value" style={{ fontWeight: 600, letterSpacing: '0.5px' }}>{o.tracking_number}</span>
+          </div>
+        )}
         <div className="modal-row">
           <span className="modal-label">{zh ? '付款狀態' : 'Payment'}</span>
           <span className="modal-value" style={{ color: o.payment_status === '已付清' ? 'var(--green)' : undefined }}>

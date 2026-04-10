@@ -40,6 +40,55 @@ export default function OrderSuccessPage() {
         </div>
       )}
 
+      {/* 匯款資訊 */}
+      <div style={{
+        background: '#f0f7ff',
+        border: '0.5px solid #bdd6f5',
+        borderRadius: 12,
+        padding: '16px 20px',
+        marginBottom: 16,
+        fontSize: 14,
+        color: '#1e4d8c',
+        lineHeight: 1.8,
+        textAlign: 'left',
+      }}>
+        <div style={{ fontWeight: 700, marginBottom: 8 }}>
+          🏦 {lang === 'zh' ? '匯款資訊' : 'Bank Transfer Info'}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <span style={{ color: '#4a7ab5' }}>{lang === 'zh' ? '銀行' : 'Bank'}</span>
+          <span style={{ fontWeight: 600 }}>{lang === 'zh' ? '中華郵政 (700)' : 'Chunghwa Post (700)'}</span>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <span style={{ color: '#4a7ab5' }}>{lang === 'zh' ? '帳號' : 'Account'}</span>
+          <span style={{ fontWeight: 700, fontSize: 16, letterSpacing: 1 }}>0001331 0467742</span>
+        </div>
+        {order?.remittance_last5 && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
+            <span style={{ color: '#4a7ab5' }}>{t('order.remittance_last5')}</span>
+            <span style={{ fontWeight: 600 }}>{order.remittance_last5}</span>
+          </div>
+        )}
+      </div>
+
+      {/* 截圖提醒 */}
+      <div style={{
+        background: '#fff8e8',
+        border: '0.5px solid #f0d68a',
+        borderRadius: 12,
+        padding: '16px 20px',
+        marginBottom: 20,
+        fontSize: 14,
+        color: '#8a5c00',
+        lineHeight: 1.8,
+        textAlign: 'left',
+      }}>
+        <div style={{ fontWeight: 700, marginBottom: 6 }}>
+          ⚠️ {lang === 'zh' ? '付款提醒' : 'Payment Reminder'}
+        </div>
+        <div>{t('order.remittance_reminder')}</div>
+      </div>
+
       <div className="order-no-card">
         <div className="order-no-label">{t('order.order_no')}</div>
         <div className="order-no-value">#{String(id).slice(-8).toUpperCase()}</div>

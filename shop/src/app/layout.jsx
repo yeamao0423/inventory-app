@@ -92,7 +92,8 @@ export default function RootLayout({ children }) {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Shop</title>
+        <title>Daigogo</title>
+        <link rel="icon" href="/logo.png" />
       </head>
       <body>
         <UserContext.Provider value={{ user, loading: userLoading }}>
@@ -100,7 +101,7 @@ export default function RootLayout({ children }) {
             <CartContext.Provider value={{ cart, addItem, removeItem, clearCart }}>
               <nav className="nav">
                 <div className="nav-inner">
-                  <Link href="/" className="nav-logo">📦 Shop</Link>
+                  <Link href="/" className="nav-logo"><img src="/logo.png" alt="Daigogo" style={{ height: 28, marginRight: 6, verticalAlign: 'middle' }} />Daigogo</Link>
                   <div className="nav-links">
                     <Link href="/products" className="nav-link">{t('nav.products')}</Link>
                     <Link href="/cart" className="nav-cart">
@@ -123,7 +124,7 @@ export default function RootLayout({ children }) {
               {children}
 
               <footer className="footer">
-                © 2026 Shop. All rights reserved.
+                © 2026 Daigogo. All rights reserved.
               </footer>
 
               {toast && <div className="toast">{toast}</div>}

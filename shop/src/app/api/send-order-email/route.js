@@ -45,7 +45,7 @@ export async function POST(request) {
 
         <!-- Header -->
         <tr><td style="background:#1a1a1a;border-radius:16px 16px 0 0;padding:28px 32px;text-align:center;">
-          <div style="font-size:22px;font-weight:700;color:#fff;letter-spacing:-0.5px;">📦 Shop</div>
+          <div style="font-size:22px;font-weight:700;color:#fff;letter-spacing:-0.5px;">Daigogo</div>
           <div style="font-size:14px;color:rgba(255,255,255,0.6);margin-top:6px;">
             ${zh ? '感謝您的訂購！' : 'Thank you for your order!'}
           </div>
@@ -84,7 +84,7 @@ export async function POST(request) {
 
           <!-- Shipping info -->
           <div style="font-size:13px;font-weight:600;color:#999;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;">
-            ${zh ? '收件資訊' : 'Shipping Info'}
+            ${zh ? '收件資訊' : 'Pickup Info'}
           </div>
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#fafaf8;border-radius:12px;padding:16px 20px;margin-bottom:24px;">
             <tr>
@@ -96,8 +96,8 @@ export async function POST(request) {
               <td style="font-size:14px;color:#1a1a1a;padding:4px 0;">${order.phone}</td>
             </tr>
             <tr>
-              <td style="font-size:13px;color:#999;padding:4px 0;">${zh ? '地址' : 'Address'}</td>
-              <td style="font-size:14px;color:#1a1a1a;padding:4px 0;">${order.address}</td>
+              <td style="font-size:13px;color:#999;padding:4px 0;">${zh ? '取貨門市' : 'Store'}</td>
+              <td style="font-size:14px;color:#1a1a1a;padding:4px 0;">${order.store_name || ''} (${order.store_number || ''})</td>
             </tr>
             ${order.note ? `
             <tr>
@@ -106,12 +106,37 @@ export async function POST(request) {
             </tr>` : ''}
           </table>
 
-          <!-- Payment notice -->
+          <!-- Bank transfer info -->
+          <div style="font-size:13px;font-weight:600;color:#999;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;">
+            ${zh ? '匯款資訊' : 'Bank Transfer Info'}
+          </div>
+          <div style="background:#f0f7ff;border-radius:12px;padding:16px 20px;margin-bottom:16px;">
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="font-size:13px;color:#4a7ab5;padding:4px 0;width:80px;">${zh ? '銀行' : 'Bank'}</td>
+                <td style="font-size:14px;color:#1e4d8c;padding:4px 0;font-weight:600;">${zh ? '中華郵政 (700)' : 'Chunghwa Post (700)'}</td>
+              </tr>
+              <tr>
+                <td style="font-size:13px;color:#4a7ab5;padding:4px 0;">${zh ? '帳號' : 'Account'}</td>
+                <td style="font-size:16px;color:#1e4d8c;padding:4px 0;font-weight:700;letter-spacing:1px;">0001331 0467742</td>
+              </tr>
+              ${order.remittance_last5 ? `
+              <tr>
+                <td style="font-size:13px;color:#4a7ab5;padding:4px 0;">${zh ? '您的末五碼' : 'Your last 5'}</td>
+                <td style="font-size:14px;color:#1e4d8c;padding:4px 0;font-weight:600;">${order.remittance_last5}</td>
+              </tr>` : ''}
+            </table>
+          </div>
+
+          <!-- Payment reminder -->
           <div style="background:#fff8e8;border-radius:12px;padding:16px 20px;margin-bottom:8px;">
+            <div style="font-size:14px;font-weight:700;color:#8a5c00;margin-bottom:6px;">
+              ⚠️ ${zh ? '付款提醒' : 'Payment Reminder'}
+            </div>
             <div style="font-size:14px;color:#8a5c00;line-height:1.7;">
               ${zh
-                ? '✅ 我們已收到您的訂單，將盡快與您聯繫確認付款方式（銀行轉帳、LINE Pay 或現金）。'
-                : '✅ We have received your order and will contact you shortly to confirm payment method (bank transfer, LINE Pay, or cash).'}
+                ? '請將<strong>匯款截圖</strong>與<strong>訂單編號 #' + orderNo + '</strong> 傳給客服，以便我們加速核對款項。'
+                : 'Please send your <strong>transfer screenshot</strong> and <strong>order number #' + orderNo + '</strong> to our customer service for faster payment verification.'}
             </div>
           </div>
 
@@ -121,8 +146,8 @@ export async function POST(request) {
         <tr><td style="background:#f0f0ea;border-radius:0 0 16px 16px;padding:20px 32px;text-align:center;border:0.5px solid #e8e8e0;border-top:none;">
           <div style="font-size:12px;color:#aaa;line-height:1.7;">
             ${zh
-              ? '如有任何問題，歡迎透過以下方式聯繫我們：<br>LINE：<a href="https://line.me/R/ti/p/@705wgspe" style="color:#aaa;">@705wgspe</a>&nbsp;&nbsp;|&nbsp;&nbsp;Email：<a href="mailto:daigogosg@gmail.com" style="color:#aaa;">daigogosg@gmail.com</a><br><br>© 2026 Daigo. All rights reserved.'
-              : 'If you have any questions, feel free to contact us:<br>LINE: <a href="https://line.me/R/ti/p/@705wgspe" style="color:#aaa;">@705wgspe</a>&nbsp;&nbsp;|&nbsp;&nbsp;Email: <a href="mailto:daigogosg@gmail.com" style="color:#aaa;">daigogosg@gmail.com</a><br><br>© 2026 Daigo. All rights reserved.'}
+              ? '如有任何問題，歡迎透過以下方式聯繫我們：<br>LINE：<a href="https://line.me/R/ti/p/@705wgspe" style="color:#aaa;">@705wgspe</a>&nbsp;&nbsp;|&nbsp;&nbsp;Email：<a href="mailto:daigogosg@gmail.com" style="color:#aaa;">daigogosg@gmail.com</a><br><br>© 2026 Daigogo. All rights reserved.'
+              : 'If you have any questions, feel free to contact us:<br>LINE: <a href="https://line.me/R/ti/p/@705wgspe" style="color:#aaa;">@705wgspe</a>&nbsp;&nbsp;|&nbsp;&nbsp;Email: <a href="mailto:daigogosg@gmail.com" style="color:#aaa;">daigogosg@gmail.com</a><br><br>© 2026 Daigogo. All rights reserved.'}
           </div>
         </td></tr>
 
@@ -134,7 +159,7 @@ export async function POST(request) {
 </html>`
 
   const { error } = await resend.emails.send({
-    from: 'Daigo Shop <no-reply@daigogotw.com>',
+    from: 'Daigogo <no-reply@daigogotw.com>',
     to: order.email,
     subject,
     html,

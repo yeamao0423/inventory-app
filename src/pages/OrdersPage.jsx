@@ -353,6 +353,7 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
     }))
   )
   const [shippingFee, setShippingFee] = useState(o.shipping_fee || DEFAULT_SHIPPING_FEE)
+  const [trackingNumber, setTrackingNumber] = useState(o.tracking_number || '')
 
   // 加購商品欄位
   const [addItemName, setAddItemName] = useState('')
@@ -372,7 +373,7 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
 
   const hasItems = itemStatuses.length > 0
 
-  async function triggerStatusEmail({ activeItems, cancelledItems, shippingFee, newTotal, fulfillment_type }) {
+  async function triggerStatusEmail({ activeItems, cancelledItems, shippingFee, newTotal, fulfillment_type, trackingNumber }) {
     try {
       const shopUrl = import.meta.env.VITE_SHOP_URL || 'http://localhost:3000'
       console.log(`[triggerStatusEmail] type=${fulfillment_type} email=${o.email} url=${shopUrl}/api/send-status-email`)
@@ -393,6 +394,7 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
           shippingFee,
           newTotal,
           fulfillment_type,
+          trackingNumber,
           lang: 'zh',
         }),
       })
@@ -455,6 +457,7 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
       shipping_fee: hasAnyChange ? effectiveShippingFee : 0,
       total_amount: updatedTotal,
       fulfillment_type,
+      tracking_number: trackingNumber || null,
     }).eq('id', o.id)
 
     // 出貨或取消時觸發通知 Email
@@ -468,6 +471,7 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
         shippingFee: effectiveShippingFee,
         newTotal: updatedTotal,
         fulfillment_type,
+        trackingNumber: trackingNumber || null,
       })
     }
 
@@ -504,9 +508,26 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
         <div className="card-row row-sb">
           <span className="muted fs13">Email</span><span className="fs13">{o.email}</span>
         </div>
-        <div className="card-row row-sb">
-          <span className="muted fs13">地址</span><span className="fs13" style={{ textAlign: 'right', maxWidth: '65%' }}>{o.address}</span>
-        </div>
+        {o.line_id && (
+          <div className="card-row row-sb">
+            <span className="muted fs13">LINE</span><span className="fs13">{o.line_id}</span>
+          </div>
+        )}
+        {(o.store_name || o.store_number) ? (
+          <div className="card-row row-sb">
+            <span className="muted fs13">取貨門市</span>
+            <span className="fs13">{o.store_name}{o.store_number ? ` (${o.store_number})` : ''}</span>
+          </div>
+        ) : o.address ? (
+          <div className="card-row row-sb">
+            <span className="muted fs13">地址</span><span className="fs13" style={{ textAlign: 'right', maxWidth: '65%' }}>{o.address}</span>
+          </div>
+        ) : null}
+        {o.remittance_last5 && (
+          <div className="card-row row-sb">
+            <span className="muted fs13">匯款末五碼</span><span className="fw600 fs13">{o.remittance_last5}</span>
+          </div>
+        )}
         {o.note && (
           <div className="card-row"><span className="muted fs13">備註：{o.note}</span></div>
         )}
@@ -685,6 +706,13 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
               </select>
             </div>
           </div>
+          {(status === '已出貨' || status === '完成') && (
+            <div style={{ marginBottom: 14 }}>
+              <label className="form-label fs12">物流單號（選填）</label>
+              <input className="form-input" placeholder="輸入物流追蹤單號" value={trackingNumber}
+                onChange={e => setTrackingNumber(e.target.value)} style={{ fontSize: 13 }} />
+            </div>
+          )}
           <button className="btn" onClick={save} disabled={saving}>{saving ? '更新中…' : '儲存'}</button>
         </>
       )}
@@ -693,54 +721,249 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
 }
 
 function AddOrderSheet({ onClose, onSaved }) {
-  const [form, setForm] = useState({ customer:'', items:'', deposit:'0', total_amount:'', note:'' })
+  const [form, setForm] = useState({ customer: '', phone: '', email: '', address: '', line_id: '', deposit: '0', note: '' })
   const [saving, setSaving] = useState(false)
-  const set = (k, v) => setForm(f => ({...f, [k]: v}))
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  // 商品選擇
+  const [products, setProducts] = useState([])
+  const [variants, setVariants] = useState({}) // productId → [variants]
+  const [spMap, setSpMap] = useState({}) // productId → storefront_product
+  const [search, setSearch] = useState('')
+  const [selectedItems, setSelectedItems] = useState([]) // [{ id, name, price, qty, variantId, variantLabel }]
+  const [showPicker, setShowPicker] = useState(false)
+
+  useEffect(() => {
+    async function load() {
+      const [{ data: prods }, { data: vars }, { data: sp }] = await Promise.all([
+        supabase.from('products').select('id, name, sku, source'),
+        supabase.from('product_variants').select('*'),
+        supabase.from('storefront_products').select('product_id, shop_price'),
+      ])
+      setProducts(prods || [])
+      const vMap = {}
+      ;(vars || []).forEach(v => {
+        if (!vMap[v.product_id]) vMap[v.product_id] = []
+        vMap[v.product_id].push(v)
+      })
+      setVariants(vMap)
+      const sm = {}
+      ;(sp || []).forEach(s => { sm[s.product_id] = s })
+      setSpMap(sm)
+    }
+    load()
+  }, [])
+
+  function addProduct(prod, variant) {
+    const price = spMap[prod.id]?.shop_price
+      ? Number(spMap[prod.id].shop_price) + (variant ? Number(variant.price_adjustment) || 0 : 0)
+      : 0
+    const vLabel = variant ? [variant.color, variant.size].filter(Boolean).join(' / ') : ''
+    const key = `${prod.id}-${variant?.id || ''}`
+    setSelectedItems(prev => {
+      const existing = prev.find(i => i._key === key)
+      if (existing) return prev.map(i => i._key === key ? { ...i, qty: i.qty + 1 } : i)
+      return [...prev, { _key: key, id: prod.id, name: prod.name, price, qty: 1, variantId: variant?.id, variantLabel: vLabel, color: variant?.color, size: variant?.size }]
+    })
+    setShowPicker(false)
+    setSearch('')
+  }
+
+  const total = selectedItems.reduce((s, i) => s + i.price * i.qty, 0)
 
   async function save() {
-    if (!form.customer || !form.items) return
+    if (!form.customer || selectedItems.length === 0) return
     setSaving(true)
     const deposit = Number(form.deposit) || 0
-    const total = Number(form.total_amount) || 0
-    const status = total > 0 && deposit >= total ? '已付清' : deposit > 0 ? '已付訂金' : '未付'
+    const payStatus = total > 0 && deposit >= total ? '已付清' : deposit > 0 ? '已付訂金' : '未付'
+    const itemsStr = selectedItems.map(i =>
+      `${i.name}${i.variantLabel ? ' ' + i.variantLabel : ''} × ${i.qty}`
+    ).join(', ')
+    const itemsJson = selectedItems.map(({ _key, ...rest }) => rest)
+
     await supabase.from('orders').insert({
       customer: form.customer,
-      items: form.items,
+      items: itemsStr,
       deposit,
       total_amount: total || null,
-      payment_status: status,
+      payment_status: payStatus,
       note: form.note,
     })
+
+    // 同時建立 consumer_orders 以便採購彙整計算
+    await supabase.from('consumer_orders').insert({
+      customer_name: form.customer,
+      phone: form.phone || null,
+      email: form.email || null,
+      address: form.address || null,
+      line_id: form.line_id || null,
+      items: itemsStr,
+      items_json: itemsJson,
+      total_amount: total || null,
+      payment_status: payStatus === '已付清' ? '已付清' : '未付',
+      status: '待確認',
+      note: form.note,
+    })
+
     setSaving(false)
     onSaved()
     onClose()
   }
 
+  const filtered = products.filter(p =>
+    !search || p.name.toLowerCase().includes(search.toLowerCase()) || p.sku.toLowerCase().includes(search.toLowerCase())
+  )
+
   return (
     <Sheet title="新增訂單" onClose={onClose}>
+      {/* 客戶資訊 */}
+      <div className="sec" style={{ marginTop: 0 }}>客戶資訊</div>
       <div className="form-group">
-        <label className="form-label">客戶名稱</label>
+        <label className="form-label">客戶名稱 *</label>
         <input className="form-input" placeholder="例：王小明" value={form.customer} onChange={e => set('customer', e.target.value)} />
       </div>
-      <div className="form-group">
-        <label className="form-label">訂購商品</label>
-        <input className="form-input" placeholder="例：背包×1, 毛巾×2" value={form.items} onChange={e => set('items', e.target.value)} />
-      </div>
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
         <div className="form-group">
-          <label className="form-label">應付總額（NT$）</label>
-          <input className="form-input" type="number" placeholder="0" value={form.total_amount} onChange={e => set('total_amount', e.target.value)} />
+          <label className="form-label">電話</label>
+          <input className="form-input" type="tel" placeholder="選填" value={form.phone} onChange={e => set('phone', e.target.value)} />
         </div>
+        <div className="form-group">
+          <label className="form-label">LINE ID</label>
+          <input className="form-input" placeholder="選填" value={form.line_id} onChange={e => set('line_id', e.target.value)} />
+        </div>
+      </div>
+      <div className="form-group">
+        <label className="form-label">Email</label>
+        <input className="form-input" type="email" placeholder="選填" value={form.email} onChange={e => set('email', e.target.value)} />
+      </div>
+      <div className="form-group">
+        <label className="form-label">地址</label>
+        <input className="form-input" placeholder="選填" value={form.address} onChange={e => set('address', e.target.value)} />
+      </div>
+
+      {/* 商品選擇 */}
+      <div className="sec">訂購商品 *</div>
+      {selectedItems.map((item, i) => (
+        <div key={item._key} className="card" style={{ marginBottom: 6 }}>
+          <div className="card-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="fs13 fw600">{item.name}</div>
+              {item.variantLabel && <div className="muted fs12">{item.variantLabel}</div>}
+              <div className="muted fs12">NT${item.price.toLocaleString()}</div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button style={{
+                width: 24, height: 24, borderRadius: 6, border: '1px solid var(--border)',
+                background: 'var(--bg)', cursor: 'pointer', fontSize: 14, padding: 0,
+              }} onClick={() => setSelectedItems(prev =>
+                prev.map((it, idx) => idx === i ? { ...it, qty: Math.max(1, it.qty - 1) } : it)
+              )}>-</button>
+              <span className="fs13 fw600" style={{ minWidth: 20, textAlign: 'center' }}>{item.qty}</span>
+              <button style={{
+                width: 24, height: 24, borderRadius: 6, border: '1px solid var(--border)',
+                background: 'var(--bg)', cursor: 'pointer', fontSize: 14, padding: 0,
+              }} onClick={() => setSelectedItems(prev =>
+                prev.map((it, idx) => idx === i ? { ...it, qty: it.qty + 1 } : it)
+              )}>+</button>
+              <button style={{
+                fontSize: 11, padding: '2px 8px', borderRadius: 6, border: 'none',
+                background: 'var(--red)', color: '#fff', cursor: 'pointer', marginLeft: 4,
+              }} onClick={() => setSelectedItems(prev => prev.filter((_, idx) => idx !== i))}>移除</button>
+            </div>
+          </div>
+        </div>
+      ))}
+
+      {/* 加商品按鈕 / 搜尋選擇器 */}
+      {!showPicker ? (
+        <button style={{
+          width: '100%', padding: '10px 0', borderRadius: 10,
+          border: '1px dashed var(--border)', background: 'none', cursor: 'pointer',
+          fontSize: 14, color: 'var(--text-2)', marginBottom: 16,
+        }} onClick={() => setShowPicker(true)}>
+          + 新增商品
+        </button>
+      ) : (
+        <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 10, marginBottom: 16, background: 'var(--card)' }}>
+          <input
+            className="form-input"
+            placeholder="搜尋商品名稱或 SKU…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            autoFocus
+            style={{ marginBottom: 8 }}
+          />
+          <div style={{ maxHeight: 200, overflowY: 'auto' }}>
+            {filtered.slice(0, 20).map(p => {
+              const pvs = variants[p.id]
+              const sp = spMap[p.id]
+              const price = sp ? Number(sp.shop_price) : 0
+              if (pvs && pvs.length > 0) {
+                return pvs.map(v => {
+                  const vLabel = [v.color, v.size].filter(Boolean).join(' / ')
+                  const vPrice = price + (Number(v.price_adjustment) || 0)
+                  return (
+                    <div key={`${p.id}-${v.id}`} onClick={() => addProduct(p, v)}
+                      style={{ padding: '8px 10px', cursor: 'pointer', borderRadius: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'var(--surface)'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <div>
+                        <div className="fs13 fw600">{p.name}</div>
+                        <div className="muted fs12">{vLabel} · {p.sku}</div>
+                      </div>
+                      <span className="fs13">NT${vPrice.toLocaleString()}</span>
+                    </div>
+                  )
+                })
+              }
+              return (
+                <div key={p.id} onClick={() => addProduct(p, null)}
+                  style={{ padding: '8px 10px', cursor: 'pointer', borderRadius: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                  onMouseEnter={e => e.currentTarget.style.background = 'var(--surface)'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                >
+                  <div>
+                    <div className="fs13 fw600">{p.name}</div>
+                    <div className="muted fs12">{p.sku}</div>
+                  </div>
+                  <span className="fs13">{price > 0 ? `NT$${price.toLocaleString()}` : '未定價'}</span>
+                </div>
+              )
+            })}
+            {filtered.length === 0 && <div className="muted fs12" style={{ padding: 10 }}>找不到商品</div>}
+          </div>
+          <button style={{
+            marginTop: 6, width: '100%', padding: '6px 0', borderRadius: 8,
+            border: 'none', background: 'var(--surface)', cursor: 'pointer', fontSize: 13, color: 'var(--text-2)',
+          }} onClick={() => { setShowPicker(false); setSearch('') }}>取消</button>
+        </div>
+      )}
+
+      {/* 金額 */}
+      {selectedItems.length > 0 && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div className="card-row row-sb">
+            <span className="muted fs13">商品小計</span>
+            <span className="fw600">NT${total.toLocaleString()}</span>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
         <div className="form-group">
           <label className="form-label">訂金（NT$）</label>
           <input className="form-input" type="number" placeholder="0" value={form.deposit} onChange={e => set('deposit', e.target.value)} />
         </div>
+        <div className="form-group">
+          <label className="form-label">備註</label>
+          <input className="form-input" placeholder="選填" value={form.note} onChange={e => set('note', e.target.value)} />
+        </div>
       </div>
-      <div className="form-group">
-        <label className="form-label">備註</label>
-        <input className="form-input" placeholder="選填" value={form.note} onChange={e => set('note', e.target.value)} />
-      </div>
-      <button className="btn" onClick={save} disabled={saving}>{saving ? '儲存中…' : '建立訂單'}</button>
+
+      <button className="btn" onClick={save} disabled={saving} style={{ marginTop: 8 }}>
+        {saving ? '儲存中…' : `建立訂單${total > 0 ? ` · NT$${total.toLocaleString()}` : ''}`}
+      </button>
     </Sheet>
   )
 }
