@@ -79,7 +79,8 @@ export default function StorefrontPage() {
 
   async function addOptionType() {
     if (!newOptTypeName.trim()) return
-    await supabase.from('variant_option_types').insert({ name: newOptTypeName.trim() })
+    const { error } = await supabase.from('variant_option_types').insert({ name: newOptTypeName.trim() })
+    if (error) { alert('建立失敗：' + error.message); return }
     setNewOptTypeName('')
     fetchAll()
   }
@@ -93,7 +94,8 @@ export default function StorefrontPage() {
   async function addOptionValue(typeId) {
     const val = (newOptValues[typeId] || '').trim()
     if (!val) return
-    await supabase.from('variant_option_values').insert({ option_type_id: typeId, value: val })
+    const { error } = await supabase.from('variant_option_values').insert({ option_type_id: typeId, value: val })
+    if (error) { alert('新增失敗：' + error.message); return }
     setNewOptValues(f => ({ ...f, [typeId]: '' }))
     fetchAll()
   }
@@ -374,56 +376,69 @@ export default function StorefrontPage() {
 
           {/* Variant Option Types */}
           <div>
-            <div className="sec">商品規格選項（可組合，例：顏色 + 鞋子尺碼）</div>
+            <div className="sec">商品規格選項（可組合，例：顏色 + 尺寸）</div>
             <div className="muted fs12" style={{ marginBottom: 12 }}>在此建立規格類型與選項值，再到商品的「設定」頁面選擇組合套用</div>
+
             {optionTypes.length === 0 && <div className="muted fs13" style={{ marginBottom: 12 }}>尚未建立規格類型</div>}
-            {optionTypes.map(type => (
-              <div key={type.id} className="card" style={{ marginBottom: 10 }}>
-                <div className="card-row row-sb" style={{ marginBottom: 8 }}>
-                  <span className="fw600 fs14">{type.name}</span>
-                  {can('delete') && (
-                    <button onClick={() => deleteOptionType(type.id)} style={{ ...smallBtn, color: 'var(--red)', fontSize: 11 }}>刪除類型</button>
-                  )}
-                </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: can('add') ? 10 : 0 }}>
-                  {[...(type.variant_option_values || [])].sort((a, b) => a.sort_order - b.sort_order).map(v => (
-                    <div key={v.id} style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 16, padding: '4px 10px' }}>
-                      <span className="fs13">{v.value}</span>
-                      {can('delete') && (
-                        <button onClick={() => deleteOptionValue(v.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', fontSize: 13, padding: '0 0 0 2px', lineHeight: 1 }}>×</button>
-                      )}
+
+            {optionTypes.map(type => {
+              const values = [...(type.variant_option_values || [])].sort((a, b) => a.sort_order - b.sort_order)
+              return (
+                <div key={type.id} className="card" style={{ marginBottom: 10 }}>
+                  <div className="card-row row-sb" style={{ marginBottom: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span className="fw600 fs14">{type.name}</span>
+                      <span className="muted fs12">{values.length} 個選項</span>
                     </div>
-                  ))}
-                  {(type.variant_option_values || []).length === 0 && (
-                    <span className="muted fs12">尚無選項值</span>
+                    {can('delete') && (
+                      <button onClick={() => deleteOptionType(type.id)} style={{ ...smallBtn, color: 'var(--red)', fontSize: 11 }}>刪除類型</button>
+                    )}
+                  </div>
+
+                  {/* Existing values as chips */}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: can('add') ? 10 : 0 }}>
+                    {values.map(v => (
+                      <div key={v.id} style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 16, padding: '4px 10px' }}>
+                        <span className="fs13">{v.value}</span>
+                        {can('delete') && (
+                          <button onClick={() => deleteOptionValue(v.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', fontSize: 13, padding: '0 0 0 2px', lineHeight: 1 }}>×</button>
+                        )}
+                      </div>
+                    ))}
+                    {values.length === 0 && (
+                      <span className="muted fs12">尚無選項值，請在下方新增</span>
+                    )}
+                  </div>
+
+                  {/* Add value input */}
+                  {can('add') && (
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                      <div>
+                        <label className="form-label fs12">新增選項值</label>
+                        <input
+                          className="form-input"
+                          placeholder={`例：${type.name === '顏色' ? '黑色' : type.name === '尺寸' || type.name === '鞋子尺碼' ? 'S' : '選項名稱'}`}
+                          value={newOptValues[type.id] || ''}
+                          onChange={e => setNewOptValues(f => ({ ...f, [type.id]: e.target.value }))}
+                          onKeyDown={e => e.key === 'Enter' && addOptionValue(type.id)}
+                          style={{ width: 140 }}
+                        />
+                      </div>
+                      <button className="btn" onClick={() => addOptionValue(type.id)} style={{ fontSize: 13, padding: '9px 16px', marginBottom: 0 }}>新增</button>
+                    </div>
                   )}
                 </div>
-                {can('add') && (
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <input
-                      className="form-input"
-                      placeholder={`新增「${type.name}」的選項（例：黑色）`}
-                      value={newOptValues[type.id] || ''}
-                      onChange={e => setNewOptValues(f => ({ ...f, [type.id]: e.target.value }))}
-                      onKeyDown={e => e.key === 'Enter' && addOptionValue(type.id)}
-                      style={{ flex: 1 }}
-                    />
-                    <button className="btn" onClick={() => addOptionValue(type.id)} style={{ fontSize: 13, padding: '9px 16px', marginBottom: 0, flexShrink: 0 }}>新增</button>
-                  </div>
-                )}
-              </div>
-            ))}
+              )
+            })}
+
+            {/* Create new option type */}
             {can('add') && (
-              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-                <input
-                  className="form-input"
-                  placeholder="建立新規格類型（例：顏色、鞋子尺碼、性別）"
-                  value={newOptTypeName}
-                  onChange={e => setNewOptTypeName(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && addOptionType()}
-                  style={{ flex: 1 }}
-                />
-                <button className="btn" onClick={addOptionType} style={{ fontSize: 13, padding: '9px 16px', marginBottom: 0, flexShrink: 0 }}>建立類型</button>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginTop: 4 }}>
+                <div>
+                  <label className="form-label fs12">規格類型名稱 *</label>
+                  <input className="form-input" placeholder="例：顏色" value={newOptTypeName} onChange={e => setNewOptTypeName(e.target.value)} onKeyDown={e => e.key === 'Enter' && addOptionType()} style={{ width: 140 }} />
+                </div>
+                <button className="btn" onClick={addOptionType} style={{ fontSize: 13, padding: '9px 16px', marginBottom: 0 }}>建立類型</button>
               </div>
             )}
           </div>
@@ -564,24 +579,6 @@ function ListingSheet({ item, products, onClose, onSaved }) {
     onClose()
   }
 
-  async function addVariant(v) {
-    await supabase.from('product_variants').insert({ ...v, product_id: item?.product_id || Number(form.product_id) })
-    if (item?.product_id) {
-      const { data } = await supabase.from('product_variants').select('*').eq('product_id', item.product_id)
-      setVariants(data || [])
-    }
-  }
-
-  async function updateVariantStock(id, stock) {
-    await supabase.from('product_variants').update({ stock: Number(stock) }).eq('id', id)
-    setVariants(prev => prev.map(v => v.id === id ? { ...v, stock: Number(stock) } : v))
-  }
-
-  async function deleteVariant(id) {
-    await supabase.from('product_variants').delete().eq('id', id)
-    setVariants(prev => prev.filter(v => v.id !== id))
-  }
-
   return (
     <div className="sheet-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="sheet">
@@ -671,103 +668,331 @@ function ListingSheet({ item, products, onClose, onSaved }) {
 
         {/* Variants section (only for existing listings) */}
         {isEdit && (
-          <>
-            <div className="sec">商品規格</div>
-            {variants.length === 0 && <div className="muted fs13" style={{ marginBottom: 12 }}>尚未設定規格，消費者將看到無規格商品</div>}
-            {variants.map(v => (
-              <div key={v.id} className="card" style={{ marginBottom: 8 }}>
-                <div className="card-row row-sb">
-                  <div>
-                    <span className="fw600 fs13">{resolveVariantLabel(v.options)}</span>
-                    <span className="muted fs12" style={{ marginLeft: 8 }}>庫存 {v.stock}</span>
-                    {v.price_adjustment !== 0 && (
-                      <span className="muted fs12" style={{ marginLeft: 8 }}>
-                        {v.price_adjustment > 0 ? '+' : ''}NT${v.price_adjustment}
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                    <input
-                      type="number"
-                      defaultValue={v.stock}
-                      onBlur={e => updateVariantStock(v.id, e.target.value)}
-                      style={{ width: 60, padding: '4px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center' }}
-                      title="點擊修改庫存"
-                    />
-                    <button onClick={() => deleteVariant(v.id)} style={{ ...smallBtn, color: 'var(--red)', fontSize: 11 }}>刪除</button>
-                  </div>
-                </div>
-              </div>
-            ))}
-            <AddVariantForm onAdd={addVariant} optionTypes={optionTypes} />
-          </>
+          <VariantManager
+            variants={variants}
+            setVariants={setVariants}
+            optionTypes={optionTypes}
+            productId={item.product_id}
+            shopPrice={Number(form.shop_price) || 0}
+            resolveVariantLabel={resolveVariantLabel}
+          />
         )}
       </div>
     </div>
   )
 }
 
-function AddVariantForm({ onAdd, optionTypes }) {
-  const [selections, setSelections] = useState({}) // { typeId_str: valueId_str }
-  const [stock, setStock] = useState('')
-  const [priceAdj, setPriceAdj] = useState('0')
-  const [saving, setSaving] = useState(false)
+function VariantManager({ variants, setVariants, optionTypes, productId, shopPrice, resolveVariantLabel }) {
+  // Step 1 state: which types and values are selected for this product
+  const [selectedTypes, setSelectedTypes] = useState({})   // { typeId: true/false }
+  const [selectedValues, setSelectedValues] = useState({})  // { typeId: Set of valueIds }
+  const [generating, setGenerating] = useState(false)
+  const [batchStock, setBatchStock] = useState('')
+  const [batchPrice, setBatchPrice] = useState('')
 
-  async function save() {
-    if (!stock) return
-    const options = {}
-    Object.entries(selections).forEach(([tid, vid]) => {
-      if (vid) options[tid] = Number(vid)
+  // Initialize selections from existing variants
+  useEffect(() => {
+    if (variants.length === 0) return
+    const types = {}
+    const values = {}
+    variants.forEach(v => {
+      Object.entries(v.options || {}).forEach(([tid, vid]) => {
+        types[tid] = true
+        if (!values[tid]) values[tid] = new Set()
+        values[tid].add(vid)
+      })
     })
-    setSaving(true)
-    await onAdd({ options, stock: Number(stock), price_adjustment: Number(priceAdj) || 0 })
-    setSelections({})
-    setStock('')
-    setPriceAdj('0')
-    setSaving(false)
+    setSelectedTypes(types)
+    // Convert Sets for state (we'll keep using Sets internally)
+    setSelectedValues(values)
+  }, []) // only on mount
+
+  function toggleType(typeId) {
+    const tid = String(typeId)
+    setSelectedTypes(prev => {
+      const next = { ...prev }
+      if (next[tid]) {
+        delete next[tid]
+        setSelectedValues(prev2 => {
+          const n = { ...prev2 }
+          delete n[tid]
+          return n
+        })
+      } else {
+        next[tid] = true
+      }
+      return next
+    })
   }
 
+  function toggleValue(typeId, valueId) {
+    const tid = String(typeId)
+    setSelectedValues(prev => {
+      const next = { ...prev }
+      if (!next[tid]) next[tid] = new Set()
+      else next[tid] = new Set(next[tid]) // clone
+      if (next[tid].has(valueId)) next[tid].delete(valueId)
+      else next[tid].add(valueId)
+      return next
+    })
+  }
+
+  // Generate cartesian product of selected values
+  function cartesian(arrays) {
+    if (arrays.length === 0) return [[]]
+    return arrays.reduce((acc, arr) =>
+      acc.flatMap(combo => arr.map(item => [...combo, item])),
+    [[]])
+  }
+
+  async function generateCombinations() {
+    const activeTypeIds = Object.keys(selectedTypes).filter(tid => selectedTypes[tid] && selectedValues[tid]?.size > 0)
+    if (activeTypeIds.length === 0) return
+
+    setGenerating(true)
+
+    // Build arrays for cartesian product: [[{tid, vid}, ...], ...]
+    const axes = activeTypeIds.map(tid =>
+      [...selectedValues[tid]].map(vid => ({ tid, vid }))
+    )
+    const combos = cartesian(axes)
+
+    // Check which combos already exist
+    const existingKeys = new Set(variants.map(v => {
+      return Object.entries(v.options || {}).sort(([a], [b]) => a.localeCompare(b)).map(([t, v2]) => `${t}:${v2}`).join('|')
+    }))
+
+    const toInsert = []
+    for (const combo of combos) {
+      const options = {}
+      combo.forEach(({ tid, vid }) => { options[tid] = vid })
+      const key = Object.entries(options).sort(([a], [b]) => a.localeCompare(b)).map(([t, v2]) => `${t}:${v2}`).join('|')
+      if (!existingKeys.has(key)) {
+        toInsert.push({ product_id: productId, options, stock: 0, variant_price: null })
+      }
+    }
+
+    if (toInsert.length > 0) {
+      await supabase.from('product_variants').insert(toInsert)
+    }
+
+    // Reload all variants
+    const { data } = await supabase.from('product_variants').select('*').eq('product_id', productId)
+    setVariants(data || [])
+    setGenerating(false)
+  }
+
+  async function updateVariantField(id, field, value) {
+    const numVal = value === '' || value === null ? null : Number(value)
+    await supabase.from('product_variants').update({ [field]: field === 'stock' ? (numVal ?? 0) : numVal }).eq('id', id)
+    setVariants(prev => prev.map(v => v.id === id ? { ...v, [field]: field === 'stock' ? (numVal ?? 0) : numVal } : v))
+  }
+
+  async function deleteVariant(id) {
+    await supabase.from('product_variants').delete().eq('id', id)
+    setVariants(prev => prev.filter(v => v.id !== id))
+  }
+
+  async function applyBatchStock() {
+    if (batchStock === '') return
+    const val = Number(batchStock)
+    const ids = variants.map(v => v.id)
+    await supabase.from('product_variants').update({ stock: val }).in('id', ids)
+    setVariants(prev => prev.map(v => ({ ...v, stock: val })))
+    setBatchStock('')
+  }
+
+  async function applyBatchPrice() {
+    if (batchPrice === '') return
+    const val = Number(batchPrice)
+    const ids = variants.map(v => v.id)
+    await supabase.from('product_variants').update({ variant_price: val }).in('id', ids)
+    setVariants(prev => prev.map(v => ({ ...v, variant_price: val })))
+    setBatchPrice('')
+  }
+
+  async function deleteAllVariants() {
+    if (!window.confirm('確定刪除此商品的所有規格組合？')) return
+    await supabase.from('product_variants').delete().eq('product_id', productId)
+    setVariants([])
+    setSelectedTypes({})
+    setSelectedValues({})
+  }
+
+  // Count how many new combos would be generated
+  const activeTypeIds = Object.keys(selectedTypes).filter(tid => selectedTypes[tid] && selectedValues[tid]?.size > 0)
+  const totalCombos = activeTypeIds.length > 0
+    ? activeTypeIds.reduce((acc, tid) => acc * (selectedValues[tid]?.size || 1), 1)
+    : 0
+  const existingCount = variants.length
+  const newCount = Math.max(0, totalCombos - existingCount)
+
   return (
-    <div style={{ background: 'var(--bg)', borderRadius: 12, padding: 14, marginTop: 8 }}>
-      <div className="muted fs12" style={{ marginBottom: 10, fontWeight: 600 }}>新增規格</div>
+    <>
+      <div className="sec" style={{ marginTop: 8 }}>商品規格</div>
+
       {optionTypes.length === 0 ? (
-        <div className="muted fs12" style={{ marginBottom: 12 }}>
-          請先到「分類/標籤/規格」tab 建立規格類型（例：顏色、鞋子尺碼）
+        <div className="muted fs13" style={{ marginBottom: 12 }}>
+          請先到「分類/標籤/規格」tab 建立規格類型（例：顏色、尺寸）
         </div>
       ) : (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 10 }}>
-            {optionTypes.map(type => (
-              <div key={type.id}>
-                <label className="form-label fs12">{type.name}</label>
-                <select
-                  className="form-select"
-                  value={selections[String(type.id)] || ''}
-                  onChange={e => setSelections(s => ({ ...s, [String(type.id)]: e.target.value }))}
-                >
-                  <option value="">— 不使用 —</option>
-                  {[...(type.variant_option_values || [])].sort((a, b) => a.sort_order - b.sort_order).map(v => (
-                    <option key={v.id} value={v.id}>{v.value}</option>
-                  ))}
-                </select>
+          {/* Step 1: Select types & values */}
+          <div style={{ background: 'var(--bg)', borderRadius: 12, padding: 14, marginBottom: 12 }}>
+            <div className="muted fs12 fw600" style={{ marginBottom: 10 }}>1. 選擇此商品的規格</div>
+            {optionTypes.map(type => {
+              const tid = String(type.id)
+              const isActive = !!selectedTypes[tid]
+              const vals = [...(type.variant_option_values || [])].sort((a, b) => a.sort_order - b.sort_order)
+
+              return (
+                <div key={type.id} style={{ marginBottom: 12 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: isActive ? 8 : 0 }}>
+                    <input
+                      type="checkbox"
+                      checked={isActive}
+                      onChange={() => toggleType(type.id)}
+                      style={{ width: 16, height: 16, accentColor: 'var(--text)' }}
+                    />
+                    <span className="fw600 fs14">{type.name}</span>
+                    {isActive && selectedValues[tid]?.size > 0 && (
+                      <span className="muted fs12">（已選 {selectedValues[tid].size} 個）</span>
+                    )}
+                  </label>
+                  {isActive && (
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', paddingLeft: 24 }}>
+                      {vals.map(val => {
+                        const isSelected = selectedValues[tid]?.has(val.id)
+                        return (
+                          <button
+                            key={val.id}
+                            onClick={() => toggleValue(type.id, val.id)}
+                            style={{
+                              fontSize: 13, padding: '4px 14px', borderRadius: 20,
+                              background: isSelected ? 'var(--text)' : 'transparent',
+                              color: isSelected ? '#fff' : 'var(--text-2)',
+                              border: '0.5px solid var(--border)',
+                              cursor: 'pointer', transition: 'all .15s',
+                            }}
+                          >{val.value}</button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+
+            {totalCombos > 0 && (
+              <button
+                className="btn"
+                onClick={generateCombinations}
+                disabled={generating}
+                style={{ fontSize: 13, padding: '10px 0', marginTop: 4 }}
+              >
+                {generating ? '產生中…' : `產生組合（共 ${totalCombos} 種${newCount > 0 && newCount < totalCombos ? `，新增 ${newCount}` : ''}）`}
+              </button>
+            )}
+          </div>
+
+          {/* Step 2: Variant matrix table */}
+          {variants.length > 0 && (
+            <div style={{ background: 'var(--bg)', borderRadius: 12, padding: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                <div className="muted fs12 fw600">2. 編輯規格（{variants.length} 種）</div>
+                <button onClick={deleteAllVariants} style={{ ...smallBtn, color: 'var(--red)', fontSize: 11 }}>清除全部</button>
               </div>
-            ))}
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
-            <div>
-              <label className="form-label fs12">庫存數量 *</label>
-              <input className="form-input" type="number" placeholder="0" value={stock} onChange={e => setStock(e.target.value)} />
+
+              {/* Batch controls */}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <span className="muted fs12">批次庫存:</span>
+                  <input
+                    type="number"
+                    value={batchStock}
+                    onChange={e => setBatchStock(e.target.value)}
+                    placeholder="0"
+                    style={{ width: 60, padding: '4px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center' }}
+                  />
+                  <button onClick={applyBatchStock} style={{ ...smallBtn, fontSize: 11 }}>套用</button>
+                </div>
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <span className="muted fs12">批次售價:</span>
+                  <input
+                    type="number"
+                    value={batchPrice}
+                    onChange={e => setBatchPrice(e.target.value)}
+                    placeholder={String(shopPrice)}
+                    style={{ width: 80, padding: '4px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center' }}
+                  />
+                  <button onClick={applyBatchPrice} style={{ ...smallBtn, fontSize: 11 }}>套用</button>
+                </div>
+              </div>
+
+              {/* Table */}
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                      <th style={thStyle}>規格</th>
+                      <th style={{ ...thStyle, width: 70, textAlign: 'center' }}>庫存</th>
+                      <th style={{ ...thStyle, width: 90, textAlign: 'center' }}>售價(NT$)</th>
+                      <th style={{ ...thStyle, width: 40 }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {variants.map(v => (
+                      <tr key={v.id} style={{ borderBottom: '1px solid var(--border-light, #f0f0f0)' }}>
+                        <td style={tdStyle}>
+                          <span className="fw600">{resolveVariantLabel(v.options)}</span>
+                        </td>
+                        <td style={{ ...tdStyle, textAlign: 'center' }}>
+                          <input
+                            type="number"
+                            defaultValue={v.stock}
+                            onBlur={e => updateVariantField(v.id, 'stock', e.target.value)}
+                            style={cellInput}
+                          />
+                        </td>
+                        <td style={{ ...tdStyle, textAlign: 'center' }}>
+                          <input
+                            type="number"
+                            defaultValue={v.variant_price ?? ''}
+                            placeholder={String(shopPrice)}
+                            onBlur={e => updateVariantField(v.id, 'variant_price', e.target.value)}
+                            style={cellInput}
+                          />
+                        </td>
+                        <td style={{ ...tdStyle, textAlign: 'center' }}>
+                          <button
+                            onClick={() => deleteVariant(v.id)}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', fontSize: 15, padding: 0, lineHeight: 1 }}
+                            title="刪除"
+                          >×</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="muted fs12" style={{ marginTop: 8 }}>
+                售價留空 = 使用商城售價 NT${shopPrice.toLocaleString()}
+              </div>
             </div>
-            <div>
-              <label className="form-label fs12">加減價（NT$）</label>
-              <input className="form-input" type="number" placeholder="0" value={priceAdj} onChange={e => setPriceAdj(e.target.value)} />
+          )}
+
+          {variants.length === 0 && (
+            <div className="muted fs13" style={{ marginBottom: 12 }}>
+              勾選規格並產生組合，或消費者將看到無規格商品
             </div>
-          </div>
-          <button className="btn" onClick={save} disabled={saving} style={{ fontSize: 14, padding: '10px 0' }}>
-            {saving ? '新增中…' : '+ 新增此規格'}
-          </button>
+          )}
         </>
       )}
-    </div>
+    </>
   )
 }
+
+const thStyle = { padding: '8px 6px', textAlign: 'left', fontSize: 12, color: 'var(--text-3)', fontWeight: 600 }
+const tdStyle = { padding: '8px 6px' }
+const cellInput = { width: '100%', padding: '5px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center', background: 'var(--surface)' }

@@ -88,7 +88,7 @@ export default function ProductDetailPage() {
   const stockSoldOut = stock <= 0 && !isCollection // only check stock for non-collection items
   const isSoldOut = markedSoldOut || stockSoldOut
   const isUnavailable = isSoldOut || collectionExpired
-  const price = sp.shop_price + (currentVariant?.price_adjustment || 0)
+  const price = currentVariant?.variant_price != null ? Number(currentVariant.variant_price) : sp.shop_price + (currentVariant?.price_adjustment || 0)
 
   // Human-readable label for cart
   const variantLabel = activeTypes.map(type => {
