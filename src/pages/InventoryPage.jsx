@@ -174,12 +174,16 @@ function compressImage(file) {
 // ── 上傳圖片到 Storage，寫入 product_images ──────────────
 async function uploadImages(files, productId) {
   const results = []
+  const errors = []
   for (let i = 0; i < files.length; i++) {
     const compressed = await compressImage(files[i])
     const ext = compressed.name.split('.').pop().toLowerCase()
     const path = `${productId}/${Date.now()}-${i}.${ext}`
     const { error } = await supabase.storage.from('product-images').upload(path, compressed)
-    if (!error) {
+    if (error) {
+      console.error('Image upload error:', error)
+      errors.push(error.message)
+    } else {
       const { data: { publicUrl } } = supabase.storage.from('product-images').getPublicUrl(path)
       results.push(publicUrl)
     }
@@ -188,6 +192,9 @@ async function uploadImages(files, productId) {
     await supabase.from('product_images').insert(
       results.map((url, idx) => ({ product_id: productId, url, sort_order: idx }))
     )
+  }
+  if (errors.length > 0) {
+    alert('部分圖片上傳失敗：' + errors.join(', '))
   }
 }
 
