@@ -529,7 +529,14 @@ function ListingSheet({ item, products, onClose, onSaved }) {
   const [variants, setVariants] = useState([])
   const [optionTypes, setOptionTypes] = useState([])
   const [saving, setSaving] = useState(false)
+  const [createdItem, setCreatedItem] = useState(null)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const editingItem = item || createdItem
+  const isEditing = !!editingItem
+
+  // The product_id we're working with (from existing listing OR selected in dropdown)
+  const activeProductId = editingItem?.product_id || (form.product_id ? Number(form.product_id) : null)
 
   useEffect(() => {
     // Load global option types with their values
@@ -537,12 +544,17 @@ function ListingSheet({ item, products, onClose, onSaved }) {
       .select('*, variant_option_values(id, value, sort_order)')
       .order('sort_order')
       .then(({ data }) => setOptionTypes(data || []))
+  }, [])
 
-    if (item?.product_id) {
-      supabase.from('product_variants').select('*').eq('product_id', item.product_id)
+  // Load variants whenever activeProductId changes
+  useEffect(() => {
+    if (activeProductId) {
+      supabase.from('product_variants').select('*').eq('product_id', activeProductId)
         .then(({ data }) => setVariants(data || []))
+    } else {
+      setVariants([])
     }
-  }, [item])
+  }, [activeProductId])
 
   // Resolve a variant's options object to a human-readable string
   function resolveVariantLabel(options) {
@@ -566,17 +578,39 @@ function ListingSheet({ item, products, onClose, onSaved }) {
       collection_end: localToISO(form.collection_end),
       sold_out: form.sold_out,
     }
-    if (isEdit) {
-      await supabase.from('storefront_products').update(payload).eq('id', item.id)
+    if (isEditing) {
+      await supabase.from('storefront_products').update(payload).eq('id', editingItem.id)
+      setSaving(false)
+      onSaved()
+      onClose()
     } else {
-      await supabase.from('storefront_products').insert({
+      const { data, error } = await supabase.from('storefront_products').insert({
         ...payload,
         product_id: Number(form.product_id),
-      })
+      }).select('*, products(*)').single()
+      setSaving(false)
+      onSaved()
+      if (error) { alert('建立失敗：' + error.message); return }
+      // Switch to edit mode so user can set up variants
+      setCreatedItem(data)
+      // Load variants for this product
+      supabase.from('product_variants').select('*').eq('product_id', data.product_id)
+        .then(({ data: v }) => setVariants(v || []))
     }
-    setSaving(false)
-    onSaved()
-    onClose()
+  }
+
+  // Selling mode: 'stock' (現貨) or 'collection' (收單)
+  const sellingMode = form.collection_end ? 'collection' : 'stock'
+
+  // Validation helper
+  function validate() {
+    if (!form.product_id && !editingItem) { alert('請選擇商品'); return false }
+    if (!form.shop_price) { alert('請填寫商城售價'); return false }
+    if (sellingMode === 'stock' && variants.length > 0) {
+      const totalStock = variants.reduce((sum, v) => sum + (v.stock || 0), 0)
+      if (totalStock <= 0) { alert('現貨模式下至少需要一個規格有庫存，或改用收單模式'); return false }
+    }
+    return true
   }
 
   return (
@@ -584,11 +618,14 @@ function ListingSheet({ item, products, onClose, onSaved }) {
       <div className="sheet">
         <div className="sheet-handle" />
         <div className="row-sb" style={{ marginBottom: 20 }}>
-          <div className="sheet-title" style={{ margin: 0 }}>{isEdit ? '編輯上架設定' : '新增商城商品'}</div>
+          <div className="sheet-title" style={{ margin: 0 }}>
+            {isEditing ? '編輯上架設定' : '新增商城商品'}
+          </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: 'var(--text-3)' }}>×</button>
         </div>
 
-        {!isEdit && (
+        {/* ── 1. 選擇商品 ── */}
+        {!isEditing && (
           <div className="form-group">
             <label className="form-label">選擇商品</label>
             <select className="form-select" value={form.product_id} onChange={e => set('product_id', e.target.value)}>
@@ -598,85 +635,129 @@ function ListingSheet({ item, products, onClose, onSaved }) {
           </div>
         )}
 
+        {/* ── 2. 售價 ── */}
         <div className="form-group">
           <label className="form-label">商城售價（NT$）</label>
           <input className="form-input" type="number" placeholder="0" value={form.shop_price} onChange={e => set('shop_price', e.target.value)} />
         </div>
 
-        <div className="form-group">
-          <label className="form-label">英文商品名稱</label>
-          <input className="form-input" placeholder="Product name in English" value={form.name_en} onChange={e => set('name_en', e.target.value)} />
+        {/* ── 3. 商品規格（選了商品就出現）── */}
+        {activeProductId && (
+          <VariantManager
+            variants={variants}
+            setVariants={setVariants}
+            optionTypes={optionTypes}
+            productId={activeProductId}
+            shopPrice={Number(form.shop_price) || 0}
+            resolveVariantLabel={resolveVariantLabel}
+          />
+        )}
+
+        {/* ── 4. 銷售模式 ── */}
+        <div className="sec" style={{ marginTop: 16 }}>銷售模式</div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+          <button
+            onClick={() => set('collection_end', '')}
+            style={{
+              flex: 1, padding: '12px 8px', borderRadius: 10, fontSize: 13, fontWeight: 600,
+              cursor: 'pointer', transition: 'all .15s', textAlign: 'center',
+              background: sellingMode === 'stock' ? 'var(--text)' : 'var(--surface)',
+              color: sellingMode === 'stock' ? '#fff' : 'var(--text-3)',
+              border: `0.5px solid ${sellingMode === 'stock' ? 'var(--text)' : 'var(--border)'}`,
+            }}
+          >
+            📦 現貨模式
+            <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2, opacity: 0.8 }}>依庫存銷售</div>
+          </button>
+          <button
+            onClick={() => { if (!form.collection_end) set('collection_end', '') }}
+            style={{
+              flex: 1, padding: '12px 8px', borderRadius: 10, fontSize: 13, fontWeight: 600,
+              cursor: 'pointer', transition: 'all .15s', textAlign: 'center',
+              background: sellingMode === 'collection' ? 'var(--text)' : 'var(--surface)',
+              color: sellingMode === 'collection' ? '#fff' : 'var(--text-3)',
+              border: `0.5px solid ${sellingMode === 'collection' ? 'var(--text)' : 'var(--border)'}`,
+            }}
+            // clicking this enables collection mode by setting a placeholder date
+            onClickCapture={() => {
+              if (sellingMode !== 'collection') {
+                // Set a default collection_end 7 days from now
+                const d = new Date(); d.setDate(d.getDate() + 7)
+                const pad = n => String(n).padStart(2, '0')
+                const val = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+                set('collection_end', val)
+              }
+            }}
+          >
+            🛒 收單模式
+            <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2, opacity: 0.8 }}>限時收單，截止後叫貨</div>
+          </button>
         </div>
 
+        {sellingMode === 'collection' && (
+          <div className="form-group">
+            <label className="form-label">收單截止時間</label>
+            <input className="form-input" type="datetime-local" value={form.collection_end} onChange={e => set('collection_end', e.target.value)} />
+          </div>
+        )}
+
+        {/* ── 5. 商品描述 ── */}
+        <div className="sec" style={{ marginTop: 8 }}>商品描述</div>
         <div className="form-group">
           <label className="form-label">中文描述</label>
           <input className="form-input" placeholder="商品說明（顯示在商城）" value={form.desc_zh} onChange={e => set('desc_zh', e.target.value)} />
         </div>
-
+        <div className="form-group">
+          <label className="form-label">英文商品名稱</label>
+          <input className="form-input" placeholder="Product name in English" value={form.name_en} onChange={e => set('name_en', e.target.value)} />
+        </div>
         <div className="form-group">
           <label className="form-label">英文描述</label>
           <input className="form-input" placeholder="Product description in English" value={form.desc_en} onChange={e => set('desc_en', e.target.value)} />
         </div>
 
-        <div className="form-group">
-          <label className="form-label">收單截止時間（留空 = 現貨模式）</label>
-          <input className="form-input" type="datetime-local" value={form.collection_end} onChange={e => set('collection_end', e.target.value)} />
-          <div className="muted fs12" style={{ marginTop: 4 }}>無庫存商品建議設定收單時間，有庫存商品可留空</div>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-          <label className="form-label" style={{ margin: 0 }}>標記缺貨</label>
-          <div
-            onClick={() => set('sold_out', !form.sold_out)}
-            style={{
-              width: 44, height: 26, borderRadius: 13, cursor: 'pointer', transition: 'background .2s',
-              background: form.sold_out ? 'var(--red)' : 'var(--border)',
-              position: 'relative',
-            }}
-          >
-            <div style={{
-              width: 20, height: 20, borderRadius: '50%', background: '#fff',
-              position: 'absolute', top: 3, transition: 'left .2s',
-              left: form.sold_out ? 21 : 3,
-            }} />
+        {/* ── 6. 上架控制 ── */}
+        <div style={{ display: 'flex', gap: 16, marginBottom: 20, marginTop: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <label className="form-label fs13" style={{ margin: 0 }}>標記缺貨</label>
+            <div
+              onClick={() => set('sold_out', !form.sold_out)}
+              style={{
+                width: 44, height: 26, borderRadius: 13, cursor: 'pointer', transition: 'background .2s',
+                background: form.sold_out ? 'var(--red)' : 'var(--border)',
+                position: 'relative',
+              }}
+            >
+              <div style={{
+                width: 20, height: 20, borderRadius: '50%', background: '#fff',
+                position: 'absolute', top: 3, transition: 'left .2s',
+                left: form.sold_out ? 21 : 3,
+              }} />
+            </div>
           </div>
-          <span className="muted fs13">{form.sold_out ? '缺貨中' : '正常'}</span>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-          <label className="form-label" style={{ margin: 0 }}>立即上架</label>
-          <div
-            onClick={() => set('published', !form.published)}
-            style={{
-              width: 44, height: 26, borderRadius: 13, cursor: 'pointer', transition: 'background .2s',
-              background: form.published ? 'var(--green)' : 'var(--border)',
-              position: 'relative',
-            }}
-          >
-            <div style={{
-              width: 20, height: 20, borderRadius: '50%', background: '#fff',
-              position: 'absolute', top: 3, transition: 'left .2s',
-              left: form.published ? 21 : 3,
-            }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <label className="form-label fs13" style={{ margin: 0 }}>立即上架</label>
+            <div
+              onClick={() => set('published', !form.published)}
+              style={{
+                width: 44, height: 26, borderRadius: 13, cursor: 'pointer', transition: 'background .2s',
+                background: form.published ? 'var(--green)' : 'var(--border)',
+                position: 'relative',
+              }}
+            >
+              <div style={{
+                width: 20, height: 20, borderRadius: '50%', background: '#fff',
+                position: 'absolute', top: 3, transition: 'left .2s',
+                left: form.published ? 21 : 3,
+              }} />
+            </div>
           </div>
-          <span className="muted fs13">{form.published ? '上架中' : '已下架'}</span>
         </div>
 
-        <button className="btn" onClick={save} disabled={saving} style={{ marginBottom: 20 }}>
-          {saving ? '儲存中…' : isEdit ? '儲存變更' : '新增上架'}
+        {/* ── 儲存 ── */}
+        <button className="btn" onClick={() => { if (validate()) save() }} disabled={saving} style={{ marginBottom: 20 }}>
+          {saving ? '儲存中…' : isEditing ? '儲存變更' : '新增上架'}
         </button>
-
-        {/* Variants section (only for existing listings) */}
-        {isEdit && (
-          <VariantManager
-            variants={variants}
-            setVariants={setVariants}
-            optionTypes={optionTypes}
-            productId={item.product_id}
-            shopPrice={Number(form.shop_price) || 0}
-            resolveVariantLabel={resolveVariantLabel}
-          />
-        )}
       </div>
     </div>
   )

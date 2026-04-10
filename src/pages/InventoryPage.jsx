@@ -295,15 +295,9 @@ function AddProductSheet({ onClose, onSaved }) {
         <label className="form-label">SKU 代碼</label>
         <input className="form-input" placeholder="例：SPRAY-001" value={form.sku} onChange={e => set('sku', e.target.value)} style={{textTransform:'uppercase'}} />
       </div>
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
-        <div className="form-group">
-          <label className="form-label">初始數量（收單商品可填 0）</label>
-          <input className="form-input" type="number" placeholder="0" value={form.quantity} onChange={e => set('quantity', e.target.value)} />
-        </div>
-        <div className="form-group">
-          <label className="form-label">單位</label>
-          <input className="form-input" placeholder="個" value={form.unit} onChange={e => set('unit', e.target.value)} />
-        </div>
+      <div className="form-group">
+        <label className="form-label">單位</label>
+        <input className="form-input" placeholder="個" value={form.unit} onChange={e => set('unit', e.target.value)} style={{ width: 120 }} />
       </div>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
         <div className="form-group">
