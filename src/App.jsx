@@ -12,9 +12,9 @@ import InvitePage from './pages/InvitePage'
 const allTabs = [
   { path: '/',           label: '庫存',  icon: BoxIcon },
   { path: '/orders',     label: '訂單',  icon: ReceiptIcon },
-  { path: '/payments',   label: '尾款',  icon: CashIcon },
+  // { path: '/payments',   label: '尾款',  icon: CashIcon },
   { path: '/storefront', label: '商城',  icon: ShopIcon },
-  { path: '/rate',       label: '匯率',  icon: RateIcon },
+  // { path: '/rate',       label: '匯率',  icon: RateIcon },
   { path: '/users',      label: '成員',  icon: UsersIcon, adminOnly: true },
 ]
 

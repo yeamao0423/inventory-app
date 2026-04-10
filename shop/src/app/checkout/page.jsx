@@ -30,6 +30,27 @@ export default function CheckoutPage() {
     if (!validate() || cart.length === 0) return
     setSubmitting(true)
 
+    // Validate that all cart items are still available (not expired/sold out)
+    const productIds = [...new Set(cart.map(i => i.id))]
+    const { data: spCheck } = await supabase
+      .from('storefront_products')
+      .select('product_id, collection_end, sold_out, published')
+      .in('product_id', productIds)
+
+    const unavailable = (spCheck || []).filter(sp =>
+      sp.sold_out || !sp.published || (sp.collection_end && new Date(sp.collection_end) < new Date())
+    )
+    if (unavailable.length > 0) {
+      const unavailableIds = new Set(unavailable.map(u => u.product_id))
+      const names = cart.filter(i => unavailableIds.has(i.id)).map(i => i.name)
+      alert((lang === 'zh'
+        ? `以下商品已無法購買，請返回購物車移除：\n${names.join('、')}`
+        : `The following items are no longer available. Please remove them from your cart:\n${names.join(', ')}`
+      ))
+      setSubmitting(false)
+      return
+    }
+
     const itemsStr = cart.map(i =>
       `${i.name}${i.variantLabel ? ' ' + i.variantLabel : ''} × ${i.qty}${i.customNote ? ' [' + i.customNote + ']' : ''}`
     ).join(', ')

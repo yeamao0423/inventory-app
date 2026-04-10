@@ -9,6 +9,7 @@ export default function OrdersPage() {
   const [consumerOrders, setConsumerOrders] = useState([])
   const [loading, setLoading] = useState(true)
   const [sheet, setSheet] = useState(null)
+  const [procurementData, setProcurementData] = useState(null) // { grouped, ungrouped }
 
   useEffect(() => { fetchAll() }, [])
 
@@ -22,6 +23,63 @@ export default function OrdersPage() {
     setConsumerOrders(cord || [])
     setLoading(false)
   }
+
+  async function fetchProcurement() {
+    setLoading(true)
+    // Get pending orders
+    const { data: pending } = await supabase
+      .from('consumer_orders').select('*')
+      .eq('status', '待確認')
+    // Get all products with source info
+    const { data: products } = await supabase
+      .from('products').select('id, name, sku, source')
+
+    const productMap = {}
+    ;(products || []).forEach(p => { productMap[p.id] = p })
+
+    // Aggregate items from all pending orders
+    const agg = {} // key: productId → { name, source, sku, totalQty, variants: { label: qty } }
+    ;(pending || []).forEach(order => {
+      const items = Array.isArray(order.items_json) ? order.items_json : []
+      items.forEach(item => {
+        if (item.status === 'cancelled') return
+        const pid = item.id
+        const prod = productMap[pid]
+        if (!agg[pid]) {
+          agg[pid] = {
+            name: item.name,
+            sku: prod?.sku || item.sku || '',
+            source: prod?.source || '',
+            totalQty: 0,
+            variants: {},
+          }
+        }
+        const qty = Number(item.qty) || 0
+        agg[pid].totalQty += qty
+        const vLabel = item.variantLabel || '無規格'
+        agg[pid].variants[vLabel] = (agg[pid].variants[vLabel] || 0) + qty
+      })
+    })
+
+    // Group by source
+    const grouped = {} // source → [items]
+    const ungrouped = [] // items without source
+    Object.values(agg).forEach(item => {
+      if (item.source) {
+        if (!grouped[item.source]) grouped[item.source] = []
+        grouped[item.source].push(item)
+      } else {
+        ungrouped.push(item)
+      }
+    })
+
+    setProcurementData({ grouped, ungrouped, orderCount: (pending || []).length })
+    setLoading(false)
+  }
+
+  useEffect(() => {
+    if (tab === 'procurement') fetchProcurement()
+  }, [tab])
 
   const unpaid = orders.filter(o => o.payment_status !== '已付清')
   const paid   = orders.filter(o => o.payment_status === '已付清')
@@ -41,33 +99,32 @@ export default function OrdersPage() {
 
       {/* Tab switcher */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        <button
-          onClick={() => setTab('internal')}
-          style={{
-            flex: 1, padding: '9px 0', borderRadius: 10, border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600,
-            background: tab === 'internal' ? 'var(--text)' : 'var(--card)',
-            color: tab === 'internal' ? '#fff' : 'var(--text-2)',
-          }}
-        >自建訂單</button>
-        <button
-          onClick={() => setTab('consumer')}
-          style={{
-            flex: 1, padding: '9px 0', borderRadius: 10, border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600,
-            background: tab === 'consumer' ? 'var(--text)' : 'var(--card)',
-            color: tab === 'consumer' ? '#fff' : 'var(--text-2)',
-            position: 'relative',
-          }}
-        >
-          商城訂單
-          {pendingConsumer > 0 && (
-            <span style={{
-              position: 'absolute', top: 6, right: 12,
-              background: 'var(--red)', color: '#fff',
-              borderRadius: '50%', width: 18, height: 18, fontSize: 11,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700,
-            }}>{pendingConsumer}</span>
-          )}
-        </button>
+        {[
+          { key: 'internal', label: '自建訂單' },
+          { key: 'consumer', label: '商城訂單', badge: pendingConsumer },
+          { key: 'procurement', label: '採購彙整' },
+        ].map(t => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            style={{
+              flex: 1, padding: '9px 0', borderRadius: 10, border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600,
+              background: tab === t.key ? 'var(--text)' : 'var(--card)',
+              color: tab === t.key ? '#fff' : 'var(--text-2)',
+              position: 'relative',
+            }}
+          >
+            {t.label}
+            {t.badge > 0 && (
+              <span style={{
+                position: 'absolute', top: 6, right: 12,
+                background: 'var(--red)', color: '#fff',
+                borderRadius: '50%', width: 18, height: 18, fontSize: 11,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700,
+              }}>{t.badge}</span>
+            )}
+          </button>
+        ))}
       </div>
 
       {loading && <div className="empty">載入中…</div>}
@@ -118,6 +175,88 @@ export default function OrdersPage() {
           {consumerOrders.map(o => (
             <ConsumerOrderCard key={o.id} order={o} onTap={() => setSheet({ _type: 'consumer', ...o })} />
           ))}
+        </>
+      )}
+
+      {/* Procurement summary tab */}
+      {!loading && tab === 'procurement' && procurementData && (
+        <>
+          <div className="stats">
+            <div className="stat">
+              <div className="stat-val text-amber">{procurementData.orderCount}</div>
+              <div className="stat-lbl"><span className="dot" style={{background:'var(--amber)'}} />待確認訂單</div>
+            </div>
+            <div className="stat">
+              <div className="stat-val">{Object.keys(procurementData.grouped).length + (procurementData.ungrouped.length > 0 ? 1 : 0)}</div>
+              <div className="stat-lbl">採購來源</div>
+            </div>
+          </div>
+
+          {procurementData.orderCount === 0 && <div className="empty">目前沒有待確認的訂單</div>}
+
+          {Object.entries(procurementData.grouped).map(([source, items]) => (
+            <div key={source} style={{ marginBottom: 20 }}>
+              <div className="sec" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span>🏬</span> {source}
+                <span className="muted fs12">({items.reduce((s, i) => s + i.totalQty, 0)} 件)</span>
+              </div>
+              {items.map(item => (
+                <div className="card" key={item.sku} style={{ marginBottom: 6 }}>
+                  <div className="card-row" style={{ flexDirection: 'column', gap: 4 }}>
+                    <div className="row-sb" style={{ width: '100%' }}>
+                      <span className="fw600 fs14">{item.name}</span>
+                      <span className="fw600 fs15" style={{ color: 'var(--text)' }}>× {item.totalQty}</span>
+                    </div>
+                    <div className="muted fs12">{item.sku}</div>
+                    {Object.keys(item.variants).length > 1 || (Object.keys(item.variants).length === 1 && !item.variants['無規格']) ? (
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
+                        {Object.entries(item.variants).map(([label, qty]) => (
+                          <span key={label} style={{
+                            fontSize: 12, padding: '3px 10px', borderRadius: 16,
+                            background: 'var(--surface)', border: '0.5px solid var(--border)',
+                          }}>
+                            {label} <strong>× {qty}</strong>
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+
+          {procurementData.ungrouped.length > 0 && (
+            <div style={{ marginBottom: 20 }}>
+              <div className="sec" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span>📦</span> 未設定來源
+                <span className="muted fs12">({procurementData.ungrouped.reduce((s, i) => s + i.totalQty, 0)} 件)</span>
+              </div>
+              {procurementData.ungrouped.map(item => (
+                <div className="card" key={item.sku} style={{ marginBottom: 6 }}>
+                  <div className="card-row" style={{ flexDirection: 'column', gap: 4 }}>
+                    <div className="row-sb" style={{ width: '100%' }}>
+                      <span className="fw600 fs14">{item.name}</span>
+                      <span className="fw600 fs15" style={{ color: 'var(--text)' }}>× {item.totalQty}</span>
+                    </div>
+                    <div className="muted fs12">{item.sku}</div>
+                    {Object.keys(item.variants).length > 1 || (Object.keys(item.variants).length === 1 && !item.variants['無規格']) ? (
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
+                        {Object.entries(item.variants).map(([label, qty]) => (
+                          <span key={label} style={{
+                            fontSize: 12, padding: '3px 10px', borderRadius: 16,
+                            background: 'var(--surface)', border: '0.5px solid var(--border)',
+                          }}>
+                            {label} <strong>× {qty}</strong>
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </>
       )}
 
