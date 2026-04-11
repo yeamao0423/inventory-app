@@ -362,6 +362,39 @@ function EditableField({ productId, field, initialValue, canEdit, onSaved, onVal
   )
 }
 
+// ── 可編輯下拉選單欄位 ─────────────────────────────────
+function EditableSelectField({ productId, field, initialValue, canEdit, onSaved, label, options }) {
+  const [value, setValue] = useState(initialValue)
+  const [saved, setSaved] = useState(false)
+  async function onChange(e) {
+    const newVal = e.target.value
+    setValue(newVal)
+    await supabase.from('products').update({ [field]: newVal }).eq('id', productId)
+    setSaved(true)
+    if (onSaved) onSaved()
+    setTimeout(() => setSaved(false), 1500)
+  }
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 10, padding: '8px 12px' }}>
+      <span className="fs12 muted" style={{ flexShrink: 0 }}>{label}</span>
+      {canEdit ? (
+        <>
+          <select
+            value={value}
+            onChange={onChange}
+            style={{ flex: 1, border: 'none', background: 'transparent', outline: 'none', fontSize: 14, fontWeight: 600, color: 'var(--text)', minWidth: 0 }}
+          >
+            {options.map(o => <option key={o} value={o}>{o}</option>)}
+          </select>
+          {saved && <span className="fs12" style={{ color: 'var(--green)', flexShrink: 0 }}>✓</span>}
+        </>
+      ) : (
+        <span className="fs14 fw600">{value}</span>
+      )}
+    </div>
+  )
+}
+
 // ── 商品詳情 ────────────────────────────────────────────
 function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete }) {
   const [saving, setSaving] = useState(false)
@@ -484,6 +517,13 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete }) {
           canEdit={canEdit} onSaved={onSaved}
           label="成本" placeholder="0" type="number"
         />
+        <EditableSelectField
+          productId={product.id} field="currency" initialValue={product.currency || 'TWD'}
+          canEdit={canEdit} onSaved={onSaved}
+          label="幣別" options={['TWD','USD','JPY','EUR','VND']}
+        />
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr',gap:8,marginBottom:12}}>
         <EditableField
           productId={product.id} field="sku" initialValue={product.sku}
           canEdit={canEdit} onSaved={onSaved}
