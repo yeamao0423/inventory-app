@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS public.tags (
 CREATE TABLE IF NOT EXISTS public.products (
     id bigserial PRIMARY KEY,
     name text NOT NULL,
-    sku text NOT NULL UNIQUE,
+    sku text,
     quantity integer DEFAULT 0 NOT NULL,
     unit text DEFAULT '個' NOT NULL,
     cost numeric(10,2) DEFAULT 0,
@@ -186,7 +186,8 @@ CREATE TABLE IF NOT EXISTS public.exchange_rates (
 -- Inventory history
 CREATE TABLE IF NOT EXISTS public.history (
     id bigserial PRIMARY KEY,
-    sku text NOT NULL,
+    sku text,
+    product_id bigint REFERENCES public.products(id) ON DELETE SET NULL,
     change integer NOT NULL,
     reason text,
     created_at timestamptz DEFAULT now()

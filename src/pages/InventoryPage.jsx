@@ -24,7 +24,7 @@ export default function InventoryPage() {
 
   const filtered = products.filter(p =>
     p.name.toLowerCase().includes(search.toLowerCase()) ||
-    p.sku.toLowerCase().includes(search.toLowerCase())
+    (p.sku && p.sku.toLowerCase().includes(search.toLowerCase()))
   )
   const low = filtered.filter(p => p.quantity <= LOW)
   const normal = filtered.filter(p => p.quantity > LOW)
@@ -117,7 +117,7 @@ function ProductRow({ product: p, onTap, low }) {
         </div>
         <div style={{flex:1,minWidth:0}}>
           <div className="fw600 fs15" style={{whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{p.name}</div>
-          <div className="muted fs12 mt8">{p.sku} · {p.cost} {p.currency}</div>
+          <div className="muted fs12 mt8">{[p.sku, `${p.cost} ${p.currency}`].filter(Boolean).join(' · ')}</div>
         </div>
         <div style={{textAlign:'right',flexShrink:0}}>
           <div className="fw600 fs15" style={{color: low ? 'var(--red)' : 'var(--text)'}}>{p.quantity}</div>
@@ -227,12 +227,12 @@ function AddProductSheet({ onClose, onSaved }) {
   }
 
   async function save() {
-    if (!form.name || !form.sku) return
+    if (!form.name) return
     setSaving(true)
     const qty = Number(form.quantity) || 0
     const { data: inserted } = await supabase.from('products').insert({
       name: form.name,
-      sku: form.sku.toUpperCase(),
+      sku: form.sku.trim() ? form.sku.toUpperCase() : null,
       quantity: qty,
       unit: form.unit,
       cost: Number(form.cost),
@@ -245,9 +245,10 @@ function AddProductSheet({ onClose, onSaved }) {
       await uploadImages(imageFiles, inserted.id)
     }
 
-    if (qty > 0) {
+    if (qty > 0 && inserted) {
       await supabase.from('history').insert({
-        sku: form.sku.toUpperCase(),
+        sku: form.sku.toUpperCase() || null,
+        product_id: inserted.id,
         change: qty,
         reason: '初始建立',
       })
@@ -323,9 +324,48 @@ function AddProductSheet({ onClose, onSaved }) {
   )
 }
 
+// ── 可編輯欄位（inline edit，blur/Enter 存檔）─────────────
+function EditableField({ productId, field, initialValue, canEdit, onSaved, onValueSaved, label, placeholder, type = 'text', inputStyle }) {
+  const [value, setValue] = useState(initialValue ?? '')
+  const [dirty, setDirty] = useState(false)
+  const [saved, setSaved] = useState(false)
+  function onChange(e) { setValue(e.target.value); setDirty(true); setSaved(false) }
+  async function save() {
+    if (!dirty) return
+    const updateVal = type === 'number' ? (Number(value) || 0) : (value.trim() || null)
+    await supabase.from('products').update({ [field]: updateVal }).eq('id', productId)
+    setDirty(false); setSaved(true)
+    if (onValueSaved) onValueSaved(type === 'number' ? (Number(value) || 0) : value.trim())
+    if (onSaved) onSaved()
+    setTimeout(() => setSaved(false), 1500)
+  }
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 10, padding: '8px 12px' }}>
+      <span className="fs12 muted" style={{ flexShrink: 0 }}>{label}</span>
+      {canEdit ? (
+        <>
+          <input
+            value={value}
+            onChange={onChange}
+            onBlur={save}
+            onKeyDown={e => e.key === 'Enter' && save()}
+            placeholder={placeholder}
+            type={type}
+            style={{ flex: 1, border: 'none', background: 'transparent', outline: 'none', fontSize: 14, fontWeight: 600, color: 'var(--text)', minWidth: 0, ...inputStyle }}
+          />
+          {saved && <span className="fs12" style={{ color: 'var(--green)', flexShrink: 0 }}>✓</span>}
+        </>
+      ) : (
+        <span className="fs14 fw600" style={{ color: value ? 'var(--text)' : 'var(--text-3)' }}>{value || '未設定'}</span>
+      )}
+    </div>
+  )
+}
+
 // ── 商品詳情 ────────────────────────────────────────────
 function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete }) {
   const [saving, setSaving] = useState(false)
+  const [productName, setProductName] = useState(product.name)
   const [images, setImages] = useState(
     [...(product.product_images || [])].sort((a, b) => a.sort_order - b.sort_order)
   )
@@ -403,7 +443,14 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete }) {
   }
 
   return (
-    <Sheet title={product.name} onClose={onClose}>
+    <Sheet title={productName} onClose={onClose}>
+
+      {/* 商品名稱 */}
+      <EditableField
+        productId={product.id} field="name" initialValue={product.name}
+        canEdit={canEdit} onSaved={onSaved} onValueSaved={v => setProductName(v)}
+        label="商品名稱" placeholder="商品名稱"
+      />
 
       {/* 圖片管理 */}
       <div className="form-group">
@@ -431,9 +478,17 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete }) {
         )}
       </div>
 
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:20}}>
-        <div className="stat"><div className="stat-val fs15">{product.cost} {product.currency}</div><div className="stat-lbl">進貨成本</div></div>
-        <div className="stat"><div className="stat-val fs15">{product.sku}</div><div className="stat-lbl">SKU</div></div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:12,marginTop:12}}>
+        <EditableField
+          productId={product.id} field="cost" initialValue={product.cost}
+          canEdit={canEdit} onSaved={onSaved}
+          label="成本" placeholder="0" type="number"
+        />
+        <EditableField
+          productId={product.id} field="sku" initialValue={product.sku}
+          canEdit={canEdit} onSaved={onSaved}
+          label="SKU" placeholder="SKU" inputStyle={{textTransform:'uppercase'}}
+        />
       </div>
 
       {/* 採購來源 */}
