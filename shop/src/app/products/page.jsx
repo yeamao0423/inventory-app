@@ -161,7 +161,18 @@ export default function ProductsPage() {
         )}
 
         {loading ? (
-          <div style={{ color: 'var(--text-3)', textAlign: 'center', padding: '60px 0' }}>{t('common.loading')}</div>
+          <div className="product-grid">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div className="skeleton-card" key={i}>
+                <div className="skeleton skeleton-img" />
+                <div className="skeleton-info">
+                  <div className="skeleton skeleton-title" />
+                  <div className="skeleton skeleton-desc" />
+                  <div className="skeleton skeleton-price" />
+                </div>
+              </div>
+            ))}
+          </div>
         ) : filtered.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '60px 0', color: 'var(--text-3)' }}>
             {lang === 'zh' ? '找不到商品' : 'No products found'}

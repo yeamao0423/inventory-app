@@ -105,7 +105,7 @@ export default function RootLayout({ children }) {
                   <div className="nav-links">
                     <Link href="/products" className="nav-link">{t('nav.products')}</Link>
                     <Link href="/cart" className="nav-cart">
-                      🛒 {t('nav.cart')}
+                      🛒 <span className="cart-text">{t('nav.cart')}</span>
                       {totalQty > 0 && <span className="cart-badge">{totalQty}</span>}
                     </Link>
                     {!userLoading && (
