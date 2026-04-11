@@ -17,7 +17,16 @@ export default function StorefrontPage() {
   const [newOptValues, setNewOptValues] = useState({}) // { typeId: inputString }
   const [loading, setLoading] = useState(true)
   const [sheet, setSheet] = useState(null)     // null | 'add' | listing obj
+  const [exchangeRates, setExchangeRates] = useState({})
 
+  useEffect(() => {
+    supabase.from('exchange_rates').select('*')
+      .then(({ data }) => {
+        const map = {}
+        ;(data || []).forEach(r => { map[r.currency] = Number(r.rate) })
+        setExchangeRates(map)
+      })
+  }, [])
   useEffect(() => { fetchAll() }, [tab])
 
   async function fetchAll() {
@@ -25,7 +34,7 @@ export default function StorefrontPage() {
     if (tab === 'listings') {
       const [{ data: sp }, { data: pr }] = await Promise.all([
         supabase.from('storefront_products').select('*, products(*)').order('sort_order'),
-        supabase.from('products').select('id, name, sku').order('name'),
+        supabase.from('products').select('id, name, sku, cost, currency').order('name'),
       ])
       setListings(sp || [])
       const listed = new Set((sp || []).map(s => s.product_id))
@@ -236,6 +245,19 @@ export default function StorefrontPage() {
                     </div>
                     <div className="muted fs12 mt8">
                       {item.products?.sku} · 售價 NT${Number(item.shop_price).toLocaleString()}
+                      {item.products?.cost != null && (() => {
+                        const cur = item.products.currency || 'TWD'
+                        const cost = Number(item.products.cost)
+                        const isTWD = cur === 'TWD'
+                        const rate = exchangeRates[cur]
+                        const twdCost = !isTWD && rate ? Math.round(cost * rate * 10) / 10 : null
+                        return (
+                          <span style={{ color: 'var(--text-3)' }}>
+                            {' · 成本 '}{cost.toLocaleString()} {cur}
+                            {twdCost != null && ` ≈ ${twdCost.toLocaleString()} TWD`}
+                          </span>
+                        )
+                      })()}
                     </div>
                     {item.name_en && <div className="muted fs12">{item.name_en}</div>}
                   </div>
@@ -515,6 +537,41 @@ function localToISO(localStr) {
   return new Date(localStr).toISOString()
 }
 
+function CopyBtn({ text }) {
+  const [copied, setCopied] = useState(false)
+  function copy() {
+    navigator.clipboard.writeText(text.trim())
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1200)
+  }
+  return (
+    <button
+      onClick={copy}
+      style={{ background: 'none', border: 'none', cursor: 'pointer', color: copied ? 'var(--green)' : 'var(--text-3)', fontSize: 13, padding: 0, lineHeight: 1 }}
+      title="複製名稱"
+    >{copied ? '✓' : '📋'}</button>
+  )
+}
+
+function CopyNameBar({ name }) {
+  const [copied, setCopied] = useState(false)
+  if (!name) return null
+  function copy() {
+    navigator.clipboard.writeText(name)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1200)
+  }
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 10, padding: '8px 12px', marginBottom: 12 }}>
+      <span className="fw600 fs14" style={{ flex: 1 }}>{name}</span>
+      <button
+        onClick={copy}
+        style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '2px 10px', fontSize: 12, color: copied ? 'var(--green)' : 'var(--text-3)', cursor: 'pointer', flexShrink: 0 }}
+      >{copied ? '已複製 ✓' : '複製名稱'}</button>
+    </div>
+  )
+}
+
 // ── Add/Edit listing sheet ─────────────────────────────
 function ListingSheet({ item, products, onClose, onSaved }) {
   const isEdit = !!item
@@ -533,6 +590,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
   const [saving, setSaving] = useState(false)
   const [createdItem, setCreatedItem] = useState(null)
   const [showVariants, setShowVariants] = useState(false)
+  const [exchangeRates, setExchangeRates] = useState({})
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   const editingItem = item || createdItem
@@ -547,6 +605,13 @@ function ListingSheet({ item, products, onClose, onSaved }) {
       .select('*, variant_option_values(id, value, sort_order)')
       .order('sort_order')
       .then(({ data }) => setOptionTypes(data || []))
+    // Load exchange rates
+    supabase.from('exchange_rates').select('*')
+      .then(({ data }) => {
+        const map = {}
+        ;(data || []).forEach(r => { map[r.currency] = Number(r.rate) })
+        setExchangeRates(map)
+      })
   }, [])
 
   // Load variants and base stock whenever activeProductId changes
@@ -654,10 +719,29 @@ function ListingSheet({ item, products, onClose, onSaved }) {
             </select>
           </div>
         )}
+        {/* 商品名稱 + 複製 */}
+        <CopyNameBar name={isEditing ? editingItem?.products?.name : products.find(p => p.id === Number(form.product_id))?.name} />
 
         {/* ── 2. 售價 ── */}
         <div className="form-group">
-          <label className="form-label">商城售價（NT$）</label>
+          <label className="form-label">
+            商城售價（NT$）
+            {(() => {
+              const prod = editingItem?.products || products.find(p => p.id === Number(form.product_id))
+              if (prod?.cost == null) return null
+              const cur = prod.currency || 'TWD'
+              const cost = Number(prod.cost)
+              const isTWD = cur === 'TWD'
+              const rate = exchangeRates[cur]
+              const twdCost = !isTWD && rate ? Math.round(cost * rate * 10) / 10 : null
+              return (
+                <span className="muted" style={{ fontWeight: 400, marginLeft: 8 }}>
+                  成本 {cost.toLocaleString()} {cur}
+                  {twdCost != null && ` ≈ ${twdCost.toLocaleString()} TWD`}
+                </span>
+              )
+            })()}
+          </label>
           <input className="form-input" type="number" placeholder="0" value={form.shop_price} onChange={e => set('shop_price', e.target.value)} />
         </div>
 
@@ -687,6 +771,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
                 setVariants={setVariants}
                 optionTypes={optionTypes}
                 productId={activeProductId}
+                productName={isEditing ? editingItem?.products?.name : products.find(p => p.id === Number(form.product_id))?.name}
                 shopPrice={Number(form.shop_price) || 0}
                 resolveVariantLabel={resolveVariantLabel}
               />
@@ -819,7 +904,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
   )
 }
 
-function VariantManager({ variants, setVariants, optionTypes, productId, shopPrice, resolveVariantLabel }) {
+function VariantManager({ variants, setVariants, optionTypes, productId, productName, shopPrice, resolveVariantLabel }) {
   // Step 1 state: which types and values are selected for this product
   const [selectedTypes, setSelectedTypes] = useState({})   // { typeId: true/false }
   const [selectedValues, setSelectedValues] = useState({})  // { typeId: Set of valueIds }
@@ -1075,6 +1160,7 @@ function VariantManager({ variants, setVariants, optionTypes, productId, shopPri
                       <th style={{ ...thStyle, width: 70, textAlign: 'center' }}>庫存</th>
                       <th style={{ ...thStyle, width: 90, textAlign: 'center' }}>售價(NT$)</th>
                       <th style={{ ...thStyle, width: 40 }}></th>
+                      <th style={{ ...thStyle, width: 40 }}></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1106,6 +1192,9 @@ function VariantManager({ variants, setVariants, optionTypes, productId, shopPri
                             style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', fontSize: 15, padding: 0, lineHeight: 1 }}
                             title="刪除"
                           >×</button>
+                        </td>
+                        <td style={{ ...tdStyle, textAlign: 'center' }}>
+                          <CopyBtn text={`${productName || ''} ${resolveVariantLabel(v.options)}`} />
                         </td>
                       </tr>
                     ))}
