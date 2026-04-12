@@ -170,5 +170,71 @@ export async function POST(request) {
     return NextResponse.json({ error }, { status: 500 })
   }
 
+  // ── 通知店家 ──────────────────────────────────────────
+  const notifyItemsRows = (items || []).map(item => `
+    <tr>
+      <td style="padding:8px 0;border-bottom:1px solid #f0f0ea;font-size:14px;color:#1a1a1a;">
+        ${item.name}
+        ${item.color || item.size ? `<span style="color:#888;"> (${[item.color, item.size].filter(Boolean).join(' / ')})</span>` : ''}
+      </td>
+      <td style="padding:8px 0;border-bottom:1px solid #f0f0ea;text-align:center;font-size:14px;color:#1a1a1a;">× ${item.qty}</td>
+      <td style="padding:8px 0;border-bottom:1px solid #f0f0ea;text-align:right;font-size:14px;font-weight:600;color:#1a1a1a;">NT$${(item.price * item.qty).toLocaleString()}</td>
+    </tr>
+  `).join('')
+
+  const notifyHtml = `<!DOCTYPE html>
+<html lang="zh-TW">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#fafaf8;font-family:-apple-system,'Helvetica Neue',Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#fafaf8;padding:40px 0;">
+    <tr><td align="center">
+      <table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;">
+        <tr><td style="background:#1a1a1a;border-radius:16px 16px 0 0;padding:24px 32px;text-align:center;">
+          <div style="font-size:20px;font-weight:700;color:#fff;">📦 新訂單通知</div>
+          <div style="font-size:14px;color:rgba(255,255,255,0.6);margin-top:4px;">訂單 #${orderNo}</div>
+        </td></tr>
+        <tr><td style="background:#fff;padding:28px 32px;border-left:0.5px solid #e8e8e0;border-right:0.5px solid #e8e8e0;">
+
+          <div style="font-size:13px;font-weight:600;color:#999;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">客戶資訊</div>
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#fafaf8;border-radius:10px;padding:14px 18px;margin-bottom:20px;">
+            <tr><td style="font-size:13px;color:#999;padding:3px 0;width:80px;">姓名</td><td style="font-size:14px;color:#1a1a1a;font-weight:500;">${order.name}</td></tr>
+            <tr><td style="font-size:13px;color:#999;padding:3px 0;">電話</td><td style="font-size:14px;color:#1a1a1a;">${order.phone || '—'}</td></tr>
+            <tr><td style="font-size:13px;color:#999;padding:3px 0;">Email</td><td style="font-size:14px;color:#1a1a1a;">${order.email || '—'}</td></tr>
+            <tr><td style="font-size:13px;color:#999;padding:3px 0;">LINE</td><td style="font-size:14px;color:#1a1a1a;">${order.line_id || '—'}</td></tr>
+            ${order.store_name ? `<tr><td style="font-size:13px;color:#999;padding:3px 0;">取貨門市</td><td style="font-size:14px;color:#1a1a1a;">${order.store_name} (${order.store_number || ''})</td></tr>` : ''}
+            ${order.address ? `<tr><td style="font-size:13px;color:#999;padding:3px 0;">地址</td><td style="font-size:14px;color:#1a1a1a;">${order.address}</td></tr>` : ''}
+            ${order.remittance_last5 ? `<tr><td style="font-size:13px;color:#999;padding:3px 0;">匯款末五碼</td><td style="font-size:14px;color:#1a1a1a;font-weight:600;">${order.remittance_last5}</td></tr>` : ''}
+            ${order.note ? `<tr><td style="font-size:13px;color:#999;padding:3px 0;">備註</td><td style="font-size:14px;color:#1a1a1a;">${order.note}</td></tr>` : ''}
+          </table>
+
+          <div style="font-size:13px;font-weight:600;color:#999;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">訂購商品</div>
+          <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;">
+            ${notifyItemsRows}
+          </table>
+
+          <table width="100%" cellpadding="0" cellspacing="0">
+            <tr>
+              <td style="padding:12px 0;border-top:1.5px solid #1a1a1a;font-size:16px;font-weight:700;color:#1a1a1a;">總金額</td>
+              <td style="padding:12px 0;border-top:1.5px solid #1a1a1a;text-align:right;font-size:20px;font-weight:700;color:#1a1a1a;">NT$${total.toLocaleString()}</td>
+            </tr>
+          </table>
+
+        </td></tr>
+        <tr><td style="background:#f0f0ea;border-radius:0 0 16px 16px;padding:16px 32px;text-align:center;border:0.5px solid #e8e8e0;border-top:none;">
+          <div style="font-size:12px;color:#aaa;">此為系統自動通知，請至後台處理訂單。</div>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`
+
+  resend.emails.send({
+    from: 'Daigogo <no-reply@daigogotw.com>',
+    to: 'daigogosg@gmail.com',
+    subject: `📦 新訂單 #${orderNo} — ${order.name}（NT$${total.toLocaleString()}）`,
+    html: notifyHtml,
+  }).catch(err => console.error('Store notify error:', err))
+
   return NextResponse.json({ success: true })
 }
