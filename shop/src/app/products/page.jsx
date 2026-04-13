@@ -217,7 +217,7 @@ function ProductCard({ sp, t, lang, allTags }) {
   }
 
   return (
-    <Link href={`/products/${p.sku}`} className="product-card" style={unavailable ? { opacity: 0.6 } : {}}>
+    <Link href={`/products/${sp.product_id}`} className="product-card" style={unavailable ? { opacity: 0.6 } : {}}>
       <div style={{ position: 'relative' }}>
         {thumb
           ? <img src={thumb} alt={name} className="product-img-placeholder" style={{objectFit:'cover'}} />

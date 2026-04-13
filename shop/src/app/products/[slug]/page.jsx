@@ -26,7 +26,7 @@ export default function ProductDetailPage() {
       const { data: spData } = await supabase
         .from('storefront_products')
         .select('*, products!inner(*, product_images(id, url, sort_order))')
-        .eq('products.sku', slug)
+        .eq('product_id', slug)
         .single()
 
       if (!spData) { setLoading(false); return }
