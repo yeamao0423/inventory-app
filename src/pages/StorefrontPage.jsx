@@ -4,10 +4,9 @@ import { useAuth } from '../hooks/useAuth'
 
 export default function StorefrontPage() {
   const { can } = useAuth()
-  const [tab, setTab] = useState('listings')   // listings | orders | taxonomy
+  const [tab, setTab] = useState('listings')   // listings | taxonomy
   const [listings, setListings] = useState([])
   const [products, setProducts] = useState([])
-  const [orders, setOrders] = useState([])
   const [categories, setCategories] = useState([])
   const [tags, setTags] = useState([])
   const [optionTypes, setOptionTypes] = useState([])
@@ -18,6 +17,12 @@ export default function StorefrontPage() {
   const [loading, setLoading] = useState(true)
   const [sheet, setSheet] = useState(null)     // null | 'add' | listing obj
   const [exchangeRates, setExchangeRates] = useState({})
+  const [filter, setFilter] = useState('all')   // all | published | unpublished | sold_out | expired
+  const [search, setSearch] = useState('')
+  const [filterCat, setFilterCat] = useState('')
+  const [filterTag, setFilterTag] = useState('')
+  const [filterSource, setFilterSource] = useState('')
+  const [showFilters, setShowFilters] = useState(false)
 
   useEffect(() => {
     supabase.from('exchange_rates').select('*')
@@ -32,20 +37,18 @@ export default function StorefrontPage() {
   async function fetchAll() {
     setLoading(true)
     if (tab === 'listings') {
-      const [{ data: sp }, { data: pr }] = await Promise.all([
-        supabase.from('storefront_products').select('*, products(*)').order('sort_order'),
+      const [{ data: sp }, { data: pr }, { data: cats }, { data: tgs }] = await Promise.all([
+        supabase.from('storefront_products').select('*, products(*, product_images(id, url, sort_order), categories(id, name), product_tags(tag_id))').order('sort_order'),
         supabase.from('products').select('id, name, sku, cost, currency').order('name'),
+        supabase.from('categories').select('id, name').order('sort_order').order('name'),
+        supabase.from('tags').select('id, name').order('sort_order').order('name'),
       ])
       setListings(sp || [])
+      setCategories(cats || [])
+      setTags(tgs || [])
       const listed = new Set((sp || []).map(s => s.product_id))
       setProducts((pr || []).filter(p => !listed.has(p.id)))
-    } else if (tab === 'orders') {
-      const { data } = await supabase
-        .from('consumer_orders')
-        .select('*')
-        .order('created_at', { ascending: false })
-      setOrders(data || [])
-    } else {
+    } else if (tab === 'taxonomy') {
       const [{ data: cats }, { data: tgs }, { data: opts }] = await Promise.all([
         supabase.from('categories').select('*').order('sort_order').order('name'),
         supabase.from('tags').select('*').order('sort_order').order('name'),
@@ -167,40 +170,111 @@ export default function StorefrontPage() {
     fetchAll()
   }
 
-  async function updateOrderStatus(id, status) {
-    await supabase.from('consumer_orders').update({ status }).eq('id', id)
-    fetchAll()
-  }
-
-  const unpaidOrders = orders.filter(o => o.status === '待確認' || o.payment_status === '未付')
 
   return (
     <div className="page">
       <div className="ph">
         <div>
           <div className="ph-title">商城管理</div>
-          <div className="ph-sub">前台上架設定 & 消費者訂單</div>
+          <div className="ph-sub">前台上架設定</div>
         </div>
         {tab === 'listings' && can('add') && (
           <button className="icon-btn" onClick={() => setSheet('add')} title="上架商品">+</button>
         )}
       </div>
 
-      {/* Stats */}
-      <div className="stats">
-        <div className="stat">
-          <div className="stat-val">{listings.filter(l => l.published).length}</div>
-          <div className="stat-lbl">上架中</div>
-        </div>
-        <div className="stat">
-          <div className="stat-val text-amber">{unpaidOrders.length}</div>
-          <div className="stat-lbl"><span className="dot" style={{ background: 'var(--amber)' }} />待確認訂單</div>
-        </div>
-      </div>
+      {/* Search & filters (only on listings tab) */}
+      {tab === 'listings' && (() => {
+        const counts = {
+          all: listings.length,
+          published: listings.filter(l => l.published && !l.sold_out).length,
+          unpublished: listings.filter(l => !l.published).length,
+          sold_out: listings.filter(l => l.sold_out).length,
+          expired: listings.filter(l => l.collection_end && new Date(l.collection_end) < new Date() && !l.sold_out).length,
+        }
+        const statusFilters = [
+          ['all', '全部'],
+          ['published', '上架中'],
+          ['unpublished', '已下架'],
+          ['sold_out', '缺貨中'],
+          ['expired', '已截止'],
+        ]
+        const sources = [...new Set(listings.map(l => l.products?.source).filter(Boolean))].sort()
+        const catIds = [...new Set(listings.map(l => l.products?.category_id).filter(Boolean))]
+        const catsInUse = categories.filter(c => catIds.includes(c.id))
+        const tagIds = [...new Set(listings.flatMap(l => (l.products?.product_tags || []).map(pt => pt.tag_id)))]
+        const tagsInUse = tags.filter(t => tagIds.includes(t.id))
+        const selectStyle = { padding: '6px 10px', borderRadius: 8, fontSize: 12, border: '0.5px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', cursor: 'pointer', minWidth: 0 }
+        const hasActiveFilter = filter !== 'all' || filterCat || filterTag || filterSource
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 12 }}>
+            {/* Search + toggle */}
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                className="form-input"
+                placeholder="搜尋商品名稱或 SKU…"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                style={{ fontSize: 13, flex: 1 }}
+              />
+              <button
+                onClick={() => setShowFilters(f => !f)}
+                style={{
+                  padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 600,
+                  cursor: 'pointer', flexShrink: 0,
+                  background: showFilters || hasActiveFilter ? 'var(--text)' : 'var(--surface)',
+                  color: showFilters || hasActiveFilter ? '#fff' : 'var(--text-3)',
+                  border: `0.5px solid ${showFilters || hasActiveFilter ? 'var(--text)' : 'var(--border)'}`,
+                }}
+              >
+                篩選{hasActiveFilter ? ' ●' : ''}
+              </button>
+            </div>
+            {/* Collapsible filters */}
+            {showFilters && (
+              <>
+                {/* Dropdown filters */}
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {catsInUse.length > 0 && (
+                    <select value={filterCat} onChange={e => setFilterCat(e.target.value)} style={selectStyle}>
+                      <option value="">全部分類</option>
+                      {catsInUse.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                  )}
+                  {tagsInUse.length > 0 && (
+                    <select value={filterTag} onChange={e => setFilterTag(e.target.value)} style={selectStyle}>
+                      <option value="">全部標籤</option>
+                      {tagsInUse.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </select>
+                  )}
+                  {sources.length > 0 && (
+                    <select value={filterSource} onChange={e => setFilterSource(e.target.value)} style={selectStyle}>
+                      <option value="">全部來源</option>
+                      {sources.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  )}
+                </div>
+                {/* Status chips */}
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {statusFilters.map(([key, label]) => (
+                    <button key={key} onClick={() => setFilter(key)} style={{
+                      padding: '5px 12px', borderRadius: 16, fontSize: 12, fontWeight: 600,
+                      cursor: 'pointer', transition: 'all .15s',
+                      background: filter === key ? 'var(--text)' : 'var(--surface)',
+                      color: filter === key ? '#fff' : 'var(--text-3)',
+                      border: `0.5px solid ${filter === key ? 'var(--text)' : 'var(--border)'}`,
+                    }}>{label} {counts[key]}</button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )
+      })()}
 
       {/* Tab switch */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        {[['listings', '商城商品'], ['orders', '消費者訂單'], ['taxonomy', '分類/標籤/規格']].map(([v, label]) => (
+        {[['listings', '商城商品'], ['taxonomy', '分類/標籤/規格']].map(([v, label]) => (
           <button key={v} onClick={() => setTab(v)} style={{
             padding: '7px 16px', borderRadius: 20, fontSize: 13, fontWeight: 600,
             cursor: 'pointer', transition: 'all .15s',
@@ -214,12 +288,34 @@ export default function StorefrontPage() {
       {loading && <div className="empty">載入中…</div>}
 
       {/* Listings tab */}
-      {!loading && tab === 'listings' && (
+      {!loading && tab === 'listings' && (() => {
+        const filtered = listings.filter(item => {
+          // Status filter
+          if (filter === 'published' && !(item.published && !item.sold_out)) return false
+          if (filter === 'unpublished' && item.published) return false
+          if (filter === 'sold_out' && !item.sold_out) return false
+          if (filter === 'expired' && !(item.collection_end && new Date(item.collection_end) < new Date() && !item.sold_out)) return false
+          // Search
+          if (search) {
+            const q = search.toLowerCase()
+            const name = (item.products?.name || '').toLowerCase()
+            const sku = (item.products?.sku || '').toLowerCase()
+            if (!name.includes(q) && !sku.includes(q)) return false
+          }
+          // Category
+          if (filterCat && item.products?.category_id !== Number(filterCat)) return false
+          // Tag
+          if (filterTag && !(item.products?.product_tags || []).some(pt => pt.tag_id === Number(filterTag))) return false
+          // Source
+          if (filterSource && item.products?.source !== filterSource) return false
+          return true
+        })
+        return (
         <>
-          {listings.length === 0 && (
-            <div className="empty">尚未上架任何商品，點右上角 + 開始上架</div>
+          {filtered.length === 0 && (
+            <div className="empty">{listings.length === 0 ? '尚未上架任何商品，點右上角 + 開始上架' : '沒有符合篩選條件的商品'}</div>
           )}
-          {listings.map(item => {
+          {filtered.map(item => {
             const isCollection = !!item.collection_end
             const collectionExpired = isCollection && new Date(item.collection_end) < new Date()
             const modeLabel = item.sold_out
@@ -231,20 +327,26 @@ export default function StorefrontPage() {
               ? 'badge-low'
               : (isCollection && collectionExpired) ? 'badge-warn' : 'badge-blue'
 
+            const thumb = item.products?.product_images?.sort((a, b) => a.sort_order - b.sort_order)[0]?.url
             return (
-              <div className="card" key={item.id}>
-                <div className="card-row" style={{ flexWrap: 'wrap', gap: 8 }}>
-                  <div className="item-icon">🛍️</div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div className="fw600 fs15" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      {item.products?.name}
-                      <span className={`badge ${item.published ? 'badge-ok' : 'badge-warn'}`}>
+              <div className="card" key={item.id} style={{ padding: 0, overflow: 'hidden' }}>
+                <div style={{ display: 'flex', gap: 0 }}>
+                  {/* 左側縮圖 */}
+                  {thumb
+                    ? <img src={thumb} style={{ width: 80, height: 80, objectFit: 'cover', flexShrink: 0 }} />
+                    : <div style={{ width: 80, height: 80, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f5f5f5', fontSize: 28 }}>🛍️</div>}
+                  {/* 右側資訊 */}
+                  <div style={{ flex: 1, minWidth: 0, padding: '10px 12px', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 4 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      <span className="fw600 fs15" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '50%' }}>{item.products?.name}</span>
+                      <span className={`badge ${item.published ? 'badge-ok' : 'badge-warn'}`} style={{ fontSize: 11 }}>
                         {item.published ? '上架中' : '已下架'}
                       </span>
-                      <span className={`badge ${modeBadge}`}>{modeLabel}</span>
+                      <span className={`badge ${modeBadge}`} style={{ fontSize: 11 }}>{modeLabel}</span>
                     </div>
-                    <div className="muted fs12 mt8">
-                      {item.products?.sku} · 售價 NT${Number(item.shop_price).toLocaleString()}
+                    <div className="muted fs12">
+                      {item.products?.sku && <span>{item.products.sku} · </span>}
+                      售價 NT${Number(item.shop_price).toLocaleString()}
                       {item.products?.cost != null && (() => {
                         const cur = item.products.currency || 'TWD'
                         const cost = Number(item.products.cost)
@@ -261,7 +363,10 @@ export default function StorefrontPage() {
                     </div>
                     {item.name_en && <div className="muted fs12">{item.name_en}</div>}
                   </div>
-                  <div style={{ display: 'flex', gap: 8, flexShrink: 0, flexWrap: 'wrap' }}>
+                </div>
+                {/* 底部操作按鈕 */}
+                {(can('edit') || can('delete')) && (
+                  <div style={{ display: 'flex', gap: 8, padding: '8px 12px', borderTop: '1px solid var(--border-light, #f0f0f0)', background: '#fafafa' }}>
                     {can('edit') && (
                       <>
                         <button onClick={() => setSheet(item)} style={smallBtn}>設定</button>
@@ -276,61 +381,18 @@ export default function StorefrontPage() {
                         </button>
                       </>
                     )}
+                    <div style={{ flex: 1 }} />
                     {can('delete') && (
                       <button onClick={() => deleteListing(item.id)} style={{ ...smallBtn, color: 'var(--red)' }}>刪除</button>
                     )}
                   </div>
-                </div>
+                )}
               </div>
             )
           })}
         </>
-      )}
-
-      {/* Orders tab */}
-      {!loading && tab === 'orders' && (
-        <>
-          {orders.length === 0 && <div className="empty">尚無消費者訂單</div>}
-          {orders.map(o => (
-            <div className="card" key={o.id}>
-              <div className="card-row" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 6 }}>
-                <div className="row-sb" style={{ width: '100%' }}>
-                  <span className="fw600 fs15">{o.customer_name}</span>
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                    <span className={`badge ${statusBadgeClass(o.status)}`}>{o.status}</span>
-                    <span className={`badge ${o.payment_status === '已付清' ? 'badge-ok' : 'badge-low'}`}>{o.payment_status}</span>
-                  </div>
-                </div>
-                <div className="muted fs12">#{String(o.id).slice(-6)} · {o.created_at?.slice(0, 16)}</div>
-                <div className="fs13" style={{ color: 'var(--text-2)' }}>{o.items}</div>
-                <div className="row-sb" style={{ width: '100%', marginTop: 4 }}>
-                  <div>
-                    {o.phone && <span className="muted fs12">📞 {o.phone}</span>}
-                    {o.email && <span className="muted fs12" style={{ marginLeft: 8 }}>✉️ {o.email}</span>}
-                  </div>
-                  <div className="fw600 fs15">NT${Number(o.total_amount || 0).toLocaleString()}</div>
-                </div>
-                {o.note && <div className="fs12 muted">備注：{o.note}</div>}
-                {can('pay') && o.status !== '已完成' && (
-                  <div style={{ display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
-                    {['待確認', '備貨中', '已出貨', '已完成'].map(s => (
-                      <button
-                        key={s}
-                        onClick={() => updateOrderStatus(o.id, s)}
-                        style={{
-                          ...smallBtn,
-                          background: o.status === s ? 'var(--text)' : 'var(--surface)',
-                          color: o.status === s ? '#fff' : 'var(--text-3)',
-                        }}
-                      >{s}</button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          ))}
-        </>
-      )}
+        )
+      })()}
 
       {/* Taxonomy tab */}
       {!loading && tab === 'taxonomy' && (
@@ -508,13 +570,6 @@ export default function StorefrontPage() {
       )}
     </div>
   )
-}
-
-function statusBadgeClass(s) {
-  if (s === '已完成') return 'badge-ok'
-  if (s === '已出貨') return 'badge-blue'
-  if (s === '備貨中') return 'badge-warn'
-  return 'badge-low'
 }
 
 const smallBtn = {
