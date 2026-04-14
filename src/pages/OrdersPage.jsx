@@ -336,7 +336,7 @@ function ConsumerOrderCard({ order: o, onTap }) {
   )
 }
 
-const FREE_SHIPPING_THRESHOLD = 3980
+const FREE_SHIPPING_THRESHOLD = 3800
 const DEFAULT_SHIPPING_FEE = 60
 const notifyBtn = { padding: '8px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }
 
