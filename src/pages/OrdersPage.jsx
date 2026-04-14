@@ -369,7 +369,7 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
   const hasQtyChange = activeItems.some(i => i.qty < i._originalQty)
   const hasAnyChange = hasAnyCancel || hasQtyChange
   const meetsThreshold = activeSubtotal >= FREE_SHIPPING_THRESHOLD
-  const effectiveShippingFee = !hasAnyChange ? 0 : (meetsThreshold ? 0 : shippingFee)
+  const effectiveShippingFee = !hasAnyChange ? shippingFee : (meetsThreshold ? 0 : shippingFee)
   const newTotal = activeSubtotal + effectiveShippingFee
 
   const hasItems = itemStatuses.length > 0
@@ -473,7 +473,7 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
       status,
       payment_status: payStatus,
       items_json: updatedItemsJson,
-      shipping_fee: hasAnyChange ? effectiveShippingFee : 0,
+      shipping_fee: effectiveShippingFee,
       total_amount: updatedTotal,
       fulfillment_type,
       tracking_number: trackingNumber || null,
