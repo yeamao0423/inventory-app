@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
+import CustomSelect from '../components/CustomSelect'
 
 export default function OrdersPage() {
   const { can } = useAuth()
@@ -24,21 +25,40 @@ export default function OrdersPage() {
     setLoading(false)
   }
 
+  const [previewItem, setPreviewItem] = useState(null)
+  const [previewImgIdx, setPreviewImgIdx] = useState(0)
+  const [sourceFilter, setSourceFilter] = useState('all') // 'all' | source name
+
   async function fetchProcurement() {
     setLoading(true)
-    // Get pending orders
-    const { data: pending } = await supabase
-      .from('consumer_orders').select('*')
-      .eq('status', '待確認')
-    // Get all products with source info
-    const { data: products } = await supabase
-      .from('products').select('id, name, sku, source')
+    const [{ data: pending }, { data: products }, { data: spProducts }, { data: rates }, { data: images }] = await Promise.all([
+      supabase.from('consumer_orders').select('*').eq('status', '待確認'),
+      supabase.from('products').select('id, name, sku, source, cost, currency'),
+      supabase.from('storefront_products').select('product_id, shop_price'),
+      supabase.from('exchange_rates').select('*'),
+      supabase.from('product_images').select('product_id, url, sort_order').order('sort_order', { ascending: true }),
+    ])
 
     const productMap = {}
     ;(products || []).forEach(p => { productMap[p.id] = p })
 
-    // Aggregate items from all pending orders
-    const agg = {} // key: productId → { name, source, sku, totalQty, variants: { label: qty } }
+    const priceMap = {}
+    ;(spProducts || []).forEach(sp => { priceMap[sp.product_id] = sp.shop_price })
+
+    const rateMap = {}
+    ;(rates || []).forEach(r => { rateMap[r.currency] = Number(r.rate) })
+
+    // 每個商品的所有圖片（已按 sort_order 排序）
+    const imageMap = {}
+    ;(images || []).forEach(img => {
+      if (!imageMap[img.product_id]) imageMap[img.product_id] = []
+      imageMap[img.product_id].push(img.url)
+    })
+
+    // 找出缺少的匯率
+    const usedCurrencies = new Set()
+
+    const agg = {}
     ;(pending || []).forEach(order => {
       const items = Array.isArray(order.items_json) ? order.items_json : []
       items.forEach(item => {
@@ -47,9 +67,15 @@ export default function OrdersPage() {
         const prod = productMap[pid]
         if (!agg[pid]) {
           agg[pid] = {
+            productId: pid,
             name: item.name,
             sku: prod?.sku || item.sku || '',
             source: prod?.source || '',
+            cost: prod?.cost != null ? Number(prod.cost) : null,
+            currency: prod?.currency || 'TWD',
+            shopPrice: priceMap[pid] != null ? Number(priceMap[pid]) : null,
+            images: imageMap[pid] || [],
+            thumbnail: (imageMap[pid] || [])[0] || null,
             totalQty: 0,
             variants: {},
           }
@@ -61,9 +87,48 @@ export default function OrdersPage() {
       })
     })
 
-    // Group by source
-    const grouped = {} // source → [items]
-    const ungrouped = [] // items without source
+    // 計算每項成本（TWD）和營收
+    let totalCost = 0, totalRevenue = 0
+    const missingRates = new Set()
+    const warnings = [] // 未定價或無成本的商品
+
+    Object.values(agg).forEach(item => {
+      const cur = item.currency || 'TWD'
+      if (cur !== 'TWD') usedCurrencies.add(cur)
+
+      // 成本計算
+      if (item.cost != null && item.cost > 0) {
+        let costTWD = item.cost
+        if (cur !== 'TWD') {
+          const rate = rateMap[cur]
+          if (rate) {
+            costTWD = item.cost * rate
+          } else {
+            missingRates.add(cur)
+            costTWD = 0
+          }
+        }
+        item.costTWD = costTWD
+        item.totalCostTWD = costTWD * item.totalQty
+        totalCost += item.totalCostTWD
+      } else {
+        item.costTWD = null
+        item.totalCostTWD = null
+        warnings.push({ name: item.name, sku: item.sku, type: 'no_cost' })
+      }
+
+      // 營收計算
+      if (item.shopPrice != null && item.shopPrice > 0) {
+        item.totalRevenue = item.shopPrice * item.totalQty
+        totalRevenue += item.totalRevenue
+      } else {
+        item.totalRevenue = null
+        warnings.push({ name: item.name, sku: item.sku, type: 'no_price' })
+      }
+    })
+
+    const grouped = {}
+    const ungrouped = []
     Object.values(agg).forEach(item => {
       if (item.source) {
         if (!grouped[item.source]) grouped[item.source] = []
@@ -73,12 +138,23 @@ export default function OrdersPage() {
       }
     })
 
-    setProcurementData({ grouped, ungrouped, orderCount: (pending || []).length })
+    const profit = totalRevenue - totalCost
+    const profitRate = totalRevenue > 0 ? (profit / totalRevenue) * 100 : 0
+
+    setProcurementData({
+      grouped, ungrouped,
+      totalCost, totalRevenue, profit, profitRate,
+      missingRates: [...missingRates],
+      warnings,
+    })
     setLoading(false)
   }
 
   useEffect(() => {
-    if (tab === 'procurement') fetchProcurement()
+    if (tab === 'procurement') {
+      setSourceFilter('all')
+      fetchProcurement()
+    }
   }, [tab])
 
   const unpaid = orders.filter(o => o.payment_status !== '已付清')
@@ -179,85 +255,208 @@ export default function OrdersPage() {
       )}
 
       {/* Procurement summary tab */}
-      {!loading && tab === 'procurement' && procurementData && (
-        <>
-          <div className="stats">
-            <div className="stat">
-              <div className="stat-val text-amber">{procurementData.orderCount}</div>
-              <div className="stat-lbl"><span className="dot" style={{background:'var(--amber)'}} />待確認訂單</div>
+      {!loading && tab === 'procurement' && procurementData && (() => {
+        const allSources = Object.keys(procurementData.grouped)
+        const hasUngrouped = procurementData.ungrouped.length > 0
+        const isEmpty = allSources.length === 0 && !hasUngrouped
+
+        // 根據篩選計算統計數字
+        const filteredItems = sourceFilter === 'all'
+          ? [...Object.values(procurementData.grouped).flat(), ...procurementData.ungrouped]
+          : sourceFilter === '_ungrouped'
+            ? procurementData.ungrouped
+            : (procurementData.grouped[sourceFilter] || [])
+
+        let fCost = 0, fRevenue = 0
+        filteredItems.forEach(item => {
+          if (item.totalCostTWD != null) fCost += item.totalCostTWD
+          if (item.totalRevenue != null) fRevenue += item.totalRevenue
+        })
+        const fProfit = fRevenue - fCost
+        const fProfitRate = fRevenue > 0 ? (fProfit / fRevenue) * 100 : 0
+
+        // 篩選後的 warnings
+        const filteredWarnings = sourceFilter === 'all'
+          ? procurementData.warnings
+          : procurementData.warnings.filter(w =>
+              filteredItems.some(item => item.name === w.name && item.sku === (w.sku || ''))
+            )
+
+        return (
+          <>
+            {isEmpty ? (
+              <div className="empty">目前沒有待確認的訂單</div>
+            ) : (
+              <>
+                {/* 來源篩選 */}
+                <div style={{ marginBottom: 14 }}>
+                  <CustomSelect
+                    label="全部來源"
+                    value={sourceFilter === 'all' ? null : sourceFilter}
+                    options={[
+                      ...allSources.map(source => ({ value: source, label: source })),
+                      ...(hasUngrouped ? [{ value: '_ungrouped', label: '未設定來源' }] : []),
+                    ]}
+                    onChange={v => setSourceFilter(v || 'all')}
+                  />
+                </div>
+
+                {/* 統計卡片 */}
+                <div style={{
+                  display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 16,
+                }}>
+                  <div className="card" style={{ padding: '14px 16px' }}>
+                    <div className="muted fs12">採購成本</div>
+                    <div className="fw600 fs15" style={{ marginTop: 4 }}>NT${Math.round(fCost).toLocaleString()}</div>
+                  </div>
+                  <div className="card" style={{ padding: '14px 16px' }}>
+                    <div className="muted fs12">預估營收</div>
+                    <div className="fw600 fs15" style={{ marginTop: 4 }}>NT${Math.round(fRevenue).toLocaleString()}</div>
+                  </div>
+                  <div className="card" style={{ padding: '14px 16px' }}>
+                    <div className="muted fs12">預估利潤</div>
+                    <div className="fw600 fs15" style={{ marginTop: 4, color: fProfit >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                      NT${Math.round(fProfit).toLocaleString()}
+                    </div>
+                  </div>
+                  <div className="card" style={{ padding: '14px 16px' }}>
+                    <div className="muted fs12">利潤率</div>
+                    <div className="fw600 fs15" style={{ marginTop: 4, color: fProfitRate >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                      {fProfitRate.toFixed(1)}%
+                    </div>
+                  </div>
+                </div>
+
+                {/* 匯率缺失提醒 */}
+                {procurementData.missingRates.length > 0 && (
+                  <div style={{
+                    background: '#fff8e8', borderRadius: 12, padding: '12px 16px', marginBottom: 16,
+                    fontSize: 13, color: '#8a5c00',
+                  }}>
+                    ⚠️ 以下幣別尚未設定匯率，相關商品成本以 0 計算：{procurementData.missingRates.join('、')}
+                  </div>
+                )}
+
+                {/* 未定價 / 無成本提醒 */}
+                {filteredWarnings.length > 0 && (
+                  <div style={{
+                    background: '#fff5f5', borderRadius: 12, padding: '12px 16px', marginBottom: 16,
+                    fontSize: 13, color: '#a03030',
+                  }}>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>以下商品資料不完整，已從利潤計算中排除：</div>
+                    {filteredWarnings.map((w, i) => (
+                      <div key={i}>· {w.name}{w.sku ? ` (${w.sku})` : ''} — {w.type === 'no_cost' ? '未設定成本' : '未設定售價'}</div>
+                    ))}
+                  </div>
+                )}
+
+                {/* 商品列表 */}
+                {(sourceFilter === 'all' ? Object.entries(procurementData.grouped) : sourceFilter === '_ungrouped' ? [] : procurementData.grouped[sourceFilter] ? [[sourceFilter, procurementData.grouped[sourceFilter]]] : []).map(([source, items]) => (
+                  <div key={source} style={{ marginBottom: 20 }}>
+                    <div className="sec" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span>🏬</span> {source}
+                      <span className="muted fs12">({items.reduce((s, i) => s + i.totalQty, 0)} 件)</span>
+                    </div>
+                    {items.map(item => (
+                      <ProcurementItemCard key={item.sku || item.productId} item={item} onPreview={item => { setPreviewImgIdx(0); setPreviewItem(item) }} />
+                    ))}
+                  </div>
+                ))}
+
+                {(sourceFilter === 'all' || sourceFilter === '_ungrouped') && procurementData.ungrouped.length > 0 && (
+                  <div style={{ marginBottom: 20 }}>
+                    <div className="sec" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span>📦</span> 未設定來源
+                      <span className="muted fs12">({procurementData.ungrouped.reduce((s, i) => s + i.totalQty, 0)} 件)</span>
+                    </div>
+                    {procurementData.ungrouped.map(item => (
+                      <ProcurementItemCard key={item.sku || item.productId} item={item} onPreview={item => { setPreviewImgIdx(0); setPreviewItem(item) }} />
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </>
+        )
+      })()}
+
+      {/* 商品預覽 Modal */}
+      {previewItem && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1000,
+          background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: 24,
+        }} onClick={() => setPreviewItem(null)}>
+          <div style={{
+            background: 'var(--surface)', borderRadius: 16, maxWidth: 380, width: '100%',
+            maxHeight: '80vh', overflow: 'auto', padding: 20,
+          }} onClick={e => e.stopPropagation()}>
+            {previewItem.images?.length > 0 && (
+              <div style={{ position: 'relative', marginBottom: 16 }}>
+                <div style={{
+                  background: 'var(--bg)', borderRadius: 12, overflow: 'hidden',
+                }}>
+                  <img src={previewItem.images[previewImgIdx]} alt={`${previewItem.name} ${previewImgIdx + 1}`} style={{
+                    width: '100%', display: 'block', objectFit: 'cover',
+                  }} />
+                </div>
+                {previewItem.images.length > 1 && (
+                  <>
+                    <button onClick={() => setPreviewImgIdx(i => (i - 1 + previewItem.images.length) % previewItem.images.length)} style={{
+                      position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)',
+                      width: 32, height: 32, borderRadius: '50%', border: 'none',
+                      background: 'rgba(0,0,0,0.45)', color: '#fff', fontSize: 16,
+                      cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}>‹</button>
+                    <button onClick={() => setPreviewImgIdx(i => (i + 1) % previewItem.images.length)} style={{
+                      position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
+                      width: 32, height: 32, borderRadius: '50%', border: 'none',
+                      background: 'rgba(0,0,0,0.45)', color: '#fff', fontSize: 16,
+                      cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}>›</button>
+                    <div style={{
+                      display: 'flex', justifyContent: 'center', gap: 6, marginTop: 10,
+                    }}>
+                      {previewItem.images.map((_, i) => (
+                        <span key={i} onClick={() => setPreviewImgIdx(i)} style={{
+                          width: 7, height: 7, borderRadius: '50%', cursor: 'pointer',
+                          background: i === previewImgIdx ? 'var(--text)' : 'var(--border)',
+                          transition: 'background 0.2s',
+                        }} />
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+            <div className="fw600 fs15" style={{ marginBottom: 4 }}>{previewItem.name}</div>
+            {previewItem.sku && <div className="muted fs12" style={{ marginBottom: 12 }}>{previewItem.sku}</div>}
+            <div className="sec" style={{ marginTop: 0 }}>需採購規格</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {Object.entries(previewItem.variants).map(([label, qty]) => (
+                <span key={label} style={{
+                  fontSize: 13, padding: '5px 12px', borderRadius: 16,
+                  background: 'var(--surface)', border: '0.5px solid var(--border)',
+                }}>
+                  {label} <strong>× {qty}</strong>
+                </span>
+              ))}
             </div>
-            <div className="stat">
-              <div className="stat-val">{Object.keys(procurementData.grouped).length + (procurementData.ungrouped.length > 0 ? 1 : 0)}</div>
-              <div className="stat-lbl">採購來源</div>
+            <div style={{ marginTop: 16, display: 'flex', gap: 12, fontSize: 13 }}>
+              {previewItem.costTWD != null && (
+                <div><span className="muted">成本 </span><span className="fw600">NT${Math.round(previewItem.costTWD).toLocaleString()}</span></div>
+              )}
+              {previewItem.shopPrice != null && (
+                <div><span className="muted">售價 </span><span className="fw600">NT${previewItem.shopPrice.toLocaleString()}</span></div>
+              )}
             </div>
+            <button onClick={() => setPreviewItem(null)} style={{
+              marginTop: 20, width: '100%', padding: '12px 0', borderRadius: 12,
+              border: 'none', background: 'var(--text)', color: '#fff',
+              fontSize: 15, fontWeight: 600, cursor: 'pointer',
+            }}>關閉</button>
           </div>
-
-          {procurementData.orderCount === 0 && <div className="empty">目前沒有待確認的訂單</div>}
-
-          {Object.entries(procurementData.grouped).map(([source, items]) => (
-            <div key={source} style={{ marginBottom: 20 }}>
-              <div className="sec" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span>🏬</span> {source}
-                <span className="muted fs12">({items.reduce((s, i) => s + i.totalQty, 0)} 件)</span>
-              </div>
-              {items.map(item => (
-                <div className="card" key={item.sku} style={{ marginBottom: 6 }}>
-                  <div className="card-row" style={{ flexDirection: 'column', gap: 4 }}>
-                    <div className="row-sb" style={{ width: '100%' }}>
-                      <span className="fw600 fs14">{item.name}</span>
-                      <span className="fw600 fs15" style={{ color: 'var(--text)' }}>× {item.totalQty}</span>
-                    </div>
-                    <div className="muted fs12">{item.sku}</div>
-                    {Object.keys(item.variants).length > 1 || (Object.keys(item.variants).length === 1 && !item.variants['無規格']) ? (
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
-                        {Object.entries(item.variants).map(([label, qty]) => (
-                          <span key={label} style={{
-                            fontSize: 12, padding: '3px 10px', borderRadius: 16,
-                            background: 'var(--surface)', border: '0.5px solid var(--border)',
-                          }}>
-                            {label} <strong>× {qty}</strong>
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ))}
-
-          {procurementData.ungrouped.length > 0 && (
-            <div style={{ marginBottom: 20 }}>
-              <div className="sec" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span>📦</span> 未設定來源
-                <span className="muted fs12">({procurementData.ungrouped.reduce((s, i) => s + i.totalQty, 0)} 件)</span>
-              </div>
-              {procurementData.ungrouped.map(item => (
-                <div className="card" key={item.sku} style={{ marginBottom: 6 }}>
-                  <div className="card-row" style={{ flexDirection: 'column', gap: 4 }}>
-                    <div className="row-sb" style={{ width: '100%' }}>
-                      <span className="fw600 fs14">{item.name}</span>
-                      <span className="fw600 fs15" style={{ color: 'var(--text)' }}>× {item.totalQty}</span>
-                    </div>
-                    <div className="muted fs12">{item.sku}</div>
-                    {Object.keys(item.variants).length > 1 || (Object.keys(item.variants).length === 1 && !item.variants['無規格']) ? (
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
-                        {Object.entries(item.variants).map(([label, qty]) => (
-                          <span key={label} style={{
-                            fontSize: 12, padding: '3px 10px', borderRadius: 16,
-                            background: 'var(--surface)', border: '0.5px solid var(--border)',
-                          }}>
-                            {label} <strong>× {qty}</strong>
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </>
+        </div>
       )}
 
       {sheet === 'add' && <AddOrderSheet onClose={() => setSheet(null)} onSaved={fetchAll} />}
@@ -332,6 +531,57 @@ function ConsumerOrderCard({ order: o, onTap }) {
           <div><span className="muted fs12">總額 </span><span className="fw600">NT${Number(o.total_amount).toLocaleString()}</span></div>
         </div>
       )}
+    </div>
+  )
+}
+
+function ProcurementItemCard({ item, onPreview }) {
+  const hasVariants = Object.keys(item.variants).length > 1 || (Object.keys(item.variants).length === 1 && !item.variants['無規格'])
+  const noCost = item.costTWD == null
+  const noPrice = item.totalRevenue == null
+
+  return (
+    <div className="card" style={{ marginBottom: 6 }}>
+      <div className="card-row" style={{ gap: 12, alignItems: 'flex-start' }}>
+        {/* 縮圖 */}
+        <div
+          onClick={() => onPreview(item)}
+          style={{
+            width: 48, height: 48, borderRadius: 8, flexShrink: 0, cursor: 'pointer',
+            background: item.thumbnail ? `url(${item.thumbnail}) center/cover` : 'var(--surface)',
+            border: '0.5px solid var(--border)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 18, color: 'var(--text-2)',
+          }}
+        >
+          {!item.thumbnail && '📷'}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="row-sb" style={{ width: '100%' }}>
+            <span className="fw600 fs14">{item.name}</span>
+            <span className="fw600 fs15" style={{ color: 'var(--text)' }}>× {item.totalQty}</span>
+          </div>
+          <div className="muted fs12">{item.sku}</div>
+          {(noCost || noPrice) && (
+            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+              {noCost && <span style={{ fontSize: 11, padding: '1px 8px', borderRadius: 8, background: '#fff5f5', color: '#a03030' }}>未設定成本</span>}
+              {noPrice && <span style={{ fontSize: 11, padding: '1px 8px', borderRadius: 8, background: '#fff5f5', color: '#a03030' }}>未設定售價</span>}
+            </div>
+          )}
+          {hasVariants && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
+              {Object.entries(item.variants).map(([label, qty]) => (
+                <span key={label} style={{
+                  fontSize: 12, padding: '3px 10px', borderRadius: 16,
+                  background: 'var(--surface)', border: '0.5px solid var(--border)',
+                }}>
+                  {label} <strong>× {qty}</strong>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
@@ -713,15 +963,23 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
             <div>
               <label className="form-label fs12">訂單狀態</label>
-              <select className="form-select" value={status} onChange={e => setStatus(e.target.value)}>
-                {['待確認', '處理中', '已出貨', '完成', '已取消'].map(s => <option key={s}>{s}</option>)}
-              </select>
+              <CustomSelect
+                label={status}
+                value={status}
+                options={['待確認', '處理中', '已出貨', '完成', '已取消'].map(s => ({ value: s, label: s }))}
+                onChange={v => v && setStatus(v)}
+                allowClear={false}
+              />
             </div>
             <div>
               <label className="form-label fs12">付款狀態</label>
-              <select className="form-select" value={payStatus} onChange={e => setPayStatus(e.target.value)}>
-                {['未付', '已付清'].map(s => <option key={s}>{s}</option>)}
-              </select>
+              <CustomSelect
+                label={payStatus}
+                value={payStatus}
+                options={['未付', '已付清'].map(s => ({ value: s, label: s }))}
+                onChange={v => v && setPayStatus(v)}
+                allowClear={false}
+              />
             </div>
           </div>
           {(status === '已出貨' || status === '完成') && (

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
+import CustomSelect from '../components/CustomSelect'
 
 export default function StorefrontPage() {
   const { can } = useAuth()
@@ -204,7 +205,7 @@ export default function StorefrontPage() {
         const catsInUse = categories.filter(c => catIds.includes(c.id))
         const tagIds = [...new Set(listings.flatMap(l => (l.products?.product_tags || []).map(pt => pt.tag_id)))]
         const tagsInUse = tags.filter(t => tagIds.includes(t.id))
-        const selectStyle = { padding: '6px 10px', borderRadius: 8, fontSize: 12, border: '0.5px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', cursor: 'pointer', minWidth: 0 }
+        // selectStyle removed — using .form-select-compact class instead
         const hasActiveFilter = filter !== 'all' || filterCat || filterTag || filterSource
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 12 }}>
@@ -236,22 +237,31 @@ export default function StorefrontPage() {
                 {/* Dropdown filters */}
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   {catsInUse.length > 0 && (
-                    <select value={filterCat} onChange={e => setFilterCat(e.target.value)} style={selectStyle}>
-                      <option value="">全部分類</option>
-                      {catsInUse.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </select>
+                    <CustomSelect compact
+                      label="全部分類"
+                      value={filterCat || null}
+                      options={catsInUse.map(c => ({ value: String(c.id), label: c.name }))}
+                      onChange={v => setFilterCat(v || '')}
+                      style={{ flex: 1, minWidth: 100 }}
+                    />
                   )}
                   {tagsInUse.length > 0 && (
-                    <select value={filterTag} onChange={e => setFilterTag(e.target.value)} style={selectStyle}>
-                      <option value="">全部標籤</option>
-                      {tagsInUse.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                    </select>
+                    <CustomSelect compact
+                      label="全部標籤"
+                      value={filterTag || null}
+                      options={tagsInUse.map(t => ({ value: String(t.id), label: t.name }))}
+                      onChange={v => setFilterTag(v || '')}
+                      style={{ flex: 1, minWidth: 100 }}
+                    />
                   )}
                   {sources.length > 0 && (
-                    <select value={filterSource} onChange={e => setFilterSource(e.target.value)} style={selectStyle}>
-                      <option value="">全部來源</option>
-                      {sources.map(s => <option key={s} value={s}>{s}</option>)}
-                    </select>
+                    <CustomSelect compact
+                      label="全部來源"
+                      value={filterSource || null}
+                      options={sources.map(s => ({ value: s, label: s }))}
+                      onChange={v => setFilterSource(v || '')}
+                      style={{ flex: 1, minWidth: 100 }}
+                    />
                   )}
                 </div>
                 {/* Status chips */}
@@ -768,10 +778,13 @@ function ListingSheet({ item, products, onClose, onSaved }) {
         {!isEditing && (
           <div className="form-group">
             <label className="form-label">選擇商品</label>
-            <select className="form-select" value={form.product_id} onChange={e => set('product_id', e.target.value)}>
-              <option value="">— 選擇商品 —</option>
-              {products.map(p => <option key={p.id} value={p.id}>{p.name}（{p.sku}）</option>)}
-            </select>
+            <CustomSelect
+              label="— 選擇商品 —"
+              value={form.product_id ? String(form.product_id) : null}
+              options={products.map(p => ({ value: String(p.id), label: `${p.name}（${p.sku}）` }))}
+              onChange={v => set('product_id', v || '')}
+              allowClear={false}
+            />
           </div>
         )}
         {/* 商品名稱 + 複製 */}

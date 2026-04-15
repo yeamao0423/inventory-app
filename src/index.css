@@ -160,8 +160,44 @@ html, body, #root {
   width: 100%; padding: 11px 14px;
   background: var(--surface); border: 0.5px solid var(--border);
   border-radius: 12px; font-size: 15px; color: var(--text);
-  outline: none; -webkit-appearance: none;
+  outline: none; -webkit-appearance: none; appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23999' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 14px center;
+  padding-right: 36px;
+  transition: border-color .15s;
 }
+.form-select:focus { border-color: var(--text); }
+
+/* Custom dropdown (shared with shop) */
+.custom-dropdown { position: relative; }
+.custom-dropdown-btn {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 11px 14px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--surface); font-size: 15px; font-weight: 600; color: var(--text-2);
+  cursor: pointer; text-align: left; transition: border-color .15s;
+}
+.custom-dropdown-btn:hover { border-color: var(--text-3); }
+.custom-dropdown-selected { color: var(--text); }
+.custom-dropdown-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 50;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12); overflow: hidden;
+  animation: dropdownSlideDown .15s ease;
+}
+.custom-dropdown-item {
+  padding: 13px 16px; font-size: 15px; font-weight: 500; color: var(--text);
+  cursor: pointer; transition: background .1s;
+}
+.custom-dropdown-item:hover { background: var(--bg); }
+.custom-dropdown-item.active { background: var(--text); color: #fff; font-weight: 600; }
+.custom-dropdown-item:not(:last-child) { border-bottom: 0.5px solid var(--border); }
+@keyframes dropdownSlideDown { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+/* Compact variant */
+.custom-dropdown.compact .custom-dropdown-btn {
+  padding: 8px 12px; font-size: 13px; border-radius: 8px;
+}
+.custom-dropdown.compact .custom-dropdown-menu { border-radius: 10px; }
+.custom-dropdown.compact .custom-dropdown-item { padding: 10px 14px; font-size: 13px; }
 
 .btn {
   width: 100%; padding: 14px;

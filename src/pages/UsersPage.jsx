@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
+import CustomSelect from '../components/CustomSelect'
 
 const ROLE_LABEL = { super_admin:'超級管理員', admin:'管理員', editor:'編輯者', viewer:'檢視者' }
 const ROLE_BADGE = { super_admin:'badge-warn', admin:'badge-blue', editor:'badge-ok', viewer:'badge' }
@@ -132,10 +133,16 @@ export default function UsersPage() {
               <div style={{ display:'flex', gap:8, alignItems:'flex-end' }}>
                 <div style={{ flex:1 }}>
                   <label className="form-label">指定角色</label>
-                  <select className="form-select" value={inviteRole} onChange={e => setInviteRole(e.target.value)}>
-                    <option value="editor">編輯者</option>
-                    <option value="admin">管理員</option>
-                  </select>
+                  <CustomSelect
+                    label="選擇角色"
+                    value={inviteRole}
+                    options={[
+                      { value: 'editor', label: '編輯者' },
+                      { value: 'admin', label: '管理員' },
+                    ]}
+                    onChange={v => v && setInviteRole(v)}
+                    allowClear={false}
+                  />
                 </div>
                 <button className="btn" type="submit" disabled={inviting}
                   style={{ width:'auto', padding:'11px 20px', fontSize:14, whiteSpace:'nowrap' }}>
@@ -207,15 +214,19 @@ export default function UsersPage() {
                 {u.id === user?.id ? (
                   <span style={{ fontSize:12, color:'var(--text-3)' }}>（目前登入）</span>
                 ) : canChangeRole ? (
-                  <select className="form-select"
-                    style={{ width:'auto', padding:'4px 10px', fontSize:13, borderRadius:8 }}
-                    value={u.role} disabled={saving === u.id}
-                    onChange={e => changeRole(u.id, e.target.value)}>
-                    <option value="viewer">檢視者</option>
-                    <option value="editor">編輯者</option>
-                    <option value="admin">管理員</option>
-                    <option value="super_admin">超級管理員</option>
-                  </select>
+                  <CustomSelect compact
+                    label={ROLE_LABEL[u.role]}
+                    value={u.role}
+                    options={[
+                      { value: 'viewer', label: '檢視者' },
+                      { value: 'editor', label: '編輯者' },
+                      { value: 'admin', label: '管理員' },
+                      { value: 'super_admin', label: '超級管理員' },
+                    ]}
+                    onChange={v => v && changeRole(u.id, v)}
+                    allowClear={false}
+                    style={{ width: 'auto', minWidth: 110 }}
+                  />
                 ) : (
                   <span style={{ fontSize:12, color:'var(--text-3)' }}>{ROLE_LABEL[u.role]}</span>
                 )}

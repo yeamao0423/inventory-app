@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
+import CustomSelect from '../components/CustomSelect'
 
 const LOW = 10
 
@@ -28,6 +29,7 @@ export default function InventoryPage() {
   )
   const low = filtered.filter(p => p.quantity <= LOW)
   const normal = filtered.filter(p => p.quantity > LOW)
+  const existingSources = [...new Set(products.map(p => p.source).filter(Boolean))].sort()
 
   return (
     <div className="page">
@@ -90,7 +92,7 @@ export default function InventoryPage() {
       )}
 
       {sheet === 'add' && (
-        <AddProductSheet onClose={() => setSheet(null)} onSaved={fetchProducts} />
+        <AddProductSheet onClose={() => setSheet(null)} onSaved={fetchProducts} existingSources={existingSources} />
       )}
       {sheet && sheet !== 'add' && (
         <ProductDetailSheet
@@ -99,6 +101,7 @@ export default function InventoryPage() {
           onSaved={fetchProducts}
           canEdit={can('edit')}
           canDelete={can('delete')}
+          existingSources={existingSources}
         />
       )}
     </div>
@@ -199,7 +202,7 @@ async function uploadImages(files, productId) {
 }
 
 // ── 新增商品 ────────────────────────────────────────────
-function AddProductSheet({ onClose, onSaved }) {
+function AddProductSheet({ onClose, onSaved, existingSources = [] }) {
   const [form, setForm] = useState({ name:'', sku:'', quantity:'', unit:'個', cost:'', currency:'TWD', source:'' })
   const [saving, setSaving] = useState(false)
   const [imageFiles, setImageFiles] = useState([])
@@ -289,15 +292,39 @@ function AddProductSheet({ onClose, onSaved }) {
       {categories.length > 0 && (
         <div className="form-group">
           <label className="form-label">分類</label>
-          <select className="form-select" value={selectedCategory} onChange={e => setSelectedCategory(e.target.value)}>
-            <option value="">— 無分類 —</option>
-            {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
+          <CustomSelect
+            label="— 無分類 —"
+            value={selectedCategory || null}
+            options={categories.map(c => ({ value: String(c.id), label: c.name }))}
+            onChange={v => setSelectedCategory(v || '')}
+          />
         </div>
       )}
       <div className="form-group">
         <label className="form-label">採購來源（品牌/店家）</label>
-        <input className="form-input" placeholder="例：UNIQLO、GU、ABC-MART" value={form.source} onChange={e => set('source', e.target.value)} />
+        {form._selectMode ? (
+          <CustomSelect
+            label="— 選擇來源 —"
+            value={form.source || null}
+            options={[
+              ...existingSources.map(s => ({ value: s, label: s })),
+              { value: '__custom__', label: '＋ 自訂來源' },
+            ]}
+            onChange={v => {
+              if (v === '__custom__') { set('_selectMode', false); set('source', '') }
+              else { set('source', v || ''); set('_selectMode', false) }
+            }}
+            allowClear={false}
+          />
+        ) : (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input className="form-input" style={{ flex: 1 }} placeholder="例：UNIQLO、GU、ABC-MART" value={form.source} onChange={e => set('source', e.target.value)} />
+            {existingSources.length > 0 && (
+              <button type="button" className="btn btn-outline" style={{ width: 'auto', padding: '0 14px', fontSize: 13 }}
+                onClick={() => set('_selectMode', true)}>選擇</button>
+            )}
+          </div>
+        )}
       </div>
       <div className="form-group">
         <label className="form-label">SKU 代碼</label>
@@ -314,9 +341,13 @@ function AddProductSheet({ onClose, onSaved }) {
         </div>
         <div className="form-group">
           <label className="form-label">幣別</label>
-          <select className="form-select" value={form.currency} onChange={e => set('currency', e.target.value)}>
-            <option>TWD</option><option>USD</option><option>JPY</option><option>EUR</option><option>VND</option>
-          </select>
+          <CustomSelect
+            label="TWD"
+            value={form.currency}
+            options={['TWD','USD','JPY','EUR','VND'].map(c => ({ value: c, label: c }))}
+            onChange={v => set('currency', v || 'TWD')}
+            allowClear={false}
+          />
         </div>
       </div>
       <button className="btn" onClick={save} disabled={saving}>{saving ? '儲存中…' : '新增商品'}</button>
@@ -366,8 +397,7 @@ function EditableField({ productId, field, initialValue, canEdit, onSaved, onVal
 function EditableSelectField({ productId, field, initialValue, canEdit, onSaved, label, options }) {
   const [value, setValue] = useState(initialValue)
   const [saved, setSaved] = useState(false)
-  async function onChange(e) {
-    const newVal = e.target.value
+  async function onSelect(newVal) {
     setValue(newVal)
     await supabase.from('products').update({ [field]: newVal }).eq('id', productId)
     setSaved(true)
@@ -378,16 +408,18 @@ function EditableSelectField({ productId, field, initialValue, canEdit, onSaved,
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 10, padding: '8px 12px' }}>
       <span className="fs12 muted" style={{ flexShrink: 0 }}>{label}</span>
       {canEdit ? (
-        <>
-          <select
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <CustomSelect
+            label={value || '選擇'}
             value={value}
-            onChange={onChange}
-            style={{ flex: 1, border: 'none', background: 'transparent', outline: 'none', fontSize: 14, fontWeight: 600, color: 'var(--text)', minWidth: 0 }}
-          >
-            {options.map(o => <option key={o} value={o}>{o}</option>)}
-          </select>
+            options={options.map(o => ({ value: o, label: o }))}
+            onChange={v => v && onSelect(v)}
+            allowClear={false}
+            compact
+            style={{ flex: 1 }}
+          />
           {saved && <span className="fs12" style={{ color: 'var(--green)', flexShrink: 0 }}>✓</span>}
-        </>
+        </div>
       ) : (
         <span className="fs14 fw600">{value}</span>
       )}
@@ -396,7 +428,7 @@ function EditableSelectField({ productId, field, initialValue, canEdit, onSaved,
 }
 
 // ── 商品詳情 ────────────────────────────────────────────
-function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete }) {
+function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete, existingSources = [] }) {
   const [saving, setSaving] = useState(false)
   const [productName, setProductName] = useState(product.name)
   const [images, setImages] = useState(
@@ -532,7 +564,7 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete }) {
       </div>
 
       {/* 採購來源 */}
-      <SourceField productId={product.id} initialSource={product.source || ''} canEdit={canEdit} onSaved={onSaved} />
+      <SourceField productId={product.id} initialSource={product.source || ''} canEdit={canEdit} onSaved={onSaved} existingSources={existingSources} />
 
       {/* 分類 & 標籤 */}
       {(categories.length > 0 || allTags.length > 0) && (
@@ -541,15 +573,18 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete }) {
           {categories.length > 0 && (
             <div className="form-group">
               <label className="form-label">分類</label>
-              <select
-                className="form-select"
-                value={selectedCategory}
-                onChange={e => saveCategory(e.target.value)}
-                disabled={!canEdit}
-              >
-                <option value="">— 無分類 —</option>
-                {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
+              {canEdit ? (
+                <CustomSelect
+                  label="— 無分類 —"
+                  value={selectedCategory || null}
+                  options={categories.map(c => ({ value: String(c.id), label: c.name }))}
+                  onChange={v => saveCategory(v || '')}
+                />
+              ) : (
+                <div className="form-input" style={{ background: 'var(--bg)', color: 'var(--text-3)' }}>
+                  {categories.find(c => String(c.id) === String(selectedCategory))?.name || '— 無分類 —'}
+                </div>
+              )}
             </div>
           )}
           {allTags.length > 0 && (
@@ -586,34 +621,65 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete }) {
   )
 }
 
-function SourceField({ productId, initialSource, canEdit, onSaved }) {
-  const [source, setSource] = useState(initialSource)
-  const [dirty, setDirty] = useState(false)
+function SourceField({ productId, initialSource, canEdit, onSaved, existingSources = [] }) {
+  const [source, setSource] = useState(initialSource || '')
+  const [customMode, setCustomMode] = useState(false)
   const [saved, setSaved] = useState(false)
-  function onChange(e) { setSource(e.target.value); setDirty(true); setSaved(false) }
-  async function save() {
-    await supabase.from('products').update({ source: source.trim() || null }).eq('id', productId)
-    setDirty(false); setSaved(true)
+  const isKnown = existingSources.includes(source)
+
+  async function save(val) {
+    const trimmed = (val ?? source).trim()
+    await supabase.from('products').update({ source: trimmed || null }).eq('id', productId)
+    setSaved(true)
     if (onSaved) onSaved()
     setTimeout(() => setSaved(false), 1500)
   }
+
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20, background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 10, padding: '8px 12px' }}>
-      <span className="fs12 muted" style={{ flexShrink: 0 }}>採購來源</span>
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+        <span className="fs12 muted">採購來源</span>
+        {saved && <span className="fs12" style={{ color: 'var(--green)' }}>✓</span>}
+      </div>
       {canEdit ? (
         <>
-          <input
-            value={source}
-            onChange={onChange}
-            onBlur={() => dirty && save()}
-            onKeyDown={e => e.key === 'Enter' && dirty && save()}
-            placeholder="例：UNIQLO"
-            style={{ flex: 1, border: 'none', background: 'transparent', outline: 'none', fontSize: 14, fontWeight: 600, color: 'var(--text)', minWidth: 0 }}
-          />
-          {saved && <span className="fs12" style={{ color: 'var(--green)', flexShrink: 0 }}>✓</span>}
+          {existingSources.length > 0 && !customMode ? (
+            <CustomSelect
+              label="— 未設定 —"
+              value={isKnown ? source : null}
+              options={[
+                ...existingSources.map(s => ({ value: s, label: s })),
+                ...(!isKnown && source ? [{ value: '__current__', label: source }] : []),
+                { value: '__custom__', label: '＋ 自訂來源' },
+              ]}
+              onChange={v => {
+                if (v === '__custom__') { setCustomMode(true) }
+                else { setSource(v || ''); save(v || '') }
+              }}
+              compact
+            />
+          ) : (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                className="form-input"
+                value={source}
+                onChange={e => setSource(e.target.value)}
+                onBlur={() => save()}
+                onKeyDown={e => e.key === 'Enter' && save()}
+                placeholder="例：UNIQLO"
+                style={{ flex: 1 }}
+              />
+              {existingSources.length > 0 && (
+                <button type="button" className="btn btn-outline" style={{ width: 'auto', padding: '0 14px', fontSize: 13 }}
+                  onClick={() => setCustomMode(false)}>選擇</button>
+              )}
+            </div>
+          )}
         </>
       ) : (
-        <span className="fs14 fw600" style={{ color: source ? 'var(--text)' : 'var(--text-3)' }}>{source || '未設定'}</span>
+        <div style={{ padding: '8px 12px', background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 10 }}>
+          <span className="fs14 fw600" style={{ color: source ? 'var(--text)' : 'var(--text-3)' }}>{source || '未設定'}</span>
+        </div>
       )}
     </div>
   )
