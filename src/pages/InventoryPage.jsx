@@ -9,6 +9,7 @@ export default function InventoryPage() {
   const { profile, signOut, can } = useAuth()
   const [products, setProducts] = useState([])
   const [search, setSearch] = useState('')
+  const [filterSource, setFilterSource] = useState('')
   const [sheet, setSheet] = useState(null)   // null | 'add' | product obj
   const [loading, setLoading] = useState(true)
 
@@ -23,10 +24,12 @@ export default function InventoryPage() {
     setLoading(false)
   }
 
-  const filtered = products.filter(p =>
-    p.name.toLowerCase().includes(search.toLowerCase()) ||
-    (p.sku && p.sku.toLowerCase().includes(search.toLowerCase()))
-  )
+  const filtered = products.filter(p => {
+    const matchSearch = p.name.toLowerCase().includes(search.toLowerCase()) ||
+      (p.sku && p.sku.toLowerCase().includes(search.toLowerCase()))
+    const matchSource = !filterSource || (p.source || '') === filterSource
+    return matchSearch && matchSource
+  })
   const low = filtered.filter(p => p.quantity <= LOW)
   const normal = filtered.filter(p => p.quantity > LOW)
   const existingSources = [...new Set(products.map(p => p.source).filter(Boolean))].sort()
@@ -70,6 +73,17 @@ export default function InventoryPage() {
           onChange={e => setSearch(e.target.value)}
         />
       </div>
+
+      {existingSources.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <CustomSelect compact
+            label="全部來源"
+            value={filterSource || null}
+            options={existingSources.map(s => ({ value: s, label: s }))}
+            onChange={v => setFilterSource(v || '')}
+          />
+        </div>
+      )}
 
       {loading && <div className="empty">載入中…</div>}
 
