@@ -32,7 +32,7 @@ export default function OrdersPage() {
   async function fetchProcurement() {
     setLoading(true)
     const [{ data: pending }, { data: products }, { data: spProducts }, { data: rates }, { data: images }] = await Promise.all([
-      supabase.from('consumer_orders').select('*').eq('status', '待確認'),
+      supabase.from('consumer_orders').select('*').not('status', 'in', '("已出貨","完成","已取消")'),
       supabase.from('products').select('id, name, sku, source, cost, currency'),
       supabase.from('storefront_products').select('product_id, shop_price'),
       supabase.from('exchange_rates').select('*'),
