@@ -22,8 +22,11 @@ export function useUser() { return useContext(UserContext) }
 
 // ── Root Layout ────────────────────────────
 export default function RootLayout({ children }) {
-  const [lang, setLang] = useState('zh')
-  const [msgs, setMsgs] = useState({})
+  const initLang = typeof window !== 'undefined'
+    ? (localStorage.getItem('lang') || (navigator.language.startsWith('en') ? 'en' : 'zh'))
+    : 'zh'
+  const [lang, setLang] = useState(initLang)
+  const [msgs, setMsgs] = useState(messages[initLang])
   const [cart, setCart] = useState([])
   const [toast, setToast] = useState('')
   const [user, setUser] = useState(null)
