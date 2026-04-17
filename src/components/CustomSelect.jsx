@@ -25,8 +25,8 @@ export default function CustomSelect({
     function handleClick(e) {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false)
     }
-    document.addEventListener('pointerdown', handleClick)
-    return () => document.removeEventListener('pointerdown', handleClick)
+    document.addEventListener('click', handleClick, true)
+    return () => document.removeEventListener('click', handleClick, true)
   }, [open])
 
   const selected = options.find(o => o.value === value)

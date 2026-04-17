@@ -181,7 +181,7 @@ html, body, #root {
 .custom-dropdown-menu {
   position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 50;
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.12); overflow: hidden;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12); overflow-y: auto; max-height: 45vh;
   animation: dropdownSlideDown .15s ease;
 }
 .custom-dropdown-item {

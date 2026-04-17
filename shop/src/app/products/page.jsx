@@ -260,8 +260,8 @@ function FilterDropdown({ label, value, options, onChange }) {
     function handleClick(e) {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false)
     }
-    if (open) document.addEventListener('pointerdown', handleClick)
-    return () => document.removeEventListener('pointerdown', handleClick)
+    if (open) document.addEventListener('click', handleClick, true)
+    return () => document.removeEventListener('click', handleClick, true)
   }, [open])
 
   const selected = options.find(o => o.value === value)
