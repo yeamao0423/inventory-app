@@ -15,6 +15,8 @@ export default function ProductsPage() {
   const [activeTags, setActiveTags] = useState([])   // multi-select, OR logic
   const [activeSource, setActiveSource] = useState(null) // null = 全部
   const [filterOpen, setFilterOpen] = useState(false)
+  const [page, setPage] = useState(1)
+  const PAGE_SIZE = 20
 
   useEffect(() => {
     Promise.all([
@@ -47,9 +49,15 @@ export default function ProductsPage() {
     return matchSearch && matchCat && matchTag && matchSource
   })
 
+  // Reset to page 1 when any filter changes
+  useEffect(() => { setPage(1) }, [search, activeCat, activeTags, activeSource])
+
   function toggleTag(id) {
     setActiveTags(prev => prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id])
   }
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
   return (
     <div className="section">
@@ -178,9 +186,38 @@ export default function ProductsPage() {
             {lang === 'zh' ? '找不到商品' : 'No products found'}
           </div>
         ) : (
-          <div className="product-grid">
-            {filtered.map(sp => <ProductCard key={sp.id} sp={sp} t={t} lang={lang} allTags={tags} />)}
-          </div>
+          <>
+            <div className="product-grid">
+              {paged.map(sp => <ProductCard key={sp.id} sp={sp} t={t} lang={lang} allTags={tags} />)}
+            </div>
+            {totalPages > 1 && (
+              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, marginTop: 32, flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={page === 1}
+                  style={{ padding: '6px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', cursor: page === 1 ? 'default' : 'pointer', opacity: page === 1 ? 0.4 : 1 }}
+                >
+                  ‹
+                </button>
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
+                  <button
+                    key={p}
+                    onClick={() => setPage(p)}
+                    style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid var(--border)', background: p === page ? 'var(--text)' : 'var(--bg)', color: p === page ? '#fff' : 'var(--text)', cursor: 'pointer', fontWeight: p === page ? 700 : 400, minWidth: 36 }}
+                  >
+                    {p}
+                  </button>
+                ))}
+                <button
+                  onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                  disabled={page === totalPages}
+                  style={{ padding: '6px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', cursor: page === totalPages ? 'default' : 'pointer', opacity: page === totalPages ? 0.4 : 1 }}
+                >
+                  ›
+                </button>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -220,7 +257,7 @@ function ProductCard({ sp, t, lang, allTags }) {
     <Link href={`/products/${sp.product_id}`} className="product-card" style={unavailable ? { opacity: 0.6 } : {}}>
       <div style={{ position: 'relative' }}>
         {thumb
-          ? <img src={thumb} alt={name} className="product-img-placeholder" style={{objectFit:'cover'}} />
+          ? <img src={thumb} alt={name} className="product-img-placeholder" style={{objectFit:'cover'}} loading="lazy" />
           : <div className="product-img-placeholder">📦</div>}
         {statusBadge && (
           <div style={{ position: 'absolute', top: 8, left: 8 }}>{statusBadge}</div>
