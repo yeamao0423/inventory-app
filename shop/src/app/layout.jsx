@@ -22,18 +22,15 @@ export function useUser() { return useContext(UserContext) }
 
 // ── Root Layout ────────────────────────────
 export default function RootLayout({ children }) {
-  const initLang = typeof window !== 'undefined'
-    ? (localStorage.getItem('lang') || (navigator.language.startsWith('en') ? 'en' : 'zh'))
-    : 'zh'
-  const [lang, setLang] = useState(initLang)
-  const [msgs, setMsgs] = useState(messages[initLang])
+  const [lang, setLang] = useState('zh')
+  const [msgs, setMsgs] = useState(messages.zh)
   const [cart, setCart] = useState([])
   const [toast, setToast] = useState('')
   const [user, setUser] = useState(null)
   const [userLoading, setUserLoading] = useState(true)
 
   useEffect(() => {
-    const saved = localStorage.getItem('lang') || 'zh'
+    const saved = localStorage.getItem('lang') || (navigator.language.startsWith('en') ? 'en' : 'zh')
     setLang(saved)
     setMsgs(messages[saved] || messages.zh)
     const savedCart = localStorage.getItem('cart')

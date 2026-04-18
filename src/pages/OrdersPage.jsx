@@ -28,6 +28,8 @@ export default function OrdersPage() {
   const [previewItem, setPreviewItem] = useState(null)
   const [previewImgIdx, setPreviewImgIdx] = useState(0)
   const [sourceFilter, setSourceFilter] = useState('all') // 'all' | source name
+  const [consumerStatusFilter, setConsumerStatusFilter] = useState('all') // 'all' | status
+  const [consumerFilterOpen, setConsumerFilterOpen] = useState(false)
 
   async function fetchProcurement() {
     setLoading(true)
@@ -235,24 +237,68 @@ export default function OrdersPage() {
       )}
 
       {/* Consumer orders tab */}
-      {!loading && tab === 'consumer' && (
-        <>
-          <div className="stats">
-            <div className="stat">
-              <div className="stat-val text-amber">{consumerOrders.filter(o => o.status === '待確認').length}</div>
-              <div className="stat-lbl"><span className="dot" style={{background:'var(--amber)'}} />待確認</div>
-            </div>
-            <div className="stat">
-              <div className="stat-val text-green">{consumerOrders.filter(o => o.payment_status === '已付清').length}</div>
-              <div className="stat-lbl"><span className="dot" style={{background:'var(--green)'}} />已付清</div>
-            </div>
-          </div>
-          {consumerOrders.length === 0 && <div className="empty">還沒有商城訂單</div>}
-          {consumerOrders.map(o => (
-            <ConsumerOrderCard key={o.id} order={o} onTap={() => setSheet({ _type: 'consumer', ...o })} />
-          ))}
-        </>
-      )}
+      {!loading && tab === 'consumer' && (() => {
+        const statusFilters = [
+          { key: 'all', label: '全部' },
+          { key: '待確認', label: '待確認' },
+          { key: '處理中', label: '處理中' },
+          { key: '已出貨', label: '已出貨' },
+          { key: '完成', label: '完成' },
+          { key: '已取消', label: '已取消' },
+        ]
+        const filteredConsumer = consumerStatusFilter === 'all'
+          ? consumerOrders
+          : consumerOrders.filter(o => o.status === consumerStatusFilter)
+        const activeLabel = statusFilters.find(f => f.key === consumerStatusFilter)?.label || '全部'
+        const activeCount = consumerStatusFilter === 'all' ? consumerOrders.length : consumerOrders.filter(o => o.status === consumerStatusFilter).length
+        return (
+          <>
+            <button
+              onClick={() => setConsumerFilterOpen(v => !v)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+                padding: '10px 14px', borderRadius: 12, border: '1px solid var(--border)',
+                background: 'var(--card)', cursor: 'pointer', marginBottom: consumerFilterOpen ? 0 : 16,
+                fontSize: 14, fontWeight: 600, color: 'var(--text)',
+              }}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="20" y2="12" /><line x1="12" y1="18" x2="20" y2="18" />
+              </svg>
+              {activeLabel} ({activeCount})
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ marginLeft: 'auto', transition: 'transform .2s', transform: consumerFilterOpen ? 'rotate(180deg)' : '' }}>
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+            </button>
+            {consumerFilterOpen && (
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '12px 0 16px' }}>
+                {statusFilters.map(f => {
+                  const count = f.key === 'all' ? consumerOrders.length : consumerOrders.filter(o => o.status === f.key).length
+                  const isActive = consumerStatusFilter === f.key
+                  return (
+                    <button
+                      key={f.key}
+                      onClick={() => { setConsumerStatusFilter(f.key); setConsumerFilterOpen(false) }}
+                      style={{
+                        padding: '6px 12px', borderRadius: 20, border: '1px solid var(--border)',
+                        background: isActive ? 'var(--text)' : 'var(--card)',
+                        color: isActive ? '#fff' : 'var(--text-2)',
+                        fontSize: 13, fontWeight: isActive ? 700 : 400, cursor: 'pointer',
+                      }}
+                    >
+                      {f.label} ({count})
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+            {filteredConsumer.length === 0 && <div className="empty">沒有符合的訂單</div>}
+            {filteredConsumer.map(o => (
+              <ConsumerOrderCard key={o.id} order={o} onTap={() => setSheet({ _type: 'consumer', ...o })} />
+            ))}
+          </>
+        )
+      })()}
 
       {/* Procurement summary tab */}
       {!loading && tab === 'procurement' && procurementData && (() => {
@@ -505,6 +551,7 @@ function consumerStatusBadge(s) {
   if (s === '已出貨') return <span className="badge badge-ok">已出貨</span>
   if (s === '處理中') return <span className="badge badge-warn">處理中</span>
   if (s === '完成')   return <span className="badge badge-ok">完成</span>
+  if (s === '已取消') return <span className="badge badge-low" style={{ color: 'var(--red)' }}>已取消</span>
   return <span className="badge badge-low">待確認</span>
 }
 
