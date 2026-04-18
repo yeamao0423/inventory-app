@@ -181,8 +181,12 @@ html, body, #root {
 .custom-dropdown-menu {
   position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 50;
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.12); overflow-y: auto; max-height: 45vh;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12); overflow-y: auto; max-height: 45vh; max-height: 45dvh;
   animation: dropdownSlideDown .15s ease;
+}
+.custom-dropdown-menu.dropup {
+  top: auto; bottom: calc(100% + 6px);
+  animation: dropdownSlideUp .15s ease;
 }
 .custom-dropdown-item {
   padding: 13px 16px; font-size: 15px; font-weight: 500; color: var(--text);
@@ -192,6 +196,7 @@ html, body, #root {
 .custom-dropdown-item.active { background: var(--text); color: #fff; font-weight: 600; }
 .custom-dropdown-item:not(:last-child) { border-bottom: 0.5px solid var(--border); }
 @keyframes dropdownSlideDown { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes dropdownSlideUp { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 /* Compact variant */
 .custom-dropdown.compact .custom-dropdown-btn {
   padding: 8px 12px; font-size: 13px; border-radius: 8px;

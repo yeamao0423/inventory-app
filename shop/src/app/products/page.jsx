@@ -291,6 +291,7 @@ function ProductCard({ sp, t, lang, allTags }) {
 
 function FilterDropdown({ label, value, options, onChange }) {
   const [open, setOpen] = useState(false)
+  const [dropup, setDropup] = useState(false)
   const ref = useRef(null)
 
   useEffect(() => {
@@ -303,16 +304,25 @@ function FilterDropdown({ label, value, options, onChange }) {
 
   const selected = options.find(o => o.value === value)
 
+  const handleToggle = () => {
+    if (!open && ref.current) {
+      const rect = ref.current.getBoundingClientRect()
+      const spaceBelow = window.innerHeight - rect.bottom
+      setDropup(spaceBelow < 220)
+    }
+    setOpen(v => !v)
+  }
+
   return (
     <div className="custom-dropdown" ref={ref}>
-      <button className="custom-dropdown-btn" onClick={() => setOpen(v => !v)}>
+      <button className="custom-dropdown-btn" onClick={handleToggle}>
         <span className={selected ? 'custom-dropdown-selected' : ''}>{selected ? selected.label : label}</span>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ flexShrink: 0, transition: 'transform .2s', transform: open ? 'rotate(180deg)' : '' }}>
           <path d="M6 9l6 6 6-6" />
         </svg>
       </button>
       {open && (
-        <div className="custom-dropdown-menu">
+        <div className={`custom-dropdown-menu${dropup ? ' dropup' : ''}`}>
           <div
             className={`custom-dropdown-item ${!value ? 'active' : ''}`}
             onClick={() => { onChange(null); setOpen(false) }}

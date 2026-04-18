@@ -18,6 +18,7 @@ export default function CustomSelect({
   compact = false, style, className = '', allowClear = true,
 }) {
   const [open, setOpen] = useState(false)
+  const [dropup, setDropup] = useState(false)
   const ref = useRef(null)
 
   useEffect(() => {
@@ -31,6 +32,15 @@ export default function CustomSelect({
 
   const selected = options.find(o => o.value === value)
 
+  const handleToggle = () => {
+    if (!open && ref.current) {
+      const rect = ref.current.getBoundingClientRect()
+      const spaceBelow = window.innerHeight - rect.bottom
+      setDropup(spaceBelow < 220)
+    }
+    setOpen(v => !v)
+  }
+
   return (
     <div
       className={`custom-dropdown${compact ? ' compact' : ''} ${className}`}
@@ -40,7 +50,7 @@ export default function CustomSelect({
       <button
         type="button"
         className="custom-dropdown-btn"
-        onClick={() => setOpen(v => !v)}
+        onClick={handleToggle}
       >
         <span className={selected ? 'custom-dropdown-selected' : ''}>
           {selected ? selected.label : label}
@@ -54,7 +64,7 @@ export default function CustomSelect({
         </svg>
       </button>
       {open && (
-        <div className="custom-dropdown-menu">
+        <div className={`custom-dropdown-menu${dropup ? ' dropup' : ''}`}>
           {allowClear && (
             <div
               className={`custom-dropdown-item ${!value && value !== 0 ? 'active' : ''}`}
