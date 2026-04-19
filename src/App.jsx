@@ -5,12 +5,14 @@ import InventoryPage from './pages/InventoryPage'
 import OrdersPage from './pages/OrdersPage'
 import StorefrontPage from './pages/StorefrontPage'
 import UsersPage from './pages/UsersPage'
+import TripsPage from './pages/TripsPage'
 import InvitePage from './pages/InvitePage'
 
 const allTabs = [
   { path: '/',           label: '庫存',  icon: BoxIcon },
   { path: '/orders',     label: '訂單',  icon: ReceiptIcon },
   { path: '/storefront', label: '商城',  icon: ShopIcon },
+  { path: '/trips',      label: '行程',  icon: TripIcon, superOnly: true },
   { path: '/users',      label: '成員',  icon: UsersIcon, adminOnly: true },
 ]
 
@@ -25,7 +27,12 @@ export default function App() {
   if (location.pathname === '/invite') return <InvitePage />
   if (!user) return <LoginPage />
 
-  const tabs = allTabs.filter(t => !t.adminOnly || profile?.role === 'super_admin' || profile?.role === 'admin')
+  const role = profile?.role
+  const tabs = allTabs.filter(t => {
+    if (t.superOnly) return role === 'super_admin'
+    if (t.adminOnly) return role === 'super_admin' || role === 'admin'
+    return true
+  })
 
   return (
     <div className="app">
@@ -33,6 +40,7 @@ export default function App() {
         <Route path="/"           element={<InventoryPage />} />
         <Route path="/orders"     element={<OrdersPage />} />
         <Route path="/storefront" element={<StorefrontPage />} />
+        <Route path="/trips"      element={<TripsPage />} />
         <Route path="/users"      element={<UsersPage />} />
         <Route path="/invite"     element={<InvitePage />} />
       </Routes>
@@ -61,6 +69,9 @@ function ReceiptIcon() {
 }
 function ShopIcon() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l1-5h16l1 5"/><path d="M3 9a2 2 0 004 0 2 2 0 004 0 2 2 0 004 0 2 2 0 004 0M5 20h14a1 1 0 001-1v-7H4v7a1 1 0 001 1z"/></svg>
+}
+function TripIcon() {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5"/></svg>
 }
 function UsersIcon() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
