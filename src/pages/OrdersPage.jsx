@@ -4,7 +4,7 @@ import { useAuth } from '../hooks/useAuth'
 import CustomSelect from '../components/CustomSelect'
 
 export default function OrdersPage() {
-  const { can } = useAuth()
+  const { can, profile } = useAuth()
   const [tab, setTab] = useState('internal')
   const [orders, setOrders] = useState([])
   const [consumerOrders, setConsumerOrders] = useState([])
@@ -30,6 +30,8 @@ export default function OrdersPage() {
   const [sourceFilter, setSourceFilter] = useState('all') // 'all' | source name
   const [consumerStatusFilter, setConsumerStatusFilter] = useState('all') // 'all' | status
   const [consumerFilterOpen, setConsumerFilterOpen] = useState(false)
+  const [showExportSheet, setShowExportSheet] = useState(false)
+  const isAdmin = ['admin', 'super_admin'].includes(profile?.role)
 
   async function fetchProcurement() {
     setLoading(true)
@@ -251,25 +253,46 @@ export default function OrdersPage() {
           : consumerOrders.filter(o => o.status === consumerStatusFilter)
         const activeLabel = statusFilters.find(f => f.key === consumerStatusFilter)?.label || '全部'
         const activeCount = consumerStatusFilter === 'all' ? consumerOrders.length : consumerOrders.filter(o => o.status === consumerStatusFilter).length
+
         return (
           <>
-            <button
-              onClick={() => setConsumerFilterOpen(v => !v)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-                padding: '10px 14px', borderRadius: 12, border: '1px solid var(--border)',
-                background: 'var(--card)', cursor: 'pointer', marginBottom: consumerFilterOpen ? 0 : 16,
-                fontSize: 14, fontWeight: 600, color: 'var(--text)',
-              }}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="20" y2="12" /><line x1="12" y1="18" x2="20" y2="18" />
-              </svg>
-              {activeLabel} ({activeCount})
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ marginLeft: 'auto', transition: 'transform .2s', transform: consumerFilterOpen ? 'rotate(180deg)' : '' }}>
-                <path d="M6 9l6 6 6-6" />
-              </svg>
-            </button>
+            <div style={{ display: 'flex', gap: 8, marginBottom: consumerFilterOpen ? 0 : 16 }}>
+              <button
+                onClick={() => setConsumerFilterOpen(v => !v)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8, flex: 1,
+                  padding: '10px 14px', borderRadius: 12, border: '1px solid var(--border)',
+                  background: 'var(--card)', cursor: 'pointer',
+                  fontSize: 14, fontWeight: 600, color: 'var(--text)',
+                }}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="20" y2="12" /><line x1="12" y1="18" x2="20" y2="18" />
+                </svg>
+                {activeLabel} ({activeCount})
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ marginLeft: 'auto', transition: 'transform .2s', transform: consumerFilterOpen ? 'rotate(180deg)' : '' }}>
+                  <path d="M6 9l6 6 6-6" />
+                </svg>
+              </button>
+              {isAdmin && (
+                <button
+                  onClick={() => setShowExportSheet(true)}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                    padding: '10px 14px', borderRadius: 12, border: '1px solid var(--border)',
+                    background: 'var(--card)', color: 'var(--text)',
+                    cursor: 'pointer', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap',
+                  }}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" y1="15" x2="12" y2="3" />
+                  </svg>
+                  出貨單
+                </button>
+              )}
+            </div>
             {consumerFilterOpen && (
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '12px 0 16px' }}>
                 {statusFilters.map(f => {
@@ -511,6 +534,9 @@ export default function OrdersPage() {
       )}
       {sheet && sheet._type === 'consumer' && (
         <ConsumerOrderDetailSheet order={sheet} onClose={() => setSheet(null)} onSaved={fetchAll} canEdit={can('pay')} />
+      )}
+      {showExportSheet && (
+        <ExportShippingSheet orders={consumerOrders} onClose={() => setShowExportSheet(false)} />
       )}
     </div>
   )
@@ -1381,6 +1407,131 @@ function OrderDetailSheet({ order, onClose, onSaved, canEdit }) {
           <button className="btn" onClick={addPayment} disabled={saving}>{saving ? '更新中…' : '登記付款'}</button>
         </>
       )}
+    </Sheet>
+  )
+}
+
+function ExportShippingSheet({ orders, onClose }) {
+  const [statuses, setStatuses] = useState(['處理中'])
+  const [payStatuses, setPayStatuses] = useState(['已付清'])
+  const [idFrom, setIdFrom] = useState('')
+  const [idTo, setIdTo] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+
+  const allStatuses = ['待確認', '處理中', '已出貨', '完成', '已取消']
+  const allPayStatuses = ['未付', '已付清']
+
+  const toggleArr = (arr, setArr, val) =>
+    setArr(prev => prev.includes(val) ? prev.filter(v => v !== val) : [...prev, val])
+
+  const filtered = orders.filter(o => {
+    if (statuses.length > 0 && !statuses.includes(o.status)) return false
+    if (payStatuses.length > 0 && !payStatuses.includes(o.payment_status)) return false
+    if (idFrom && o.id < Number(idFrom)) return false
+    if (idTo && o.id > Number(idTo)) return false
+    if (dateFrom && o.created_at < dateFrom) return false
+    if (dateTo && o.created_at > dateTo + 'T23:59:59') return false
+    return true
+  })
+
+  function exportCSV() {
+    if (filtered.length === 0) return alert('沒有符合條件的訂單')
+    const esc = v => {
+      const s = String(v ?? '')
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s
+    }
+    const rows = [
+      ['一般交貨便-取貨不付款(以下欄位皆必填)', '', '', '', '', '', '', '', '', '', '', ''].join(','),
+      ['', '寄件人姓名', '寄件人電話', '寄件人mail', '實際包裏價值', '收件門市', '收件門市店號', '收件人姓名', '收件人電話', '收件人mail', '退貨門市', '退貨門市店號'].join(','),
+    ]
+    filtered.forEach(o => {
+      rows.push([
+        '', '徐承豊', '0955367287', 'daigogosg@gmail.com', '999',
+        esc(o.store_name || ''), esc(o.store_number || ''),
+        esc(o.customer_name || ''), esc(o.phone || ''), esc(o.email || ''),
+        '和復門市', '263115'
+      ].join(','))
+    })
+    const blob = new Blob(['\uFEFF' + rows.join('\r\n')], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `交貨便出貨單_${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const chipStyle = (active) => ({
+    padding: '5px 12px', borderRadius: 20, border: '1px solid var(--border)',
+    background: active ? 'var(--text)' : 'var(--card)',
+    color: active ? '#fff' : 'var(--text-2)',
+    fontSize: 13, fontWeight: active ? 700 : 400, cursor: 'pointer',
+  })
+  const labelStyle = { fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }
+  const inputStyle = {
+    flex: 1, padding: '8px 12px', borderRadius: 10, border: '1px solid var(--border)',
+    background: 'var(--card)', color: 'var(--text)', fontSize: 14,
+  }
+
+  return (
+    <Sheet title="匯出出貨單" onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+        {/* 訂單狀態 */}
+        <div>
+          <div style={labelStyle}>訂單狀態</div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {allStatuses.map(s => (
+              <button key={s} style={chipStyle(statuses.includes(s))}
+                onClick={() => toggleArr(statuses, setStatuses, s)}>{s}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* 付款狀態 */}
+        <div>
+          <div style={labelStyle}>付款狀態</div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {allPayStatuses.map(s => (
+              <button key={s} style={chipStyle(payStatuses.includes(s))}
+                onClick={() => toggleArr(payStatuses, setPayStatuses, s)}>{s}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* 訂單編號區間 */}
+        <div>
+          <div style={labelStyle}>訂單編號區間</div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input type="number" placeholder="從" value={idFrom} onChange={e => setIdFrom(e.target.value)} style={inputStyle} />
+            <span style={{ color: 'var(--text-3)' }}>~</span>
+            <input type="number" placeholder="到" value={idTo} onChange={e => setIdTo(e.target.value)} style={inputStyle} />
+          </div>
+        </div>
+
+        {/* 下單時間區間 */}
+        <div>
+          <div style={labelStyle}>下單時間區間</div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} style={inputStyle} />
+            <span style={{ color: 'var(--text-3)' }}>~</span>
+            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} style={inputStyle} />
+          </div>
+        </div>
+
+        {/* 匯出按鈕 */}
+        <button
+          onClick={exportCSV}
+          style={{
+            width: '100%', padding: '14px 0', borderRadius: 12, border: 'none',
+            background: filtered.length > 0 ? 'var(--text)' : 'var(--border)',
+            color: '#fff', fontSize: 15, fontWeight: 700, cursor: 'pointer',
+            marginTop: 4,
+          }}
+        >
+          匯出 CSV（{filtered.length} 筆）
+        </button>
+      </div>
     </Sheet>
   )
 }
