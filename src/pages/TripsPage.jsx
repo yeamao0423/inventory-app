@@ -139,6 +139,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
   const [costEdits, setCostEdits] = useState({}) // { productId: { cost, currency } }
   const [savingCost, setSavingCost] = useState(null)
   const [detailSheet, setDetailSheet] = useState(null) // null | 'products' | 'customers'
+  const [selectedProduct, setSelectedProduct] = useState(null) // product obj for detail popup
   const [activeSlide, setActiveSlide] = useState(0)
   const carouselRef = useRef(null)
   const SLIDE_COUNT = 3
@@ -155,7 +156,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
   async function fetchReportData() {
     setLoading(true)
 
-    const [{ data: orders }, { data: products }, { data: spProducts }, { data: rates }, { data: allOrders }] = await Promise.all([
+    const [{ data: orders }, { data: products }, { data: spProducts }, { data: rates }, { data: allOrders }, { data: images }] = await Promise.all([
       supabase.from('consumer_orders').select('*')
         .gte('created_at', trip.depart_date)
         .lte('created_at', trip.return_date + 'T23:59:59')
@@ -167,7 +168,14 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
       supabase.from('consumer_orders').select('email, created_at')
         .lt('created_at', trip.depart_date)
         .neq('status', '已取消'),
+      supabase.from('product_images').select('product_id, url, sort_order').order('sort_order', { ascending: true }),
     ])
+
+    const imageMap = {}
+    ;(images || []).forEach(img => {
+      if (!imageMap[img.product_id]) imageMap[img.product_id] = []
+      imageMap[img.product_id].push(img.url)
+    })
 
     const tripOrders = orders || []
     const historicalEmails = new Set((allOrders || []).map(o => o.email?.toLowerCase()).filter(Boolean))
@@ -197,7 +205,12 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
         if (!productAgg[pid]) {
           productAgg[pid] = {
             name: item.name,
+            sku: prod?.sku || '',
+            source: prod?.source || '',
             currency: prod?.currency || 'TWD',
+            unitCost: prod?.cost != null ? Number(prod.cost) : null,
+            shopPrice: priceMap[pid] || null,
+            images: imageMap[pid] || [],
             qty: 0,
             revenue: 0,
             cost: 0,
@@ -487,7 +500,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {data.productList.slice(0, 5).map((p, i) => (
-                <ProductRow key={p.id} p={p} i={i} costEdits={costEdits} setCostEdits={setCostEdits} saveCost={saveCost} savingCost={savingCost} />
+                <ProductRow key={p.id} p={p} i={i} costEdits={costEdits} setCostEdits={setCostEdits} saveCost={saveCost} savingCost={savingCost} onSelect={setSelectedProduct} />
               ))}
               {data.productList.length > 5 && (
                 <button onClick={() => setDetailSheet('products')} style={{
@@ -566,7 +579,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
             <div style={{ overflowY: 'auto', flex: 1 }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {data.productList.map((p, i) => (
-                  <ProductRow key={p.id} p={p} i={i} costEdits={costEdits} setCostEdits={setCostEdits} saveCost={saveCost} savingCost={savingCost} />
+                  <ProductRow key={p.id} p={p} i={i} costEdits={costEdits} setCostEdits={setCostEdits} saveCost={saveCost} savingCost={savingCost} onSelect={setSelectedProduct} />
                 ))}
               </div>
             </div>
@@ -592,22 +605,130 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
           </div>
         </div>
       )}
+
+      {/* ── Product Detail Sheet ── */}
+      {selectedProduct && (
+        <div className="sheet-overlay" onClick={e => e.target === e.currentTarget && setSelectedProduct(null)}>
+          <div className="sheet" style={{ maxHeight: '85dvh' }}>
+            <div className="sheet-handle" />
+            <div className="row-sb" style={{ marginBottom: 16 }}>
+              <div className="sheet-title" style={{ margin: 0 }}>{selectedProduct.name}</div>
+              <button onClick={() => setSelectedProduct(null)} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: 'var(--text-3)' }}>×</button>
+            </div>
+
+            {/* Images */}
+            {selectedProduct.images?.length > 0 && (
+              <div style={{
+                display: 'flex',
+                gap: 8,
+                overflowX: 'auto',
+                marginBottom: 16,
+                scrollSnapType: 'x mandatory',
+                WebkitOverflowScrolling: 'touch',
+                scrollbarWidth: 'none',
+              }}>
+                {selectedProduct.images.map((url, i) => (
+                  <img
+                    key={i}
+                    src={url}
+                    alt=""
+                    style={{
+                      width: selectedProduct.images.length === 1 ? '100%' : '80%',
+                      maxHeight: 250,
+                      borderRadius: 10,
+                      objectFit: 'cover',
+                      flexShrink: 0,
+                      scrollSnapAlign: 'start',
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+
+            {/* Info rows */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {selectedProduct.sku && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
+                  <span style={{ color: 'var(--text-3)' }}>SKU</span>
+                  <span style={{ fontWeight: 500 }}>{selectedProduct.sku}</span>
+                </div>
+              )}
+              {selectedProduct.source && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
+                  <span style={{ color: 'var(--text-3)' }}>來源</span>
+                  <span style={{ fontWeight: 500 }}>{selectedProduct.source}</span>
+                </div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
+                <span style={{ color: 'var(--text-3)' }}>成本</span>
+                <span style={{ fontWeight: 500 }}>
+                  {selectedProduct.hasCost
+                    ? `${selectedProduct.unitCost} ${selectedProduct.currency}`
+                    : '未設定'}
+                </span>
+              </div>
+              {selectedProduct.shopPrice && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
+                  <span style={{ color: 'var(--text-3)' }}>售價</span>
+                  <span style={{ fontWeight: 500 }}>${selectedProduct.shopPrice.toLocaleString()}</span>
+                </div>
+              )}
+
+              <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0' }} />
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
+                <span style={{ color: 'var(--text-3)' }}>此趟銷量</span>
+                <span style={{ fontWeight: 600 }}>{selectedProduct.qty}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
+                <span style={{ color: 'var(--text-3)' }}>此趟營收</span>
+                <span style={{ fontWeight: 600 }}>${selectedProduct.revenue.toLocaleString()}</span>
+              </div>
+              {selectedProduct.hasCost && (
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
+                    <span style={{ color: 'var(--text-3)' }}>此趟毛利</span>
+                    <span style={{ fontWeight: 600, color: selectedProduct.profit >= 0 ? '#16a34a' : '#e53e3e' }}>
+                      ${Math.round(selectedProduct.profit).toLocaleString()}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
+                    <span style={{ color: 'var(--text-3)' }}>毛利率</span>
+                    <span style={{ fontWeight: 600, color: selectedProduct.margin >= 0 ? '#16a34a' : '#e53e3e' }}>
+                      {selectedProduct.margin.toFixed(1)}%
+                    </span>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
 // ─── Shared Row Components ──────────────────────────────────────
-function ProductRow({ p, i, costEdits, setCostEdits, saveCost, savingCost }) {
+function ProductRow({ p, i, costEdits, setCostEdits, saveCost, savingCost, onSelect }) {
   return (
-    <div style={{
-      background: 'var(--card)',
-      borderRadius: 10,
-      padding: '12px 14px',
-      border: '1px solid var(--border)',
-    }}>
-      <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 6 }}>
-        <span style={{ color: 'var(--text-3)', marginRight: 6 }}>#{i + 1}</span>
-        {p.name}
+    <div
+      onClick={() => onSelect?.(p)}
+      style={{
+        background: 'var(--card)',
+        borderRadius: 10,
+        padding: '12px 14px',
+        border: '1px solid var(--border)',
+        cursor: onSelect ? 'pointer' : undefined,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+        {p.images?.[0] && (
+          <img src={p.images[0]} alt="" style={{ width: 36, height: 36, borderRadius: 6, objectFit: 'cover', flexShrink: 0 }} />
+        )}
+        <div style={{ fontWeight: 600, fontSize: 14 }}>
+          <span style={{ color: 'var(--text-3)', marginRight: 6 }}>#{i + 1}</span>
+          {p.name}
+        </div>
       </div>
       <div style={{ display: 'flex', gap: 16, fontSize: 13, color: 'var(--text-2)', flexWrap: 'wrap' }}>
         <span>銷量 {p.qty}</span>
