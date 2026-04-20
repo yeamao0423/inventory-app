@@ -9,11 +9,11 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
   const [step, setStep] = useState(0)
   const [saving, setSaving] = useState(false)
 
-  // Step 1: Images
+  // Step 0: Images
   const [imageFiles, setImageFiles] = useState([])
   const [previews, setPreviews] = useState([])
 
-  // Step 2: Basic info
+  // Step 1: Basic info
   const [name, setName] = useState('')
   const [source, setSource] = useState('')
   const [sourceSelectMode, setSourceSelectMode] = useState(false)
@@ -21,7 +21,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
   const [currency, setCurrency] = useState('TWD')
   const [shopPrice, setShopPrice] = useState('')
 
-  // Step 3: Selling settings
+  // Step 2: Selling settings
   const [sellingMode, setSellingMode] = useState('stock') // stock | collection
   const [quantity, setQuantity] = useState('')
   const [collectionEnd, setCollectionEnd] = useState('')
@@ -33,13 +33,26 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
   const [published, setPublished] = useState(true)
   const [showOptional, setShowOptional] = useState(false)
 
+  // Step 2: Variants
+  const [optionTypes, setOptionTypes] = useState([])
+  const [hasVariants, setHasVariants] = useState(false)
+  const [selectedTypes, setSelectedTypes] = useState({})
+  const [selectedValues, setSelectedValues] = useState({})
+  const [localVariants, setLocalVariants] = useState([])
+  const [batchStock, setBatchStock] = useState('')
+  const [batchPrice, setBatchPrice] = useState('')
+
   useEffect(() => {
     Promise.all([
       supabase.from('categories').select('*').order('sort_order'),
       supabase.from('tags').select('*').order('sort_order'),
-    ]).then(([{ data: cats }, { data: tgs }]) => {
+      supabase.from('variant_option_types')
+        .select('*, variant_option_values(id, value, sort_order)')
+        .order('sort_order').order('name'),
+    ]).then(([{ data: cats }, { data: tgs }, { data: opts }]) => {
       setCategories(cats || [])
       setAllTags(tgs || [])
+      setOptionTypes(opts || [])
     })
   }, [])
 
@@ -56,12 +69,105 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
     setPreviews(prev => prev.filter((_, i) => i !== idx))
   }
 
+  // --- Variant helpers ---
+  function toggleType(typeId) {
+    const tid = String(typeId)
+    setSelectedTypes(prev => {
+      const next = { ...prev }
+      if (next[tid]) {
+        delete next[tid]
+        setSelectedValues(prev2 => { const n = { ...prev2 }; delete n[tid]; return n })
+      } else {
+        next[tid] = true
+      }
+      return next
+    })
+    setLocalVariants([])
+  }
+
+  function toggleValue(typeId, valueId) {
+    const tid = String(typeId)
+    setSelectedValues(prev => {
+      const next = { ...prev }
+      if (!next[tid]) next[tid] = new Set()
+      else next[tid] = new Set(next[tid])
+      if (next[tid].has(valueId)) next[tid].delete(valueId)
+      else next[tid].add(valueId)
+      return next
+    })
+    setLocalVariants([])
+  }
+
+  function cartesian(arrays) {
+    if (arrays.length === 0) return [[]]
+    return arrays.reduce((acc, arr) =>
+      acc.flatMap(combo => arr.map(item => [...combo, item])),
+    [[]])
+  }
+
+  function generateCombinations() {
+    const activeTypeIds = Object.keys(selectedTypes).filter(tid => selectedTypes[tid] && selectedValues[tid]?.size > 0)
+    if (activeTypeIds.length === 0) return
+    const axes = activeTypeIds.map(tid =>
+      [...selectedValues[tid]].map(vid => ({ tid, vid }))
+    )
+    const combos = cartesian(axes)
+    setLocalVariants(combos.map(combo => {
+      const options = {}
+      combo.forEach(({ tid, vid }) => { options[tid] = vid })
+      return { options, stock: 0, variant_price: null }
+    }))
+  }
+
+  function updateLocalVariant(idx, field, value) {
+    setLocalVariants(prev => prev.map((v, i) => {
+      if (i !== idx) return v
+      if (field === 'stock') return { ...v, stock: value === '' ? 0 : Number(value) }
+      return { ...v, variant_price: value === '' ? null : Number(value) }
+    }))
+  }
+
+  function removeLocalVariant(idx) {
+    setLocalVariants(prev => prev.filter((_, i) => i !== idx))
+  }
+
+  function applyBatch(field) {
+    const val = field === 'stock' ? batchStock : batchPrice
+    if (val === '') return
+    setLocalVariants(prev => prev.map(v => ({
+      ...v,
+      [field]: field === 'stock' ? Number(val) : Number(val),
+    })))
+    if (field === 'stock') setBatchStock('')
+    else setBatchPrice('')
+  }
+
+  function resolveVariantLabel(options) {
+    if (!options || Object.keys(options).length === 0) return '無規格'
+    return Object.entries(options).map(([typeId, valueId]) => {
+      const type = optionTypes.find(t => t.id === Number(typeId))
+      const val = type?.variant_option_values?.find(v => v.id === valueId)
+      return val ? `${type.name}: ${val.value}` : ''
+    }).filter(Boolean).join(' / ')
+  }
+
+  const activeTypeIds = Object.keys(selectedTypes).filter(tid => selectedTypes[tid] && selectedValues[tid]?.size > 0)
+  const totalCombos = activeTypeIds.length > 0
+    ? activeTypeIds.reduce((acc, tid) => acc * (selectedValues[tid]?.size || 1), 1)
+    : 0
+
+  // --- Validation ---
   function canNext() {
     if (step === 0) return imageFiles.length > 0
     if (step === 1) return name.trim() && shopPrice
     if (step === 2) {
-      if (sellingMode === 'stock' && (!quantity || Number(quantity) <= 0)) return false
       if (sellingMode === 'collection' && !collectionEnd) return false
+      if (sellingMode === 'stock') {
+        if (hasVariants && localVariants.length > 0) {
+          return localVariants.some(v => v.stock > 0)
+        }
+        if (!hasVariants && (!quantity || Number(quantity) <= 0)) return false
+      }
       return true
     }
     return true
@@ -70,11 +176,14 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
   async function submit() {
     setSaving(true)
     try {
-      // 1. Create product in inventory
-      const qty = sellingMode === 'stock' ? (Number(quantity) || 0) : 0
+      // 1. Create product
+      const baseQty = hasVariants && localVariants.length > 0
+        ? localVariants.reduce((sum, v) => sum + (v.stock || 0), 0)
+        : sellingMode === 'stock' ? (Number(quantity) || 0) : 0
+
       const { data: inserted, error: prodErr } = await supabase.from('products').insert({
         name: name.trim(),
-        quantity: qty,
+        quantity: baseQty,
         unit: '個',
         cost: cost ? Number(cost) : 0,
         currency,
@@ -95,23 +204,35 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
         await uploadImages(imageFiles, productId)
       }
 
-      // 3. Create history record if qty > 0
-      if (qty > 0) {
+      // 3. History record
+      if (baseQty > 0) {
         await supabase.from('history').insert({
           product_id: productId,
-          change: qty,
+          change: baseQty,
           reason: '初始建立',
         })
       }
 
-      // 4. Create tags
+      // 4. Tags
       if (selectedTags.length > 0) {
         await supabase.from('product_tags').insert(
           selectedTags.map(tagId => ({ product_id: productId, tag_id: tagId }))
         )
       }
 
-      // 5. Create storefront listing
+      // 5. Variants
+      if (hasVariants && localVariants.length > 0) {
+        await supabase.from('product_variants').insert(
+          localVariants.map(v => ({
+            product_id: productId,
+            options: v.options,
+            stock: v.stock || 0,
+            variant_price: v.variant_price,
+          }))
+        )
+      }
+
+      // 6. Storefront listing
       const { error: sfErr } = await supabase.from('storefront_products').insert({
         product_id: productId,
         shop_price: Number(shopPrice),
@@ -298,7 +419,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
               </button>
             </div>
 
-            {sellingMode === 'stock' && (
+            {sellingMode === 'stock' && !hasVariants && (
               <div className="form-group">
                 <label className="form-label">庫存數量 *</label>
                 <input className="form-input" type="number" placeholder="0" value={quantity} onChange={e => setQuantity(e.target.value)} style={{ width: 140 }} />
@@ -310,6 +431,192 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
                 <label className="form-label">結單時間 *</label>
                 <input className="form-input" type="datetime-local" value={collectionEnd} onChange={e => setCollectionEnd(e.target.value)} />
               </div>
+            )}
+
+            {/* Variant section */}
+            {optionTypes.length > 0 && (
+              <>
+                <div
+                  style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: '12px 0', borderTop: '0.5px solid var(--border)', marginTop: 8,
+                  }}
+                >
+                  <span className="fs13 fw600" style={{ color: 'var(--text-2)' }}>商品規格</span>
+                  <div
+                    onClick={() => {
+                      setHasVariants(v => !v)
+                      if (hasVariants) {
+                        setSelectedTypes({})
+                        setSelectedValues({})
+                        setLocalVariants([])
+                      }
+                    }}
+                    style={{
+                      width: 44, height: 26, borderRadius: 13, cursor: 'pointer', transition: 'background .2s',
+                      background: hasVariants ? 'var(--green)' : 'var(--border)',
+                      position: 'relative',
+                    }}
+                  >
+                    <div style={{
+                      width: 20, height: 20, borderRadius: '50%', background: '#fff',
+                      position: 'absolute', top: 3, transition: 'left .2s',
+                      left: hasVariants ? 21 : 3,
+                    }} />
+                  </div>
+                </div>
+
+                {hasVariants && (
+                  <div style={{ paddingTop: 4 }}>
+                    {/* Select types & values */}
+                    <div style={{ background: 'var(--surface)', borderRadius: 12, padding: 14, marginBottom: 12, border: '0.5px solid var(--border)' }}>
+                      <div className="muted fs12 fw600" style={{ marginBottom: 10 }}>1. 選擇規格</div>
+                      {optionTypes.map(type => {
+                        const tid = String(type.id)
+                        const isActive = !!selectedTypes[tid]
+                        const vals = [...(type.variant_option_values || [])].sort((a, b) => a.sort_order - b.sort_order)
+                        return (
+                          <div key={type.id} style={{ marginBottom: 12 }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: isActive ? 8 : 0 }}>
+                              <input
+                                type="checkbox"
+                                checked={isActive}
+                                onChange={() => toggleType(type.id)}
+                                style={{ width: 16, height: 16, accentColor: 'var(--text)' }}
+                              />
+                              <span className="fw600" style={{ fontSize: 14 }}>{type.name}</span>
+                              {isActive && selectedValues[tid]?.size > 0 && (
+                                <span className="muted fs12">（已選 {selectedValues[tid].size} 個）</span>
+                              )}
+                            </label>
+                            {isActive && (
+                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', paddingLeft: 24 }}>
+                                {vals.map(val => {
+                                  const isSelected = selectedValues[tid]?.has(val.id)
+                                  return (
+                                    <button
+                                      key={val.id}
+                                      onClick={() => toggleValue(type.id, val.id)}
+                                      style={{
+                                        fontSize: 13, padding: '4px 14px', borderRadius: 20,
+                                        background: isSelected ? 'var(--text)' : 'transparent',
+                                        color: isSelected ? '#fff' : 'var(--text-2)',
+                                        border: '0.5px solid var(--border)',
+                                        cursor: 'pointer', transition: 'all .15s',
+                                      }}
+                                    >{val.value}</button>
+                                  )
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+
+                      {totalCombos > 0 && (
+                        <button
+                          className="btn"
+                          onClick={generateCombinations}
+                          style={{ fontSize: 13, padding: '10px 0', marginTop: 4 }}
+                        >
+                          產生組合（共 {totalCombos} 種）
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Variant matrix */}
+                    {localVariants.length > 0 && (
+                      <div style={{ background: 'var(--surface)', borderRadius: 12, padding: 14, border: '0.5px solid var(--border)' }}>
+                        <div className="muted fs12 fw600" style={{ marginBottom: 10 }}>
+                          2. 編輯規格（{localVariants.length} 種）
+                        </div>
+
+                        {/* Batch controls */}
+                        {sellingMode === 'stock' && (
+                          <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                              <span className="muted fs12">批次庫存:</span>
+                              <input
+                                type="number"
+                                value={batchStock}
+                                onChange={e => setBatchStock(e.target.value)}
+                                placeholder="0"
+                                style={{ width: 60, padding: '4px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center' }}
+                              />
+                              <button onClick={() => applyBatch('stock')} style={{ padding: '4px 10px', borderRadius: 6, border: '0.5px solid var(--border)', background: 'var(--bg)', fontSize: 11, cursor: 'pointer' }}>套用</button>
+                            </div>
+                            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                              <span className="muted fs12">批次售價:</span>
+                              <input
+                                type="number"
+                                value={batchPrice}
+                                onChange={e => setBatchPrice(e.target.value)}
+                                placeholder={String(shopPrice || 0)}
+                                style={{ width: 80, padding: '4px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center' }}
+                              />
+                              <button onClick={() => applyBatch('variant_price')} style={{ padding: '4px 10px', borderRadius: 6, border: '0.5px solid var(--border)', background: 'var(--bg)', fontSize: 11, cursor: 'pointer' }}>套用</button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Table */}
+                        <div style={{ overflowX: 'auto' }}>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                            <thead>
+                              <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                                <th style={{ padding: '8px 6px', textAlign: 'left', fontSize: 12, color: 'var(--text-3)', fontWeight: 600 }}>規格</th>
+                                {sellingMode === 'stock' && (
+                                  <th style={{ padding: '8px 6px', width: 70, textAlign: 'center', fontSize: 12, color: 'var(--text-3)', fontWeight: 600 }}>庫存</th>
+                                )}
+                                <th style={{ padding: '8px 6px', width: 90, textAlign: 'center', fontSize: 12, color: 'var(--text-3)', fontWeight: 600 }}>售價(NT$)</th>
+                                <th style={{ padding: '8px 6px', width: 36 }}></th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {localVariants.map((v, idx) => (
+                                <tr key={idx} style={{ borderBottom: '1px solid var(--border-light)' }}>
+                                  <td style={{ padding: '8px 6px' }}>
+                                    <span className="fw600">{resolveVariantLabel(v.options)}</span>
+                                  </td>
+                                  {sellingMode === 'stock' && (
+                                    <td style={{ padding: '8px 6px', textAlign: 'center' }}>
+                                      <input
+                                        type="number"
+                                        value={v.stock || ''}
+                                        onChange={e => updateLocalVariant(idx, 'stock', e.target.value)}
+                                        placeholder="0"
+                                        style={{ width: '100%', padding: '5px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center', background: 'var(--bg)' }}
+                                      />
+                                    </td>
+                                  )}
+                                  <td style={{ padding: '8px 6px', textAlign: 'center' }}>
+                                    <input
+                                      type="number"
+                                      value={v.variant_price ?? ''}
+                                      onChange={e => updateLocalVariant(idx, 'variant_price', e.target.value)}
+                                      placeholder={String(shopPrice || 0)}
+                                      style={{ width: '100%', padding: '5px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center', background: 'var(--bg)' }}
+                                    />
+                                  </td>
+                                  <td style={{ padding: '8px 6px', textAlign: 'center' }}>
+                                    <button
+                                      onClick={() => removeLocalVariant(idx)}
+                                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', fontSize: 15, padding: 0 }}
+                                    >×</button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div className="muted fs12" style={{ marginTop: 8 }}>
+                          售價留空 = 使用商城售價 NT${Number(shopPrice || 0).toLocaleString()}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
             )}
 
             {/* Optional fields toggle */}
@@ -407,7 +714,36 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
             <ConfirmRow label="採購來源" value={source || '未設定'} muted={!source} />
             <ConfirmRow label="進貨成本" value={cost ? `${cost} ${currency}` : '未設定'} muted={!cost} />
             <ConfirmRow label="商城售價" value={`NT$ ${Number(shopPrice).toLocaleString()}`} />
-            <ConfirmRow label="販售模式" value={sellingMode === 'stock' ? `現貨（庫存 ${quantity}）` : `限時單（截止 ${formatDateTime(collectionEnd)}）`} />
+            <ConfirmRow label="販售模式" value={
+              sellingMode === 'stock'
+                ? hasVariants && localVariants.length > 0
+                  ? `現貨（${localVariants.length} 種規格）`
+                  : `現貨（庫存 ${quantity}）`
+                : `限時單（截止 ${formatDateTime(collectionEnd)}）`
+            } />
+
+            {/* Variant summary in confirm */}
+            {hasVariants && localVariants.length > 0 && (
+              <div style={{ margin: '12px 0', background: 'var(--surface)', borderRadius: 10, border: '0.5px solid var(--border)', overflow: 'hidden' }}>
+                <div style={{ padding: '8px 12px', borderBottom: '0.5px solid var(--border)', background: 'var(--bg)' }}>
+                  <span className="fs12 fw600 muted">規格明細</span>
+                </div>
+                {localVariants.map((v, idx) => (
+                  <div key={idx} style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: '8px 12px', borderBottom: idx < localVariants.length - 1 ? '0.5px solid var(--border-light)' : 'none',
+                  }}>
+                    <span className="fs13">{resolveVariantLabel(v.options)}</span>
+                    <span className="fs12 muted">
+                      {sellingMode === 'stock' && `庫存 ${v.stock}`}
+                      {sellingMode === 'stock' && v.variant_price != null && ' · '}
+                      {v.variant_price != null ? `NT$${v.variant_price.toLocaleString()}` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {descZh && <ConfirmRow label="描述" value={descZh} />}
             {selectedCategory && <ConfirmRow label="分類" value={categories.find(c => String(c.id) === selectedCategory)?.name || ''} />}
             {selectedTags.length > 0 && <ConfirmRow label="標籤" value={allTags.filter(t => selectedTags.includes(t.id)).map(t => t.name).join('、')} />}
