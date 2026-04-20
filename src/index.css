@@ -58,7 +58,7 @@ html, body, #root {
   -webkit-backdrop-filter: blur(20px);
   border-top: 0.5px solid var(--border);
   display: flex;
-  padding-bottom: var(--safe-bot);
+  padding-bottom: max(var(--safe-bot), 8px);
   z-index: 100;
 }
 
@@ -225,7 +225,7 @@ html, body, #root {
 .sheet-overlay {
   position: fixed;
   top: 0; left: 0; right: 0;
-  bottom: calc(51px + var(--safe-bot));
+  bottom: calc(51px + max(var(--safe-bot), 8px));
   background: rgba(0,0,0,0.4);
   z-index: 200; display: flex;
   align-items: flex-end;
