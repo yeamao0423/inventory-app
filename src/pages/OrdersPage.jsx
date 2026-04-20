@@ -31,6 +31,7 @@ export default function OrdersPage() {
   const [consumerStatusFilter, setConsumerStatusFilter] = useState('all') // 'all' | status
   const [consumerFilterOpen, setConsumerFilterOpen] = useState(false)
   const [showExportSheet, setShowExportSheet] = useState(false)
+  const [cancelledOpen, setCancelledOpen] = useState(false)
   const isAdmin = ['admin', 'super_admin'].includes(profile?.role)
 
   async function fetchProcurement() {
@@ -171,7 +172,7 @@ export default function OrdersPage() {
         <div>
           <div className="ph-title">訂單管理</div>
           <div className="ph-sub">
-            {tab === 'internal' ? `自建 ${orders.length} 筆` : `商城 ${consumerOrders.length} 筆`}
+            {tab === 'internal' ? `自建 ${orders.length} 筆` : `商城 ${consumerOrders.filter(o => o.status !== '已取消').length} 筆`}
           </div>
         </div>
         {tab === 'internal' && can('add') && <button className="icon-btn" onClick={() => setSheet('add')}>+</button>}
@@ -240,19 +241,20 @@ export default function OrdersPage() {
 
       {/* Consumer orders tab */}
       {!loading && tab === 'consumer' && (() => {
+        const activeOrders = consumerOrders.filter(o => o.status !== '已取消')
+        const cancelledOrders = consumerOrders.filter(o => o.status === '已取消')
         const statusFilters = [
           { key: 'all', label: '全部' },
           { key: '待確認', label: '待確認' },
           { key: '處理中', label: '處理中' },
           { key: '已出貨', label: '已出貨' },
           { key: '完成', label: '完成' },
-          { key: '已取消', label: '已取消' },
         ]
         const filteredConsumer = consumerStatusFilter === 'all'
-          ? consumerOrders
-          : consumerOrders.filter(o => o.status === consumerStatusFilter)
+          ? activeOrders
+          : activeOrders.filter(o => o.status === consumerStatusFilter)
         const activeLabel = statusFilters.find(f => f.key === consumerStatusFilter)?.label || '全部'
-        const activeCount = consumerStatusFilter === 'all' ? consumerOrders.length : consumerOrders.filter(o => o.status === consumerStatusFilter).length
+        const activeCount = consumerStatusFilter === 'all' ? activeOrders.length : activeOrders.filter(o => o.status === consumerStatusFilter).length
 
         return (
           <>
@@ -296,7 +298,7 @@ export default function OrdersPage() {
             {consumerFilterOpen && (
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '12px 0 16px' }}>
                 {statusFilters.map(f => {
-                  const count = f.key === 'all' ? consumerOrders.length : consumerOrders.filter(o => o.status === f.key).length
+                  const count = f.key === 'all' ? activeOrders.length : activeOrders.filter(o => o.status === f.key).length
                   const isActive = consumerStatusFilter === f.key
                   return (
                     <button
@@ -319,6 +321,36 @@ export default function OrdersPage() {
             {filteredConsumer.map(o => (
               <ConsumerOrderCard key={o.id} order={o} onTap={() => setSheet({ _type: 'consumer', ...o })} />
             ))}
+
+            {/* 已取消訂單 — 可收合區塊 */}
+            {cancelledOrders.length > 0 && (
+              <div style={{ marginTop: 20 }}>
+                <button
+                  onClick={() => setCancelledOpen(v => !v)}
+                  style={{
+                    width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '10px 14px', borderRadius: 10,
+                    background: 'var(--bg)', border: '0.5px solid var(--border)',
+                    cursor: 'pointer', fontSize: 13, fontWeight: 600, color: 'var(--text-3)',
+                  }}
+                >
+                  <span>已取消訂單（{cancelledOrders.length} 筆）</span>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+                    style={{ transition: 'transform .2s', transform: cancelledOpen ? 'rotate(180deg)' : '' }}>
+                    <path d="M6 9l6 6 6-6" />
+                  </svg>
+                </button>
+                {cancelledOpen && (
+                  <div style={{ marginTop: 8 }}>
+                    {cancelledOrders.map(o => (
+                      <div key={o.id} style={{ opacity: 0.6 }}>
+                        <ConsumerOrderCard order={o} onTap={() => setSheet({ _type: 'consumer', ...o })} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </>
         )
       })()}
