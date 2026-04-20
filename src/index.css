@@ -22,34 +22,37 @@
 }
 
 html, body, #root {
-  height: 100%;
+  height: 100vh;
+  height: 100dvh;
   font-family: -apple-system, 'SF Pro Display', 'Helvetica Neue', sans-serif;
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
+  overflow: hidden;
 }
 
 /* ── Layout ───────────────────────────────── */
 .app {
   max-width: 430px;
   margin: 0 auto;
-  height: 100%;
+  height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
-  position: relative;
+  overflow: hidden;
 }
 
 .page {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: calc(var(--safe-top) + 16px) 16px calc(var(--safe-bot) + 80px);
+  padding: calc(var(--safe-top) + 16px) 16px 16px;
   -webkit-overflow-scrolling: touch;
 }
 
 /* ── Tab Bar ──────────────────────────────── */
 .tabbar {
-  position: sticky;
-  bottom: 0;
+  flex-shrink: 0;
   background: rgba(255,255,255,0.92);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
