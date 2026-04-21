@@ -3,8 +3,8 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import CustomSelect from '../components/CustomSelect'
 
-const ROLE_LABEL = { super_admin:'超級管理員', admin:'管理員', editor:'編輯者', viewer:'檢視者' }
-const ROLE_BADGE = { super_admin:'badge-warn', admin:'badge-blue', editor:'badge-ok', viewer:'badge' }
+const ROLE_LABEL = { super_admin:'超級管理員', admin:'管理員', editor:'編輯者', viewer:'檢視者', consumer:'消費者' }
+const ROLE_BADGE = { super_admin:'badge-warn', admin:'badge-blue', editor:'badge-ok', viewer:'badge', consumer:'badge' }
 
 export default function UsersPage() {
   const { profile, user, can } = useAuth()
@@ -19,6 +19,7 @@ export default function UsersPage() {
   const [inviting, setInviting]       = useState(false)
   const [inviteLink, setInviteLink]   = useState('')
   const [copied, setCopied]           = useState(false)
+  const [consumersOpen, setConsumersOpen] = useState(false)
 
   const canAccess     = profile?.role === 'super_admin' || profile?.role === 'admin'
   const canChangeRole = can('manage_users')
@@ -115,7 +116,7 @@ export default function UsersPage() {
       <div className="ph">
         <div>
           <div className="ph-title">成員管理</div>
-          <div className="ph-sub">{users.length} 位成員</div>
+          <div className="ph-sub">{users.filter(u => u.role !== 'consumer').length} 位後台成員</div>
         </div>
       </div>
 
@@ -193,48 +194,94 @@ export default function UsersPage() {
       )}
 
       {/* 成員列表 */}
-      <div className="sec">目前成員</div>
-      {loading ? (
-        <div className="empty">載入中…</div>
-      ) : (
-        <div className="card">
-          {users.map(u => (
-            <div key={u.id} className="card-row" style={{ flexDirection:'column', alignItems:'flex-start', gap:8 }}>
-              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', width:'100%' }}>
-                <div>
-                  <div style={{ fontWeight:600, fontSize:15 }}>{u.name || '（未命名）'}</div>
-                  <div style={{ fontSize:12, color:'var(--text-3)', marginTop:2 }}>{u.email}</div>
-                </div>
-                <span className={`badge ${ROLE_BADGE[u.role] ?? ''}`}>{ROLE_LABEL[u.role] ?? u.role}</span>
+      {(() => {
+        const backendUsers = users.filter(u => u.role !== 'consumer')
+        const consumers = users.filter(u => u.role === 'consumer')
+        return (
+          <>
+            <div className="sec">後台成員</div>
+            {loading ? (
+              <div className="empty">載入中…</div>
+            ) : backendUsers.length === 0 ? (
+              <div className="empty">尚無後台成員</div>
+            ) : (
+              <div className="card">
+                {backendUsers.map(u => (
+                  <div key={u.id} className="card-row" style={{ flexDirection:'column', alignItems:'flex-start', gap:8 }}>
+                    <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', width:'100%' }}>
+                      <div>
+                        <div style={{ fontWeight:600, fontSize:15 }}>{u.name || '（未命名）'}</div>
+                        <div style={{ fontSize:12, color:'var(--text-3)', marginTop:2 }}>{u.email}</div>
+                      </div>
+                      <span className={`badge ${ROLE_BADGE[u.role] ?? ''}`}>{ROLE_LABEL[u.role] ?? u.role}</span>
+                    </div>
+                    <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', width:'100%' }}>
+                      <div style={{ fontSize:11, color:'var(--text-3)' }}>
+                        加入於 {new Date(u.created_at).toLocaleDateString('zh-TW')}
+                      </div>
+                      {u.id === user?.id ? (
+                        <span style={{ fontSize:12, color:'var(--text-3)' }}>（目前登入）</span>
+                      ) : canChangeRole ? (
+                        <CustomSelect compact
+                          label={ROLE_LABEL[u.role]}
+                          value={u.role}
+                          options={[
+                            { value: 'viewer', label: '檢視者' },
+                            { value: 'editor', label: '編輯者' },
+                            { value: 'admin', label: '管理員' },
+                            { value: 'super_admin', label: '超級管理員' },
+                          ]}
+                          onChange={v => v && changeRole(u.id, v)}
+                          allowClear={false}
+                          style={{ width: 'auto', minWidth: 110 }}
+                        />
+                      ) : (
+                        <span style={{ fontSize:12, color:'var(--text-3)' }}>{ROLE_LABEL[u.role]}</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
-              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', width:'100%' }}>
-                <div style={{ fontSize:11, color:'var(--text-3)' }}>
-                  加入於 {new Date(u.created_at).toLocaleDateString('zh-TW')}
-                </div>
-                {u.id === user?.id ? (
-                  <span style={{ fontSize:12, color:'var(--text-3)' }}>（目前登入）</span>
-                ) : canChangeRole ? (
-                  <CustomSelect compact
-                    label={ROLE_LABEL[u.role]}
-                    value={u.role}
-                    options={[
-                      { value: 'viewer', label: '檢視者' },
-                      { value: 'editor', label: '編輯者' },
-                      { value: 'admin', label: '管理員' },
-                      { value: 'super_admin', label: '超級管理員' },
-                    ]}
-                    onChange={v => v && changeRole(u.id, v)}
-                    allowClear={false}
-                    style={{ width: 'auto', minWidth: 110 }}
-                  />
-                ) : (
-                  <span style={{ fontSize:12, color:'var(--text-3)' }}>{ROLE_LABEL[u.role]}</span>
+            )}
+
+            {/* 商城消費者（可收合） */}
+            {!loading && consumers.length > 0 && (
+              <div style={{ marginTop: 20 }}>
+                <button
+                  onClick={() => setConsumersOpen(v => !v)}
+                  style={{
+                    width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '10px 14px', borderRadius: 10,
+                    background: 'var(--bg)', border: '0.5px solid var(--border)',
+                    cursor: 'pointer', fontSize: 13, fontWeight: 600, color: 'var(--text-3)',
+                  }}
+                >
+                  <span>商城消費者（{consumers.length} 位）</span>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+                    style={{ transition: 'transform .2s', transform: consumersOpen ? 'rotate(180deg)' : '' }}>
+                    <path d="M6 9l6 6 6-6" />
+                  </svg>
+                </button>
+                {consumersOpen && (
+                  <div className="card" style={{ marginTop: 8 }}>
+                    {consumers.map(u => (
+                      <div key={u.id} className="card-row" style={{ opacity: 0.7 }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontWeight: 500, fontSize: 14 }}>{u.name || '（未命名）'}</div>
+                          <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>{u.email}</div>
+                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                          {new Date(u.created_at).toLocaleDateString('zh-TW')}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
-            </div>
-          ))}
-        </div>
-      )}
+            )}
+          </>
+        )
+      })()}
     </div>
   )
 }

@@ -33,11 +33,26 @@ export default function LoginPage() {
     if (password !== confirm) return setError('兩次密碼輸入不一致。')
     if (password.length < 6) return setError('密碼至少需要 6 個字元。')
     setLoading(true)
-    const { error } = await signUp(email, password, name)
-    if (error) {
-      setError(error.message.includes('already') ? '此電子郵件已被註冊。' : '註冊失敗，請稍後再試。')
-    } else {
-      setSuccess('帳號已建立！請至信箱完成驗證後登入。')
+    try {
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/register-backend`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify({ email, password, name }),
+        },
+      )
+      const data = await res.json()
+      if (!res.ok) {
+        setError(data.error || '註冊失敗，請稍後再試。')
+      } else {
+        setSuccess('帳號已建立！請至信箱完成驗證後登入。')
+      }
+    } catch {
+      setError('註冊失敗，請稍後再試。')
     }
     setLoading(false)
   }

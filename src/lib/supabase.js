@@ -15,13 +15,17 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
 // viewer → 只能查看，不能修改
 
 export const ROLES = {
+  SUPER_ADMIN: 'super_admin',
   ADMIN: 'admin',
   EDITOR: 'editor',
   VIEWER: 'viewer',
+  CONSUMER: 'consumer',
 }
 
 export const ROLE_LABELS = {
+  super_admin: '超級管理員',
   admin: '管理員',
-  editor: '編輯',
+  editor: '編輯者',
   viewer: '檢視者',
+  consumer: '消費者',
 }

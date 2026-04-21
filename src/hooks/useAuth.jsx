@@ -67,11 +67,14 @@ export function AuthProvider({ children }) {
     if (role === 'admin') return action !== 'manage_users'
     if (role === 'editor') return ['view', 'add', 'edit', 'pay'].includes(action)
     if (role === 'viewer') return action === 'view'
+    // consumer 無任何後台權限
     return false
   }
 
+  const isBackendUser = profile?.role && profile.role !== 'consumer'
+
   return (
-    <AuthContext.Provider value={{ user, profile, loading, signIn, signUp, sendPasswordReset, signOut, can }}>
+    <AuthContext.Provider value={{ user, profile, loading, signIn, signUp, sendPasswordReset, signOut, can, isBackendUser }}>
       {children}
     </AuthContext.Provider>
   )

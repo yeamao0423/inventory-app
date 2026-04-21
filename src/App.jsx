@@ -17,7 +17,7 @@ const allTabs = [
 ]
 
 export default function App() {
-  const { user, profile, loading } = useAuth()
+  const { user, profile, loading, isBackendUser, signOut } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -26,6 +26,21 @@ export default function App() {
   )
   if (location.pathname === '/invite') return <InvitePage />
   if (!user) return <LoginPage />
+
+  // consumer 或無角色 → 無權限頁面
+  if (!isBackendUser) return (
+    <div className="login-wrap">
+      <div style={{ textAlign:'center' }}>
+        <div style={{ fontSize:36, marginBottom:12 }}>🔒</div>
+        <div style={{ fontWeight:600, fontSize:18, marginBottom:8 }}>無後台存取權限</div>
+        <div style={{ fontSize:13, color:'var(--text-3)', marginBottom:24, lineHeight:1.6 }}>
+          此帳號為商城消費者帳號，無法存取後台管理系統。<br/>
+          如需後台權限，請聯繫管理員。
+        </div>
+        <button className="btn" style={{ maxWidth:200, margin:'0 auto' }} onClick={signOut}>登出</button>
+      </div>
+    </div>
+  )
 
   const role = profile?.role
   const tabs = allTabs.filter(t => {
