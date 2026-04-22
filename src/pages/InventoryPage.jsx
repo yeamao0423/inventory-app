@@ -7,16 +7,21 @@ import QuickListSheet from '../components/QuickListSheet'
 
 const LOW = 10
 
+const PAGE_SIZE = 20
+
 export default function InventoryPage() {
   const { profile, signOut, can } = useAuth()
   const [products, setProducts] = useState([])
   const [search, setSearch] = useState('')
   const [filterSource, setFilterSource] = useState('')
+  const [filterCategory, setFilterCategory] = useState('')
+  const [categories, setCategories] = useState([])
   const [sheet, setSheet] = useState(null)   // null | 'add' | product obj
   const [quickList, setQuickList] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [page, setPage] = useState(1)
 
-  useEffect(() => { fetchProducts() }, [])
+  useEffect(() => { fetchProducts(); fetchCategories() }, [])
 
   async function fetchProducts() {
     const { data } = await supabase
@@ -27,14 +32,26 @@ export default function InventoryPage() {
     setLoading(false)
   }
 
+  async function fetchCategories() {
+    const { data } = await supabase.from('categories').select('*').order('sort_order')
+    setCategories(data || [])
+  }
+
   const filtered = products.filter(p => {
     const matchSearch = p.name.toLowerCase().includes(search.toLowerCase()) ||
       (p.sku && p.sku.toLowerCase().includes(search.toLowerCase()))
     const matchSource = !filterSource || (p.source || '') === filterSource
-    return matchSearch && matchSource
+    const matchCategory = !filterCategory || String(p.category_id || '') === filterCategory
+    return matchSearch && matchSource && matchCategory
   })
   const low = filtered.filter(p => p.quantity <= LOW)
   const normal = filtered.filter(p => p.quantity > LOW)
+  const allFiltered = [...low, ...normal]
+  const totalPages = Math.max(1, Math.ceil(allFiltered.length / PAGE_SIZE))
+  const safePage = Math.min(page, totalPages)
+  const pagedProducts = allFiltered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+  const pagedLow = pagedProducts.filter(p => p.quantity <= LOW)
+  const pagedNormal = pagedProducts.filter(p => p.quantity > LOW)
   const existingSources = [...new Set(products.map(p => p.source).filter(Boolean))].sort()
 
   return (
@@ -83,39 +100,79 @@ export default function InventoryPage() {
         <input
           placeholder="搜尋商品名稱或 SKU…"
           value={search}
-          onChange={e => setSearch(e.target.value)}
+          onChange={e => { setSearch(e.target.value); setPage(1) }}
         />
       </div>
 
-      {existingSources.length > 0 && (
-        <div style={{ marginBottom: 12 }}>
-          <CustomSelect compact
-            label="全部來源"
-            value={filterSource || null}
-            options={existingSources.map(s => ({ value: s, label: s }))}
-            onChange={v => setFilterSource(v || '')}
-          />
+      {(existingSources.length > 0 || categories.length > 0) && (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+          {categories.length > 0 && (
+            <CustomSelect compact
+              label="全部分類"
+              value={filterCategory || null}
+              options={categories.map(c => ({ value: String(c.id), label: c.name }))}
+              onChange={v => { setFilterCategory(v || ''); setPage(1) }}
+              style={{ flex: 1, minWidth: 100 }}
+            />
+          )}
+          {existingSources.length > 0 && (
+            <CustomSelect compact
+              label="全部來源"
+              value={filterSource || null}
+              options={existingSources.map(s => ({ value: s, label: s }))}
+              onChange={v => { setFilterSource(v || ''); setPage(1) }}
+              style={{ flex: 1, minWidth: 100 }}
+            />
+          )}
         </div>
       )}
 
       {loading && <div className="empty">載入中…</div>}
 
-      {low.length > 0 && (
+      {pagedLow.length > 0 && (
         <>
           <div className="sec">⚠ 低庫存警示</div>
-          {low.map(p => <ProductRow key={p.id} product={p} onTap={() => setSheet(p)} low />)}
+          {pagedLow.map(p => <ProductRow key={p.id} product={p} onTap={() => setSheet(p)} low />)}
         </>
       )}
 
-      {normal.length > 0 && (
+      {pagedNormal.length > 0 && (
         <>
           <div className="sec">所有商品</div>
-          {normal.map(p => <ProductRow key={p.id} product={p} onTap={() => setSheet(p)} />)}
+          {pagedNormal.map(p => <ProductRow key={p.id} product={p} onTap={() => setSheet(p)} />)}
         </>
       )}
 
-      {filtered.length === 0 && !loading && (
+      {allFiltered.length === 0 && !loading && (
         <div className="empty">找不到符合的商品</div>
+      )}
+
+      {totalPages > 1 && (
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, marginTop: 20, flexWrap: 'wrap' }}>
+          <button
+            onClick={() => setPage(p => Math.max(1, p - 1))}
+            disabled={safePage === 1}
+            style={{ padding: '6px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', cursor: safePage === 1 ? 'default' : 'pointer', opacity: safePage === 1 ? 0.4 : 1 }}
+          >
+            ‹
+          </button>
+          {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
+            <button
+              key={p}
+              onClick={() => setPage(p)}
+              style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid var(--border)', background: p === safePage ? 'var(--text)' : 'var(--bg)', color: p === safePage ? '#fff' : 'var(--text)', cursor: 'pointer', fontWeight: p === safePage ? 700 : 400, minWidth: 36 }}
+            >
+              {p}
+            </button>
+          ))}
+          <button
+            onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+            disabled={safePage === totalPages}
+            style={{ padding: '6px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', cursor: safePage === totalPages ? 'default' : 'pointer', opacity: safePage === totalPages ? 0.4 : 1 }}
+          >
+            ›
+          </button>
+        </div>
       )}
 
       {sheet === 'add' && (
