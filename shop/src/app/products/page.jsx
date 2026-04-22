@@ -18,13 +18,14 @@ export default function ProductsPage() {
   const [page, setPage] = useState(1)
   const [sidebarOpen, setSidebarOpen] = useState({ tags: true, category: true, brand: true })
   const [sortBy, setSortBy] = useState('newest') // newest | oldest | price_asc | price_desc
+  const [inStockOnly, setInStockOnly] = useState(true)
   const PAGE_SIZE = 20
 
   useEffect(() => {
     Promise.all([
       supabase
         .from('storefront_products')
-        .select('*, products(*, product_images(url, sort_order), categories(id, name, name_en), product_tags(tag_id))')
+        .select('*, products(*, product_images(url, sort_order), categories(id, name, name_en), product_tags(tag_id), product_variants(stock))')
         .eq('published', true)
         .order('created_at', { ascending: false }),
       supabase.from('categories').select('*').order('sort_order').order('name'),
@@ -48,7 +49,15 @@ export default function ProductsPage() {
     const productTagIds = (sp.products?.product_tags || []).map(pt => pt.tag_id)
     const matchTag = activeTags.length === 0 || activeTags.some(tid => productTagIds.includes(tid))
     const matchSource = activeSource === null || (sp.products?.source || '') === activeSource
-    return matchSearch && matchCat && matchTag && matchSource
+    const isCollection = !!sp.collection_end
+    const collectionExpired = isCollection && new Date(sp.collection_end) < new Date()
+    const variants = sp.products?.product_variants || []
+    const allVariantsSoldOut = variants.length > 0
+      ? variants.every(v => (v.stock ?? 0) <= 0)
+      : (sp.products?.quantity ?? 0) <= 0
+    const stockUnavailable = !isCollection && allVariantsSoldOut
+    const matchStock = !inStockOnly || (!sp.sold_out && !collectionExpired && !stockUnavailable)
+    return matchSearch && matchCat && matchTag && matchSource && matchStock
   })
 
   // Sort
@@ -66,7 +75,7 @@ export default function ProductsPage() {
   })
 
   // Reset to page 1 when any filter changes
-  useEffect(() => { setPage(1) }, [search, activeCat, activeTags, activeSource, sortBy])
+  useEffect(() => { setPage(1) }, [search, activeCat, activeTags, activeSource, sortBy, inStockOnly])
 
   function toggleTag(id) {
     setActiveTags(prev => prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id])
@@ -75,13 +84,18 @@ export default function ProductsPage() {
   const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE))
   const paged = sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
-  const hasActiveFilter = activeCat || activeSource || activeTags.length > 0
+  const hasActiveFilter = activeCat || activeSource || activeTags.length > 0 || inStockOnly
   const zh = lang === 'zh'
 
   // Shared filter summary chips
   const filterChips = hasActiveFilter && (
     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16, alignItems: 'center' }}>
       <span style={{ fontSize: 12, color: 'var(--text-3)' }}>{zh ? '篩選中：' : 'Filtered:'}</span>
+      {inStockOnly && (
+        <span className="filter-chip" onClick={() => setInStockOnly(false)}>
+          {zh ? '有貨' : 'In Stock'} ×
+        </span>
+      )}
       {activeCat && (
         <span className="filter-chip" onClick={() => setActiveCat(null)}>
           {(lang === 'en' && categories.find(c => c.id === activeCat)?.name_en) || categories.find(c => c.id === activeCat)?.name} ×
@@ -101,7 +115,7 @@ export default function ProductsPage() {
         ) : null
       })}
       <button
-        onClick={() => { setActiveCat(null); setActiveSource(null); setActiveTags([]) }}
+        onClick={() => { setActiveCat(null); setActiveSource(null); setActiveTags([]); setInStockOnly(false) }}
         style={{ fontSize: 12, color: 'var(--red)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 6px' }}
       >
         {zh ? '清除全部' : 'Clear all'}
@@ -188,7 +202,7 @@ export default function ProductsPage() {
                   <circle cx="6" cy="12" r="1.5" fill="currentColor" /><circle cx="10" cy="18" r="1.5" fill="currentColor" />
                 </svg>
                 {zh ? '篩選' : 'Filter'}
-                {(hasActiveFilter || search) && <span className="filter-toggle-dot" />}
+                {(hasActiveFilter || search || inStockOnly) && <span className="filter-toggle-dot" />}
               </button>
             </div>
           </div>
@@ -227,16 +241,18 @@ export default function ProductsPage() {
                   />
                 )}
               </div>
-              {tags.length > 0 && (
-                <div className="filter-tags-row">
-                  {tags.map(tg => (
-                    <button key={tg.id} onClick={() => toggleTag(tg.id)}
-                      className={activeTags.includes(tg.id) ? 'filter-tag filter-tag-active' : 'filter-tag'}>
-                      {lang === 'en' && tg.name_en ? tg.name_en : tg.name}
-                    </button>
-                  ))}
-                </div>
-              )}
+              <div className="filter-tags-row">
+                <button onClick={() => setInStockOnly(v => !v)}
+                  className={inStockOnly ? 'filter-tag filter-tag-active' : 'filter-tag'}>
+                  {zh ? '有貨' : 'In Stock'}
+                </button>
+                {tags.map(tg => (
+                  <button key={tg.id} onClick={() => toggleTag(tg.id)}
+                    className={activeTags.includes(tg.id) ? 'filter-tag filter-tag-active' : 'filter-tag'}>
+                    {lang === 'en' && tg.name_en ? tg.name_en : tg.name}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
           {filterChips}
@@ -271,6 +287,10 @@ export default function ProductsPage() {
                 </button>
                 {sidebarOpen.tags && (
                   <div className="filter-tags-row">
+                    <button onClick={() => setInStockOnly(v => !v)}
+                      className={inStockOnly ? 'filter-tag filter-tag-active' : 'filter-tag'}>
+                      {zh ? '有貨' : 'In Stock'}
+                    </button>
                     {tags.map(tg => (
                       <button key={tg.id} onClick={() => toggleTag(tg.id)}
                         className={activeTags.includes(tg.id) ? 'filter-tag filter-tag-active' : 'filter-tag'}>
