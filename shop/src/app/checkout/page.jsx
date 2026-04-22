@@ -35,12 +35,86 @@ export default function CheckoutPage() {
     loadProfile()
   }, [user])
 
+  // 優惠券
+  const [couponCode, setCouponCode] = useState('')
+  const [couponPreview, setCouponPreview] = useState(null) // { coupon_id, name, discount_amount } | null
+  const [couponError, setCouponError] = useState('')
+  const [couponLoading, setCouponLoading] = useState(false)
+
   const subtotal = cart.reduce((s, i) => s + i.price * i.qty, 0)
   const FREE_SHIPPING_THRESHOLD = 3800
   const SHIPPING_FEE = 60
   const shippingFee = subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : SHIPPING_FEE
-  const total = subtotal + shippingFee
+  const discountAmount = couponPreview?.discount_amount || 0
+  const total = subtotal - discountAmount + shippingFee
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  // 優惠碼預覽（read-only 查詢，不扣額度）
+  async function applyCoupon() {
+    const code = couponCode.trim().toUpperCase()
+    if (!code) return
+    setCouponLoading(true)
+    setCouponError('')
+    setCouponPreview(null)
+
+    try {
+      // 先查 shared 型
+      let { data: coupon } = await supabase
+        .from('coupons')
+        .select('*')
+        .eq('code', code)
+        .eq('type', 'shared')
+        .single()
+
+      let couponId = coupon?.id
+      let isUnique = false
+
+      // 找不到則查 unique 型
+      if (!coupon) {
+        const { data: cc } = await supabase
+          .from('coupon_codes')
+          .select('*, coupons(*)')
+          .eq('code', code)
+          .single()
+
+        if (!cc) { setCouponError(lang === 'zh' ? '優惠碼不存在' : 'Invalid coupon code'); setCouponLoading(false); return }
+        if (cc.is_used) { setCouponError(lang === 'zh' ? '此優惠碼已被使用' : 'This coupon has been used'); setCouponLoading(false); return }
+        coupon = cc.coupons
+        couponId = coupon.id
+        isUnique = true
+      }
+
+      // 基本驗證
+      if (!coupon.is_active) { setCouponError(lang === 'zh' ? '此優惠活動已停用' : 'This promotion is inactive'); setCouponLoading(false); return }
+      const now = new Date()
+      if (now < new Date(coupon.starts_at)) { setCouponError(lang === 'zh' ? '此優惠尚未開始' : 'This promotion has not started'); setCouponLoading(false); return }
+      if (coupon.expires_at && now > new Date(coupon.expires_at)) { setCouponError(lang === 'zh' ? '此優惠碼已過期' : 'This coupon has expired'); setCouponLoading(false); return }
+      if (!isUnique && coupon.max_usage && coupon.usage_count >= coupon.max_usage) { setCouponError(lang === 'zh' ? '此優惠碼已達使用上限' : 'This coupon has reached its usage limit'); setCouponLoading(false); return }
+      if (subtotal < Number(coupon.min_amount)) { setCouponError(lang === 'zh' ? `未達最低消費 NT$${Number(coupon.min_amount).toLocaleString()}` : `Minimum spend NT$${Number(coupon.min_amount).toLocaleString()} required`); setCouponLoading(false); return }
+
+      // 計算折扣
+      let discount = 0
+      if (coupon.discount_type === 'fixed') {
+        discount = Math.min(Number(coupon.discount_value), subtotal)
+      } else {
+        discount = subtotal * (Number(coupon.discount_value) / 100)
+        if (coupon.max_discount) discount = Math.min(discount, Number(coupon.max_discount))
+        discount = Math.min(discount, subtotal)
+      }
+      discount = Math.round(discount)
+
+      setCouponPreview({ coupon_id: couponId, name: coupon.name, discount_amount: discount, code })
+    } catch {
+      setCouponError(lang === 'zh' ? '驗證失敗，請稍後再試' : 'Validation failed, please try again')
+    }
+    setCouponLoading(false)
+  }
+
+  function removeCoupon() {
+    setCouponPreview(null)
+    setCouponCode('')
+    setCouponError('')
+  }
 
   function validate() {
     const e = {}
@@ -86,40 +160,38 @@ export default function CheckoutPage() {
       `${i.name}${i.variantLabel ? ' ' + i.variantLabel : ''} × ${i.qty}${i.customNote ? ' [' + i.customNote + ']' : ''}`
     ).join(', ')
 
-    const { data, error } = await supabase.from('consumer_orders').insert({
-      customer_name: form.name,
-      email: form.email,
-      phone: form.phone,
-      address: `${form.store_name} (${form.store_number})`,
-      store_name: form.store_name.trim(),
-      store_number: form.store_number.trim(),
-      line_id: form.line_id || null,
-      remittance_last5: form.remittance_last5.trim(),
-      note: form.note,
-      items: itemsStr,
-      items_json: cart,
-      total_amount: total,
-      payment_status: '未付',
-      status: '待確認',
-    }).select().single()
+    // 原子操作：檢查庫存 + 驗證優惠券 → 扣庫存 + 建立訂單 + 記錄優惠券（單一 transaction）
+    const orderTotal = subtotal + shippingFee  // 未折扣金額，RPC 內部會扣除折扣
 
-    if (error) {
-      alert(t('common.error'))
+    const { data: placeResult, error: placeError } = await supabase.rpc('place_order', {
+      p_customer_name: form.name,
+      p_email: form.email,
+      p_phone: form.phone,
+      p_address: `${form.store_name} (${form.store_number})`,
+      p_store_name: form.store_name.trim(),
+      p_store_number: form.store_number.trim(),
+      p_line_id: form.line_id || null,
+      p_remittance_last5: form.remittance_last5.trim(),
+      p_note: form.note,
+      p_items: itemsStr,
+      p_items_json: cart,
+      p_total_amount: orderTotal,
+      p_shipping_fee: shippingFee,
+      // coupon (nullable)
+      p_coupon_code: couponPreview?.code || null,
+      p_subtotal: couponPreview ? subtotal : null,
+      p_consumer_email: form.email,
+    })
+
+    if (placeError || !placeResult?.ok) {
+      const errMsg = placeResult?.error || placeError?.message || t('common.error')
+      alert(errMsg)
       setSubmitting(false)
       return
     }
 
-    // 扣減現貨商品庫存（收單模式不扣）
-    for (const item of cart) {
-      if (item.isCollection) continue // 收單模式不扣庫存
-      if (item.variantId) {
-        // 有規格：扣 product_variants.stock
-        await supabase.rpc('decrement_variant_stock', { vid: item.variantId, qty: item.qty })
-      } else {
-        // 無規格：扣 products.quantity
-        await supabase.rpc('decrement_product_stock', { pid: item.id, qty: item.qty })
-      }
-    }
+    const orderId = placeResult.order_id
+    const finalDiscount = placeResult.discount_amount || 0
 
     // 寄訂單確認信（不阻斷成功流程，失敗靜默處理）
     fetch('/api/send-order-email', {
@@ -127,7 +199,7 @@ export default function CheckoutPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         order: {
-          id: data.id,
+          id: orderId,
           email: form.email,
           name: form.name,
           phone: form.phone,
@@ -137,13 +209,15 @@ export default function CheckoutPage() {
           note: form.note,
         },
         items: cart,
-        total,
+        total: orderTotal - finalDiscount,
+        discount: finalDiscount,
+        couponName: couponPreview?.name || null,
         lang,
       }),
     }).catch(err => console.error('Email send failed:', err))
 
     clearCart()
-    router.push(`/order/${data.id}`)
+    router.push(`/order/${orderId}`)
   }
 
   if (cart.length === 0 && !submitting) {
@@ -247,6 +321,50 @@ export default function CheckoutPage() {
               <span>{lang === 'zh' ? '小計' : 'Subtotal'}</span>
               <span>NT${subtotal.toLocaleString()}</span>
             </div>
+
+            {/* 優惠碼輸入 */}
+            {!couponPreview ? (
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input
+                    className="form-input"
+                    style={{ flex: 1, fontSize: 14, textTransform: 'uppercase', fontFamily: 'monospace' }}
+                    placeholder={lang === 'zh' ? '輸入優惠碼' : 'Coupon code'}
+                    value={couponCode}
+                    onChange={e => { setCouponCode(e.target.value); setCouponError('') }}
+                    onKeyDown={e => e.key === 'Enter' && applyCoupon()}
+                  />
+                  <button
+                    onClick={applyCoupon}
+                    disabled={couponLoading || !couponCode.trim()}
+                    style={{
+                      padding: '8px 16px', borderRadius: 8, border: '1px solid var(--border)',
+                      background: 'var(--surface)', fontSize: 14, cursor: 'pointer',
+                      opacity: couponLoading || !couponCode.trim() ? 0.5 : 1,
+                    }}
+                  >{couponLoading ? '...' : (lang === 'zh' ? '套用' : 'Apply')}</button>
+                </div>
+                {couponError && (
+                  <div style={{ fontSize: 12, color: 'var(--red)', marginTop: 4 }}>{couponError}</div>
+                )}
+              </div>
+            ) : (
+              <div style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                fontSize: 14, color: '#1a7a3c', marginBottom: 8,
+                background: '#e8f7ee', padding: '8px 12px', borderRadius: 8,
+              }}>
+                <div>
+                  <div style={{ fontWeight: 600 }}>{couponPreview.name}</div>
+                  <div style={{ fontSize: 12 }}>-NT${couponPreview.discount_amount.toLocaleString()}</div>
+                </div>
+                <button
+                  onClick={removeCoupon}
+                  style={{ background: 'none', border: 'none', fontSize: 16, cursor: 'pointer', color: '#999' }}
+                >×</button>
+              </div>
+            )}
+
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, color: 'var(--text-2)', marginBottom: 8 }}>
               <span>{lang === 'zh' ? '運費' : 'Shipping'}</span>
               <span>{shippingFee === 0
