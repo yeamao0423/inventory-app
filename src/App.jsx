@@ -6,12 +6,14 @@ import OrdersPage from './pages/OrdersPage'
 import StorefrontPage from './pages/StorefrontPage'
 import UsersPage from './pages/UsersPage'
 import TripsPage from './pages/TripsPage'
+import CouponsPage from './pages/CouponsPage'
 import InvitePage from './pages/InvitePage'
 
 const allTabs = [
   { path: '/',           label: '庫存',  icon: BoxIcon },
   { path: '/orders',     label: '訂單',  icon: ReceiptIcon },
   { path: '/storefront', label: '商城',  icon: ShopIcon },
+  { path: '/coupons',    label: '優惠券', icon: CouponIcon },
   { path: '/trips',      label: '行程',  icon: TripIcon, superOnly: true },
   { path: '/users',      label: '成員',  icon: UsersIcon, adminOnly: true },
 ]
@@ -55,6 +57,7 @@ export default function App() {
         <Route path="/"           element={<InventoryPage />} />
         <Route path="/orders"     element={<OrdersPage />} />
         <Route path="/storefront" element={<StorefrontPage />} />
+        <Route path="/coupons"    element={<CouponsPage />} />
         <Route path="/trips"      element={<TripsPage />} />
         <Route path="/users"      element={<UsersPage />} />
         <Route path="/invite"     element={<InvitePage />} />
@@ -84,6 +87,9 @@ function ReceiptIcon() {
 }
 function ShopIcon() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l1-5h16l1 5"/><path d="M3 9a2 2 0 004 0 2 2 0 004 0 2 2 0 004 0 2 2 0 004 0M5 20h14a1 1 0 001-1v-7H4v7a1 1 0 001 1z"/></svg>
+}
+function CouponIcon() {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M2 9V6a2 2 0 012-2h16a2 2 0 012 2v3"/><path d="M2 15v3a2 2 0 002 2h16a2 2 0 002-2v-3"/><path d="M22 9a3 3 0 01-3 3 3 3 0 013 3"/><path d="M2 9a3 3 0 003 3 3 3 0 00-3 3"/><line x1="9" y1="9" x2="9" y2="9.01"/><line x1="9" y1="12" x2="9" y2="12.01"/><line x1="9" y1="15" x2="9" y2="15.01"/></svg>
 }
 function TripIcon() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5"/></svg>

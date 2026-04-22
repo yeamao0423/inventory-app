@@ -853,6 +853,31 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
   const [shippingFee, setShippingFee] = useState(o.shipping_fee || DEFAULT_SHIPPING_FEE)
   const [trackingNumber, setTrackingNumber] = useState(o.tracking_number || '')
 
+  // 優惠券退還
+  const [refundingCoupon, setRefundingCoupon] = useState(false)
+  const [couponMinAmount, setCouponMinAmount] = useState(0)
+
+  useEffect(() => {
+    if (o.coupon_id) {
+      supabase.from('coupons').select('min_amount').eq('id', o.coupon_id).single()
+        .then(({ data }) => { if (data) setCouponMinAmount(Number(data.min_amount) || 0) })
+    }
+  }, [o.coupon_id])
+
+  async function handleRefundCoupon() {
+    if (!window.confirm('確定退還此訂單的優惠券？折抵金額將加回訂單總額。')) return
+    setRefundingCoupon(true)
+    const { data, error } = await supabase.rpc('refund_coupon', { p_order_id: o.id })
+    setRefundingCoupon(false)
+    if (error || !data?.ok) {
+      alert('退還失敗：' + (data?.error || error?.message))
+      return
+    }
+    alert(`已退還優惠券，折抵金額 NT$${Number(data.refunded_amount).toLocaleString()} 已加回訂單`)
+    onSaved()
+    onClose()
+  }
+
   // 加購商品欄位
   const [addItemName, setAddItemName] = useState('')
   const [addItemPrice, setAddItemPrice] = useState('')
@@ -983,9 +1008,12 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
       }
     }
 
-    // 全數取消 → 自動詢問
+    // 全數取消 → 自動退還優惠券 + 詢問寄信
     if (status === '已取消') {
-      if (window.confirm('訂單已標記為「已取消」，是否寄出取消通知 Email 給消費者？')) {
+      if (o.coupon_id) {
+        await supabase.rpc('refund_coupon', { p_order_id: o.id })
+      }
+      if (window.confirm('訂單已標記為「已取消」，是否寄出取消通知 Email 給消��者？')) {
         await triggerStatusEmail(buildEmailPayload('cancelled'))
       }
     }
@@ -1010,7 +1038,36 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
           <span className="muted fs13">總金額</span>
           <span className="fw600">NT${Number(hasAnyChange ? newTotal : (o.total_amount || 0)).toLocaleString()}</span>
         </div>
+        {o.coupon_id && (
+          <div className="card-row row-sb">
+            <span className="muted fs13">優惠券折抵</span>
+            <span className="fs13" style={{ color: 'var(--green)' }}>-NT${Number(o.discount_amount || 0).toLocaleString()}</span>
+          </div>
+        )}
       </div>
+
+      {/* 優惠券退還提示 */}
+      {o.coupon_id && canEdit && hasAnyChange && activeSubtotal < (couponMinAmount || 0) && (
+        <div style={{
+          background: 'var(--amber-bg)', borderRadius: 12, padding: '12px 16px', marginBottom: 12,
+          fontSize: 13, color: 'var(--amber)', lineHeight: 1.6,
+        }}>
+          ⚠️ 修改後小計 NT${activeSubtotal.toLocaleString()} 未達此優惠券門檻，建議退還優惠券
+        </div>
+      )}
+
+      {o.coupon_id && canEdit && (
+        <button
+          onClick={handleRefundCoupon}
+          disabled={refundingCoupon}
+          style={{
+            width: '100%', padding: 10, marginBottom: 12,
+            background: 'none', border: '1px solid var(--amber)',
+            borderRadius: 10, color: 'var(--amber)', fontSize: 13,
+            fontWeight: 600, cursor: 'pointer',
+          }}
+        >{refundingCoupon ? '退還中…' : `退還優惠券（折抵 NT$${Number(o.discount_amount || 0).toLocaleString()}）`}</button>
+      )}
 
       <div className="sec" style={{ marginTop: 0 }}>聯絡資訊</div>
       <div className="card" style={{ marginBottom: 16 }}>
@@ -1195,6 +1252,12 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
               <span className="fs13" style={{ color: 'var(--red)', textDecoration: 'line-through' }}>
                 -NT${cancelledItems.reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.qty) || 0), 0).toLocaleString()}
               </span>
+            </div>
+          )}
+          {o.coupon_id && Number(o.discount_amount) > 0 && (
+            <div className="card-row row-sb">
+              <span className="muted fs13" style={{ color: 'var(--green)' }}>優惠券折抵</span>
+              <span className="fs13" style={{ color: 'var(--green)' }}>-NT${Number(o.discount_amount).toLocaleString()}</span>
             </div>
           )}
           <div className="card-row row-sb" style={{ borderTop: '1.5px solid var(--text)', paddingTop: 10 }}>
