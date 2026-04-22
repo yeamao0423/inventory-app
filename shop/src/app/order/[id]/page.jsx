@@ -98,7 +98,13 @@ export default function OrderSuccessPage() {
         <div style={{ background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 14, padding: 20, marginBottom: 20, textAlign: 'left' }}>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>{t('order.items')}</div>
           <div style={{ fontSize: 14, color: 'var(--text-2)', lineHeight: 1.8 }}>{order.items}</div>
-          <div style={{ marginTop: 12, paddingTop: 12, borderTop: '0.5px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: 16 }}>
+          {Number(order.discount_amount) > 0 && (
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: '0.5px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', fontSize: 14, color: '#1a7a3c' }}>
+              <span>{lang === 'zh' ? '優惠券折抵' : 'Coupon discount'}</span>
+              <span>-NT${Number(order.discount_amount).toLocaleString()}</span>
+            </div>
+          )}
+          <div style={{ marginTop: Number(order.discount_amount) > 0 ? 8 : 12, paddingTop: Number(order.discount_amount) > 0 ? 0 : 12, borderTop: Number(order.discount_amount) > 0 ? 'none' : '0.5px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: 16 }}>
             <span>{t('cart.total')}</span>
             <span>NT${Number(order.total_amount || 0).toLocaleString()}</span>
           </div>
