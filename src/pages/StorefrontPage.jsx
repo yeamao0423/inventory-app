@@ -24,6 +24,8 @@ export default function StorefrontPage() {
   const [filterTag, setFilterTag] = useState('')
   const [filterSource, setFilterSource] = useState('')
   const [showFilters, setShowFilters] = useState(false)
+  const [page, setPage] = useState(1)
+  const PAGE_SIZE = 15
 
   useEffect(() => {
     supabase.from('exchange_rates').select('*')
@@ -184,64 +186,146 @@ export default function StorefrontPage() {
         )}
       </div>
 
+      {/* Tab switcher */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        {[
+          { key: 'listings', label: '商城商品' },
+          { key: 'taxonomy', label: '分類/標籤/規格' },
+        ].map(t => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            style={{
+              flex: 1, padding: '9px 0', borderRadius: 10, border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600,
+              background: tab === t.key ? 'var(--text)' : 'var(--card)',
+              color: tab === t.key ? '#fff' : 'var(--text-2)',
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
       {/* Search & filters (only on listings tab) */}
       {tab === 'listings' && (() => {
-        const counts = {
-          all: listings.length,
-          published: listings.filter(l => l.published && !l.sold_out).length,
-          unpublished: listings.filter(l => !l.published).length,
-          sold_out: listings.filter(l => l.sold_out).length,
-          expired: listings.filter(l => l.collection_end && new Date(l.collection_end) < new Date() && !l.sold_out).length,
-        }
         const statusFilters = [
-          ['all', '全部'],
-          ['published', '上架中'],
-          ['unpublished', '已下架'],
-          ['sold_out', '缺貨中'],
-          ['expired', '已截止'],
+          { key: 'all', label: '全部' },
+          { key: 'published', label: '上架中' },
+          { key: 'unpublished', label: '已下架' },
+          { key: 'sold_out', label: '缺貨中' },
+          { key: 'expired', label: '已截止' },
         ]
         const sources = [...new Set(listings.map(l => l.products?.source).filter(Boolean))].sort()
         const catIds = [...new Set(listings.map(l => l.products?.category_id).filter(Boolean))]
         const catsInUse = categories.filter(c => catIds.includes(c.id))
         const tagIds = [...new Set(listings.flatMap(l => (l.products?.product_tags || []).map(pt => pt.tag_id)))]
         const tagsInUse = tags.filter(t => tagIds.includes(t.id))
-        // selectStyle removed — using .form-select-compact class instead
-        const hasActiveFilter = filter !== 'all' || filterCat || filterTag || filterSource
+        const hasActiveFilter = filter !== 'all' || filterCat || filterTag || filterSource || search
+        const activeLabel = statusFilters.find(f => f.key === filter)?.label || '全部'
+        // count filtered results for the button label
+        const countFiltered = listings.filter(item => {
+          if (filter === 'published' && !(item.published && !item.sold_out)) return false
+          if (filter === 'unpublished' && item.published) return false
+          if (filter === 'sold_out' && !item.sold_out) return false
+          if (filter === 'expired' && !(item.collection_end && new Date(item.collection_end) < new Date() && !item.sold_out)) return false
+          if (search) {
+            const q = search.toLowerCase()
+            const name = (item.products?.name || '').toLowerCase()
+            const sku = (item.products?.sku || '').toLowerCase()
+            if (!name.includes(q) && !sku.includes(q)) return false
+          }
+          if (filterCat && item.products?.category_id !== Number(filterCat)) return false
+          if (filterTag && !(item.products?.product_tags || []).some(pt => pt.tag_id === Number(filterTag))) return false
+          if (filterSource && item.products?.source !== filterSource) return false
+          return true
+        }).length
         return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 12 }}>
-            {/* Search + toggle */}
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input
-                className="form-input"
-                placeholder="搜尋商品名稱或 SKU…"
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                style={{ fontSize: 13, flex: 1 }}
-              />
-              <button
-                onClick={() => setShowFilters(f => !f)}
-                style={{
-                  padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 600,
-                  cursor: 'pointer', flexShrink: 0,
-                  background: showFilters || hasActiveFilter ? 'var(--text)' : 'var(--surface)',
-                  color: showFilters || hasActiveFilter ? '#fff' : 'var(--text-3)',
-                  border: `0.5px solid ${showFilters || hasActiveFilter ? 'var(--text)' : 'var(--border)'}`,
-                }}
-              >
-                篩選{hasActiveFilter ? ' ●' : ''}
-              </button>
+          <>
+            {/* 搜尋列 */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+              <div style={{
+                flex: 1, display: 'flex', alignItems: 'center', gap: 8,
+                padding: '0 12px', borderRadius: 12, border: '1px solid var(--border)',
+                background: 'var(--card)', height: 42,
+              }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+                </svg>
+                <input
+                  value={search}
+                  onChange={e => { setSearch(e.target.value); setPage(1) }}
+                  placeholder="搜尋商品名稱或 SKU…"
+                  style={{
+                    flex: 1, border: 'none', outline: 'none', background: 'transparent',
+                    fontSize: 14, color: 'var(--text)', minWidth: 0,
+                  }}
+                />
+                {search && (
+                  <button onClick={() => { setSearch(''); setPage(1) }} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--text-3)', fontSize: 16, lineHeight: 1 }}>✕</button>
+                )}
+              </div>
             </div>
-            {/* Collapsible filters */}
+
+            {/* 篩選列（可收合） */}
+            <button
+              onClick={() => setShowFilters(f => !f)}
+              style={{
+                width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+                padding: '10px 14px', borderRadius: 12, border: '1px solid var(--border)',
+                background: 'var(--card)', cursor: 'pointer', marginBottom: showFilters ? 0 : 12,
+                fontSize: 14, fontWeight: 600, color: 'var(--text)',
+              }}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="20" y2="12" /><line x1="12" y1="18" x2="20" y2="18" />
+              </svg>
+              {activeLabel}（{countFiltered}）
+              {hasActiveFilter && (
+                <span style={{
+                  width: 6, height: 6, borderRadius: '50%', background: '#3b82f6', flexShrink: 0,
+                }} />
+              )}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ marginLeft: 'auto', transition: 'transform .2s', transform: showFilters ? 'rotate(180deg)' : '' }}>
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+            </button>
+
             {showFilters && (
-              <>
-                {/* Dropdown filters */}
+              <div style={{ padding: '12px 0 12px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {/* 狀態 pills */}
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {statusFilters.map(f => {
+                    const count = f.key === 'all'
+                      ? listings.length
+                      : f.key === 'published' ? listings.filter(l => l.published && !l.sold_out).length
+                      : f.key === 'unpublished' ? listings.filter(l => !l.published).length
+                      : f.key === 'sold_out' ? listings.filter(l => l.sold_out).length
+                      : listings.filter(l => l.collection_end && new Date(l.collection_end) < new Date() && !l.sold_out).length
+                    const isActive = filter === f.key
+                    return (
+                      <button
+                        key={f.key}
+                        onClick={() => { setFilter(f.key); setPage(1) }}
+                        style={{
+                          padding: '6px 12px', borderRadius: 20, border: '1px solid var(--border)',
+                          background: isActive ? 'var(--text)' : 'var(--card)',
+                          color: isActive ? '#fff' : 'var(--text-2)',
+                          fontSize: 13, fontWeight: isActive ? 700 : 400, cursor: 'pointer',
+                        }}
+                      >
+                        {f.label}（{count}）
+                      </button>
+                    )
+                  })}
+                </div>
+                {/* 下拉篩選 */}
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   {catsInUse.length > 0 && (
                     <CustomSelect compact
                       label="全部分類"
                       value={filterCat || null}
                       options={catsInUse.map(c => ({ value: String(c.id), label: c.name }))}
-                      onChange={v => setFilterCat(v || '')}
+                      onChange={v => { setFilterCat(v || ''); setPage(1) }}
                       style={{ flex: 1, minWidth: 100 }}
                     />
                   )}
@@ -250,7 +334,7 @@ export default function StorefrontPage() {
                       label="全部標籤"
                       value={filterTag || null}
                       options={tagsInUse.map(t => ({ value: String(t.id), label: t.name }))}
-                      onChange={v => setFilterTag(v || '')}
+                      onChange={v => { setFilterTag(v || ''); setPage(1) }}
                       style={{ flex: 1, minWidth: 100 }}
                     />
                   )}
@@ -259,41 +343,25 @@ export default function StorefrontPage() {
                       label="全部來源"
                       value={filterSource || null}
                       options={sources.map(s => ({ value: s, label: s }))}
-                      onChange={v => setFilterSource(v || '')}
+                      onChange={v => { setFilterSource(v || ''); setPage(1) }}
                       style={{ flex: 1, minWidth: 100 }}
                     />
                   )}
                 </div>
-                {/* Status chips */}
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  {statusFilters.map(([key, label]) => (
-                    <button key={key} onClick={() => setFilter(key)} style={{
-                      padding: '5px 12px', borderRadius: 16, fontSize: 12, fontWeight: 600,
-                      cursor: 'pointer', transition: 'all .15s',
-                      background: filter === key ? 'var(--text)' : 'var(--surface)',
-                      color: filter === key ? '#fff' : 'var(--text-3)',
-                      border: `0.5px solid ${filter === key ? 'var(--text)' : 'var(--border)'}`,
-                    }}>{label} {counts[key]}</button>
-                  ))}
-                </div>
-              </>
+                {/* 清除全部 */}
+                {hasActiveFilter && (
+                  <button
+                    onClick={() => { setFilter('all'); setFilterCat(''); setFilterTag(''); setFilterSource(''); setSearch(''); setPage(1) }}
+                    style={{ alignSelf: 'flex-start', fontSize: 12, color: 'var(--red, #ef4444)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0' }}
+                  >
+                    清除全部篩選
+                  </button>
+                )}
+              </div>
             )}
-          </div>
+          </>
         )
       })()}
-
-      {/* Tab switch */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        {[['listings', '商城商品'], ['taxonomy', '分類/標籤/規格']].map(([v, label]) => (
-          <button key={v} onClick={() => setTab(v)} style={{
-            padding: '7px 16px', borderRadius: 20, fontSize: 13, fontWeight: 600,
-            cursor: 'pointer', transition: 'all .15s',
-            background: tab === v ? 'var(--text)' : 'var(--surface)',
-            color: tab === v ? '#fff' : 'var(--text-3)',
-            border: `0.5px solid ${tab === v ? 'var(--text)' : 'var(--border)'}`,
-          }}>{label}</button>
-        ))}
-      </div>
 
       {loading && <div className="empty">載入中…</div>}
 
@@ -320,12 +388,16 @@ export default function StorefrontPage() {
           if (filterSource && item.products?.source !== filterSource) return false
           return true
         })
+        // Pagination
+        const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+        const safePage = Math.min(page, totalPages)
+        const paged = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
         return (
         <>
-          {filtered.length === 0 && (
+          {paged.length === 0 && (
             <div className="empty">{listings.length === 0 ? '尚未上架任何商品，點右上角 + 開始上架' : '沒有符合篩選條件的商品'}</div>
           )}
-          {filtered.map(item => {
+          {paged.map(item => {
             const isCollection = !!item.collection_end
             const collectionExpired = isCollection && new Date(item.collection_end) < new Date()
             const modeLabel = item.sold_out
@@ -400,6 +472,35 @@ export default function StorefrontPage() {
               </div>
             )
           })}
+
+          {/* 分頁 */}
+          {totalPages > 1 && (
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, marginTop: 20, flexWrap: 'wrap' }}>
+              <button
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={safePage === 1}
+                style={{ padding: '6px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', cursor: safePage === 1 ? 'default' : 'pointer', opacity: safePage === 1 ? 0.4 : 1 }}
+              >
+                ‹
+              </button>
+              {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
+                <button
+                  key={p}
+                  onClick={() => setPage(p)}
+                  style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid var(--border)', background: p === safePage ? 'var(--text)' : 'var(--bg)', color: p === safePage ? '#fff' : 'var(--text)', cursor: 'pointer', fontWeight: p === safePage ? 700 : 400, minWidth: 36 }}
+                >
+                  {p}
+                </button>
+              ))}
+              <button
+                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                disabled={safePage === totalPages}
+                style={{ padding: '6px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', cursor: safePage === totalPages ? 'default' : 'pointer', opacity: safePage === totalPages ? 0.4 : 1 }}
+              >
+                ›
+              </button>
+            </div>
+          )}
         </>
         )
       })()}

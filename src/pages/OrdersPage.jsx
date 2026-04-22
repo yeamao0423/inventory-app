@@ -32,6 +32,10 @@ export default function OrdersPage() {
   const [consumerFilterOpen, setConsumerFilterOpen] = useState(false)
   const [showExportSheet, setShowExportSheet] = useState(false)
   const [cancelledOpen, setCancelledOpen] = useState(false)
+  const [consumerSearch, setConsumerSearch] = useState('')
+  const [consumerDateFilter, setConsumerDateFilter] = useState('all')
+  const [consumerPage, setConsumerPage] = useState(1)
+  const CONSUMER_PAGE_SIZE = 15
   const isAdmin = ['admin', 'super_admin'].includes(profile?.role)
 
   async function fetchProcurement() {
@@ -250,39 +254,87 @@ export default function OrdersPage() {
           { key: '已出貨', label: '已出貨' },
           { key: '完成', label: '完成' },
         ]
-        const filteredConsumer = consumerStatusFilter === 'all'
+        const dateOptions = [
+          { value: 'all', label: '不限日期' },
+          { value: 'today', label: '今天' },
+          { value: 'week', label: '本週' },
+          { value: 'month', label: '本月' },
+        ]
+        // date filter helper
+        const matchDate = (order) => {
+          if (consumerDateFilter === 'all') return true
+          const d = new Date(order.created_at)
+          const now = new Date()
+          if (consumerDateFilter === 'today') {
+            return d.toDateString() === now.toDateString()
+          }
+          if (consumerDateFilter === 'week') {
+            const day = now.getDay() || 7
+            const weekStart = new Date(now); weekStart.setDate(now.getDate() - day + 1); weekStart.setHours(0,0,0,0)
+            return d >= weekStart
+          }
+          if (consumerDateFilter === 'month') {
+            return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()
+          }
+          return true
+        }
+        // search helper
+        const searchTerm = consumerSearch.trim().toLowerCase()
+        const matchSearch = (order) => {
+          if (!searchTerm) return true
+          const id6 = order.id?.toString().slice(-6) || ''
+          return (
+            id6.includes(searchTerm) ||
+            (order.customer_name || '').toLowerCase().includes(searchTerm) ||
+            (order.phone || '').includes(searchTerm)
+          )
+        }
+        // apply all filters
+        const afterStatus = consumerStatusFilter === 'all'
           ? activeOrders
           : activeOrders.filter(o => o.status === consumerStatusFilter)
+        const filteredConsumer = afterStatus.filter(o => matchDate(o) && matchSearch(o))
+        // pagination
+        const totalFiltered = filteredConsumer.length
+        const totalPages = Math.max(1, Math.ceil(totalFiltered / CONSUMER_PAGE_SIZE))
+        const safePage = Math.min(consumerPage, totalPages)
+        const pagedConsumer = filteredConsumer.slice((safePage - 1) * CONSUMER_PAGE_SIZE, safePage * CONSUMER_PAGE_SIZE)
+        // active filter info
+        const hasActiveFilters = consumerStatusFilter !== 'all' || consumerDateFilter !== 'all' || searchTerm
         const activeLabel = statusFilters.find(f => f.key === consumerStatusFilter)?.label || '全部'
-        const activeCount = consumerStatusFilter === 'all' ? activeOrders.length : activeOrders.filter(o => o.status === consumerStatusFilter).length
 
         return (
           <>
-            <div style={{ display: 'flex', gap: 8, marginBottom: consumerFilterOpen ? 0 : 16 }}>
-              <button
-                onClick={() => setConsumerFilterOpen(v => !v)}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 8, flex: 1,
-                  padding: '10px 14px', borderRadius: 12, border: '1px solid var(--border)',
-                  background: 'var(--card)', cursor: 'pointer',
-                  fontSize: 14, fontWeight: 600, color: 'var(--text)',
-                }}
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="20" y2="12" /><line x1="12" y1="18" x2="20" y2="18" />
+            {/* 搜尋列 */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+              <div style={{
+                flex: 1, display: 'flex', alignItems: 'center', gap: 8,
+                padding: '0 12px', borderRadius: 12, border: '1px solid var(--border)',
+                background: 'var(--card)', height: 42,
+              }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
                 </svg>
-                {activeLabel} ({activeCount})
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ marginLeft: 'auto', transition: 'transform .2s', transform: consumerFilterOpen ? 'rotate(180deg)' : '' }}>
-                  <path d="M6 9l6 6 6-6" />
-                </svg>
-              </button>
+                <input
+                  value={consumerSearch}
+                  onChange={e => { setConsumerSearch(e.target.value); setConsumerPage(1) }}
+                  placeholder="搜尋編號、姓名、電話"
+                  style={{
+                    flex: 1, border: 'none', outline: 'none', background: 'transparent',
+                    fontSize: 14, color: 'var(--text)', minWidth: 0,
+                  }}
+                />
+                {consumerSearch && (
+                  <button onClick={() => { setConsumerSearch(''); setConsumerPage(1) }} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--text-3)', fontSize: 16, lineHeight: 1 }}>✕</button>
+                )}
+              </div>
               {isAdmin && (
                 <button
                   onClick={() => setShowExportSheet(true)}
                   style={{
                     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                    padding: '10px 14px', borderRadius: 12, border: '1px solid var(--border)',
-                    background: 'var(--card)', color: 'var(--text)',
+                    padding: '0 14px', borderRadius: 12, border: '1px solid var(--border)',
+                    background: 'var(--card)', color: 'var(--text)', height: 42,
                     cursor: 'pointer', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap',
                   }}
                 >
@@ -295,32 +347,122 @@ export default function OrdersPage() {
                 </button>
               )}
             </div>
+
+            {/* 篩選列（可收合） */}
+            <button
+              onClick={() => setConsumerFilterOpen(v => !v)}
+              style={{
+                width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+                padding: '10px 14px', borderRadius: 12, border: '1px solid var(--border)',
+                background: 'var(--card)', cursor: 'pointer', marginBottom: consumerFilterOpen ? 0 : 12,
+                fontSize: 14, fontWeight: 600, color: 'var(--text)',
+              }}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="20" y2="12" /><line x1="12" y1="18" x2="20" y2="18" />
+              </svg>
+              {activeLabel}（{totalFiltered}）
+              {hasActiveFilters && (
+                <span style={{
+                  width: 6, height: 6, borderRadius: '50%', background: '#3b82f6', flexShrink: 0,
+                }} />
+              )}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ marginLeft: 'auto', transition: 'transform .2s', transform: consumerFilterOpen ? 'rotate(180deg)' : '' }}>
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+            </button>
+
             {consumerFilterOpen && (
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '12px 0 16px' }}>
-                {statusFilters.map(f => {
-                  const count = f.key === 'all' ? activeOrders.length : activeOrders.filter(o => o.status === f.key).length
-                  const isActive = consumerStatusFilter === f.key
-                  return (
-                    <button
-                      key={f.key}
-                      onClick={() => { setConsumerStatusFilter(f.key); setConsumerFilterOpen(false) }}
-                      style={{
-                        padding: '6px 12px', borderRadius: 20, border: '1px solid var(--border)',
-                        background: isActive ? 'var(--text)' : 'var(--card)',
-                        color: isActive ? '#fff' : 'var(--text-2)',
-                        fontSize: 13, fontWeight: isActive ? 700 : 400, cursor: 'pointer',
-                      }}
-                    >
-                      {f.label} ({count})
-                    </button>
-                  )
-                })}
+              <div style={{ padding: '12px 0 12px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {/* 狀態 pills */}
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {statusFilters.map(f => {
+                    const count = f.key === 'all'
+                      ? activeOrders.filter(o => matchDate(o) && matchSearch(o)).length
+                      : activeOrders.filter(o => o.status === f.key && matchDate(o) && matchSearch(o)).length
+                    const isActive = consumerStatusFilter === f.key
+                    return (
+                      <button
+                        key={f.key}
+                        onClick={() => { setConsumerStatusFilter(f.key); setConsumerPage(1) }}
+                        style={{
+                          padding: '6px 12px', borderRadius: 20, border: '1px solid var(--border)',
+                          background: isActive ? 'var(--text)' : 'var(--card)',
+                          color: isActive ? '#fff' : 'var(--text-2)',
+                          fontSize: 13, fontWeight: isActive ? 700 : 400, cursor: 'pointer',
+                        }}
+                      >
+                        {f.label}（{count}）
+                      </button>
+                    )
+                  })}
+                </div>
+                {/* 日期篩選 */}
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {dateOptions.map(d => {
+                    const isActive = consumerDateFilter === d.value
+                    return (
+                      <button
+                        key={d.value}
+                        onClick={() => { setConsumerDateFilter(d.value); setConsumerPage(1) }}
+                        style={{
+                          padding: '6px 12px', borderRadius: 20, border: '1px solid var(--border)',
+                          background: isActive ? 'var(--text)' : 'var(--card)',
+                          color: isActive ? '#fff' : 'var(--text-2)',
+                          fontSize: 13, fontWeight: isActive ? 700 : 400, cursor: 'pointer',
+                        }}
+                      >
+                        {d.label}
+                      </button>
+                    )
+                  })}
+                </div>
+                {/* 清除全部 */}
+                {hasActiveFilters && (
+                  <button
+                    onClick={() => { setConsumerStatusFilter('all'); setConsumerDateFilter('all'); setConsumerSearch(''); setConsumerPage(1) }}
+                    style={{ alignSelf: 'flex-start', fontSize: 12, color: 'var(--red, #ef4444)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0' }}
+                  >
+                    清除全部篩選
+                  </button>
+                )}
               </div>
             )}
-            {filteredConsumer.length === 0 && <div className="empty">沒有符合的訂單</div>}
-            {filteredConsumer.map(o => (
+
+            {/* 訂單列表 */}
+            {pagedConsumer.length === 0 && <div className="empty">沒有符合的訂單</div>}
+            {pagedConsumer.map(o => (
               <ConsumerOrderCard key={o.id} order={o} onTap={() => setSheet({ _type: 'consumer', ...o })} />
             ))}
+
+            {/* 分頁 */}
+            {totalPages > 1 && (
+              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, marginTop: 20, flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => setConsumerPage(p => Math.max(1, p - 1))}
+                  disabled={safePage === 1}
+                  style={{ padding: '6px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', cursor: safePage === 1 ? 'default' : 'pointer', opacity: safePage === 1 ? 0.4 : 1 }}
+                >
+                  ‹
+                </button>
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
+                  <button
+                    key={p}
+                    onClick={() => setConsumerPage(p)}
+                    style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid var(--border)', background: p === safePage ? 'var(--text)' : 'var(--bg)', color: p === safePage ? '#fff' : 'var(--text)', cursor: 'pointer', fontWeight: p === safePage ? 700 : 400, minWidth: 36 }}
+                  >
+                    {p}
+                  </button>
+                ))}
+                <button
+                  onClick={() => setConsumerPage(p => Math.min(totalPages, p + 1))}
+                  disabled={safePage === totalPages}
+                  style={{ padding: '6px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', cursor: safePage === totalPages ? 'default' : 'pointer', opacity: safePage === totalPages ? 0.4 : 1 }}
+                >
+                  ›
+                </button>
+              </div>
+            )}
 
             {/* 已取消訂單 — 可收合區塊 */}
             {cancelledOrders.length > 0 && (
