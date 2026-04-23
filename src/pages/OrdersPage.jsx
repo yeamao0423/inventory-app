@@ -2,10 +2,12 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import CustomSelect from '../components/CustomSelect'
+import ProcurementBatchTab, { CreateBatchSheet } from '../components/ProcurementBatchTab'
 
 export default function OrdersPage() {
   const { can, profile } = useAuth()
-  const [tab, setTab] = useState('internal')
+  const [tab, setTab] = useState('orders')
+  const [orderSubFilter, setOrderSubFilter] = useState('all') // 'all' | 'internal' | 'consumer'
   const [orders, setOrders] = useState([])
   const [consumerOrders, setConsumerOrders] = useState([])
   const [loading, setLoading] = useState(true)
@@ -25,6 +27,7 @@ export default function OrdersPage() {
     setLoading(false)
   }
 
+  const [createBatchData, setCreateBatchData] = useState(null) // { source, items }
   const [previewItem, setPreviewItem] = useState(null)
   const [previewImgIdx, setPreviewImgIdx] = useState(0)
   const [sourceFilter, setSourceFilter] = useState('all') // 'all' | source name
@@ -40,12 +43,14 @@ export default function OrdersPage() {
 
   async function fetchProcurement() {
     setLoading(true)
-    const [{ data: pending }, { data: products }, { data: spProducts }, { data: rates }, { data: images }] = await Promise.all([
+    const [{ data: pending }, { data: products }, { data: spProducts }, { data: rates }, { data: images }, { data: allVariants }, { data: existingBatchItems }] = await Promise.all([
       supabase.from('consumer_orders').select('*').not('status', 'in', '("已出貨","完成","已取消")'),
       supabase.from('products').select('id, name, sku, source, cost, currency'),
       supabase.from('storefront_products').select('product_id, shop_price'),
       supabase.from('exchange_rates').select('*'),
       supabase.from('product_images').select('product_id, url, sort_order').order('sort_order', { ascending: true }),
+      supabase.from('product_variants').select('id, product_id, options'),
+      supabase.from('procurement_items').select('product_id, variant_id, quantity, actual_qty, status, batch:batch_id(status)'),
     ])
 
     const productMap = {}
@@ -62,6 +67,14 @@ export default function OrdersPage() {
     ;(images || []).forEach(img => {
       if (!imageMap[img.product_id]) imageMap[img.product_id] = []
       imageMap[img.product_id].push(img.url)
+    })
+
+    // variant map: product_id → { label → variant }
+    const variantMap = {}
+    ;(allVariants || []).forEach(v => {
+      if (!variantMap[v.product_id]) variantMap[v.product_id] = {}
+      const label = v.options ? Object.values(v.options).join(' / ') : ''
+      variantMap[v.product_id][label] = v
     })
 
     // 找出缺少的匯率
@@ -87,6 +100,7 @@ export default function OrdersPage() {
             thumbnail: (imageMap[pid] || [])[0] || null,
             totalQty: 0,
             variants: {},
+            variantDetails: variantMap[pid] || {},
           }
         }
         const qty = Number(item.qty) || 0
@@ -94,6 +108,31 @@ export default function OrdersPage() {
         const vLabel = item.variantLabel || '無規格'
         agg[pid].variants[vLabel] = (agg[pid].variants[vLabel] || 0) + qty
       })
+    })
+
+    // 扣除已排入批次的數量（非 settled 的批次中已買到的數量）
+    const batchedQty = {} // productId → qty already handled
+    ;(existingBatchItems || []).forEach(bi => {
+      if (!bi.batch || bi.batch.status === 'settled') return // settled 批次不扣（已完結）
+      const pid = bi.product_id
+      const bought = bi.status === 'bought' || bi.status === 'partial'
+        ? (bi.actual_qty ?? bi.quantity)
+        : bi.status === 'pending' ? bi.quantity : 0 // pending 也算已排入
+      if (!batchedQty[pid]) batchedQty[pid] = 0
+      batchedQty[pid] += bought
+    })
+
+    Object.values(agg).forEach(item => {
+      const deducted = batchedQty[item.productId] || 0
+      if (deducted > 0) {
+        item.batchedQty = deducted
+        item.totalQty = Math.max(0, item.totalQty - deducted)
+      }
+    })
+
+    // 移除數量為 0 的品項
+    Object.keys(agg).forEach(pid => {
+      if (agg[pid].totalQty <= 0) delete agg[pid]
     })
 
     // 計算每項成本（TWD）和營收
@@ -176,18 +215,18 @@ export default function OrdersPage() {
         <div>
           <div className="ph-title">訂單管理</div>
           <div className="ph-sub">
-            {tab === 'internal' ? `自建 ${orders.length} 筆` : `商城 ${consumerOrders.filter(o => o.status !== '已取消').length} 筆`}
+            {tab === 'orders' ? `共 ${orders.length + consumerOrders.filter(o => o.status !== '已取消').length} 筆` : tab === 'procurement' ? '待採購品項' : '採購紀錄'}
           </div>
         </div>
-        {tab === 'internal' && can('add') && <button className="icon-btn" onClick={() => setSheet('add')}>+</button>}
+        {tab === 'orders' && can('add') && <button className="icon-btn" onClick={() => setSheet('add')}>+</button>}
       </div>
 
       {/* Tab switcher */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
         {[
-          { key: 'internal', label: '自建訂單' },
-          { key: 'consumer', label: '商城訂單', badge: pendingConsumer },
+          { key: 'orders', label: '全部訂單', badge: pendingConsumer },
           { key: 'procurement', label: '採購彙整' },
+          { key: 'batch', label: '採購紀錄' },
         ].map(t => (
           <button
             key={t.key}
@@ -214,37 +253,60 @@ export default function OrdersPage() {
 
       {loading && <div className="empty">載入中…</div>}
 
-      {/* Internal orders tab */}
-      {!loading && tab === 'internal' && (
-        <>
-          <div className="stats">
-            <div className="stat">
-              <div className="stat-val text-amber">{unpaid.length}</div>
-              <div className="stat-lbl"><span className="dot" style={{background:'var(--amber)'}} />待付款</div>
-            </div>
-            <div className="stat">
-              <div className="stat-val text-green">{paid.length}</div>
-              <div className="stat-lbl"><span className="dot" style={{background:'var(--green)'}} />已付清</div>
-            </div>
-          </div>
-          {unpaid.length > 0 && (
-            <>
-              <div className="sec">待付款</div>
-              {unpaid.map(o => <OrderCard key={o.id} order={o} onTap={() => setSheet(o)} />)}
-            </>
-          )}
-          {paid.length > 0 && (
-            <>
-              <div className="sec">已付清</div>
-              {paid.map(o => <OrderCard key={o.id} order={o} onTap={() => setSheet(o)} />)}
-            </>
-          )}
-          {orders.length === 0 && <div className="empty">還沒有訂單</div>}
-        </>
-      )}
+      {/* Merged orders tab */}
+      {!loading && tab === 'orders' && (() => {
+        // sub-filter pills
+        const subFilters = [
+          { key: 'all', label: '全部' },
+          { key: 'consumer', label: '商城訂單' },
+          { key: 'internal', label: '自建訂單' },
+        ]
+        const showInternal = orderSubFilter === 'all' || orderSubFilter === 'internal'
+        const showConsumer = orderSubFilter === 'all' || orderSubFilter === 'consumer'
 
-      {/* Consumer orders tab */}
-      {!loading && tab === 'consumer' && (() => {
+        return (
+          <>
+            {/* sub-filter */}
+            <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+              {subFilters.map(f => (
+                <button
+                  key={f.key}
+                  onClick={() => { setOrderSubFilter(f.key); setConsumerPage(1) }}
+                  style={{
+                    padding: '5px 14px', borderRadius: 20, border: '1px solid var(--border)',
+                    background: orderSubFilter === f.key ? 'var(--text)' : 'var(--card)',
+                    color: orderSubFilter === f.key ? '#fff' : 'var(--text-2)',
+                    fontSize: 13, fontWeight: orderSubFilter === f.key ? 700 : 400, cursor: 'pointer',
+                  }}
+                >{f.label}</button>
+              ))}
+            </div>
+
+            {/* Internal orders section */}
+            {showInternal && orders.length > 0 && (
+              <>
+                {orderSubFilter === 'all' && <div className="sec">自建訂單</div>}
+                <div className="stats" style={{ marginBottom: 10 }}>
+                  <div className="stat">
+                    <div className="stat-val text-amber">{unpaid.length}</div>
+                    <div className="stat-lbl"><span className="dot" style={{background:'var(--amber)'}} />待付款</div>
+                  </div>
+                  <div className="stat">
+                    <div className="stat-val text-green">{paid.length}</div>
+                    <div className="stat-lbl"><span className="dot" style={{background:'var(--green)'}} />已付清</div>
+                  </div>
+                </div>
+                {unpaid.map(o => <OrderCard key={`i-${o.id}`} order={o} onTap={() => setSheet(o)} />)}
+                {paid.map(o => <OrderCard key={`i-${o.id}`} order={o} onTap={() => setSheet(o)} />)}
+              </>
+            )}
+
+            {showInternal && orders.length === 0 && orderSubFilter === 'internal' && (
+              <div className="empty">還沒有自建訂單</div>
+            )}
+
+            {/* Consumer orders section */}
+            {showConsumer && (() => {
         const activeOrders = consumerOrders.filter(o => o.status !== '已取消')
         const cancelledOrders = consumerOrders.filter(o => o.status === '已取消')
         const statusFilters = [
@@ -305,6 +367,7 @@ export default function OrdersPage() {
 
         return (
           <>
+            {orderSubFilter === 'all' && <div className="sec">商城訂單</div>}
             {/* 搜尋列 */}
             <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
               <div style={{
@@ -496,6 +559,9 @@ export default function OrdersPage() {
           </>
         )
       })()}
+          </>
+        )
+      })()}
 
       {/* Procurement summary tab */}
       {!loading && tab === 'procurement' && procurementData && (() => {
@@ -510,25 +576,10 @@ export default function OrdersPage() {
             ? procurementData.ungrouped
             : (procurementData.grouped[sourceFilter] || [])
 
-        let fCost = 0, fRevenue = 0
-        filteredItems.forEach(item => {
-          if (item.totalCostTWD != null) fCost += item.totalCostTWD
-          if (item.totalRevenue != null) fRevenue += item.totalRevenue
-        })
-        const fProfit = fRevenue - fCost
-        const fProfitRate = fRevenue > 0 ? (fProfit / fRevenue) * 100 : 0
-
-        // 篩選後的 warnings
-        const filteredWarnings = sourceFilter === 'all'
-          ? procurementData.warnings
-          : procurementData.warnings.filter(w =>
-              filteredItems.some(item => item.name === w.name && item.sku === (w.sku || ''))
-            )
-
         return (
           <>
             {isEmpty ? (
-              <div className="empty">目前沒有待確認的訂單</div>
+              <div className="empty">目前沒有待採購的品項</div>
             ) : (
               <>
                 {/* 來源篩選 */}
@@ -544,50 +595,14 @@ export default function OrdersPage() {
                   />
                 </div>
 
-                {/* 統計卡片 */}
-                <div style={{
-                  display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 16,
-                }}>
-                  <div className="card" style={{ padding: '14px 16px' }}>
-                    <div className="muted fs12">採購成本</div>
-                    <div className="fw600 fs15" style={{ marginTop: 4 }}>NT${Math.round(fCost).toLocaleString()}</div>
-                  </div>
-                  <div className="card" style={{ padding: '14px 16px' }}>
-                    <div className="muted fs12">預估營收</div>
-                    <div className="fw600 fs15" style={{ marginTop: 4 }}>NT${Math.round(fRevenue).toLocaleString()}</div>
-                  </div>
-                  <div className="card" style={{ padding: '14px 16px' }}>
-                    <div className="muted fs12">預估利潤</div>
-                    <div className="fw600 fs15" style={{ marginTop: 4, color: fProfit >= 0 ? 'var(--green)' : 'var(--red)' }}>
-                      NT${Math.round(fProfit).toLocaleString()}
-                    </div>
-                  </div>
-                  <div className="card" style={{ padding: '14px 16px' }}>
-                    <div className="muted fs12">利潤率</div>
-                    <div className="fw600 fs15" style={{ marginTop: 4, color: fProfitRate >= 0 ? 'var(--green)' : 'var(--red)' }}>
-                      {fProfitRate.toFixed(1)}%
-                    </div>
-                  </div>
-                </div>
-
-                {/* 匯率缺失提醒 */}
-                {procurementData.missingRates.length > 0 && (
-                  <div style={{
-                    background: '#fff8e8', borderRadius: 12, padding: '12px 16px', marginBottom: 16,
-                    fontSize: 13, color: '#8a5c00',
-                  }}>
-                    ⚠️ 以下幣別尚未設定匯率，相關商品成本以 0 計算：{procurementData.missingRates.join('、')}
-                  </div>
-                )}
-
                 {/* 未定價 / 無成本提醒 */}
-                {filteredWarnings.length > 0 && (
+                {procurementData.warnings.length > 0 && (
                   <div style={{
                     background: '#fff5f5', borderRadius: 12, padding: '12px 16px', marginBottom: 16,
                     fontSize: 13, color: '#a03030',
                   }}>
                     <div style={{ fontWeight: 600, marginBottom: 6 }}>以下商品資料不完整，已從利潤計算中排除：</div>
-                    {filteredWarnings.map((w, i) => (
+                    {procurementData.warnings.map((w, i) => (
                       <div key={i}>· {w.name}{w.sku ? ` (${w.sku})` : ''} — {w.type === 'no_cost' ? '未設定成本' : '未設定售價'}</div>
                     ))}
                   </div>
@@ -599,6 +614,15 @@ export default function OrdersPage() {
                     <div className="sec" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span>🏬</span> {source}
                       <span className="muted fs12">({items.reduce((s, i) => s + i.totalQty, 0)} 件)</span>
+                      <button
+                        onClick={() => setCreateBatchData({ source, items })}
+                        style={{
+                          marginLeft: 'auto', padding: '4px 10px', borderRadius: 8,
+                          border: '1px solid var(--border)', background: 'var(--card)',
+                          fontSize: 12, fontWeight: 600, cursor: 'pointer', color: 'var(--text)',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >建立批次</button>
                     </div>
                     {items.map(item => (
                       <ProcurementItemCard key={item.sku || item.productId} item={item} onPreview={item => { setPreviewImgIdx(0); setPreviewItem(item) }} />
@@ -622,6 +646,11 @@ export default function OrdersPage() {
           </>
         )
       })()}
+
+      {/* Procurement batch tab */}
+      {!loading && tab === 'batch' && (
+        <ProcurementBatchTab />
+      )}
 
       {/* 商品預覽 Modal */}
       {previewItem && (
@@ -700,6 +729,15 @@ export default function OrdersPage() {
             }}>關閉</button>
           </div>
         </div>
+      )}
+
+      {createBatchData && (
+        <CreateBatchSheet
+          source={createBatchData.source}
+          items={createBatchData.items}
+          onClose={() => setCreateBatchData(null)}
+          onSaved={() => { setCreateBatchData(null); fetchProcurement() }}
+        />
       )}
 
       {sheet === 'add' && <AddOrderSheet onClose={() => setSheet(null)} onSaved={fetchAll} />}
