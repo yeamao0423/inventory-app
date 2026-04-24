@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server'
 const resend = new Resend(process.env.RESEND_API_KEY)
 
 export async function POST(request) {
-  const { order, items, total, lang } = await request.json()
+  const { order, items, total, discount, couponName, lang, notifyEmail } = await request.json()
   const zh = lang !== 'en'
 
   if (!order?.email) {
@@ -72,6 +72,24 @@ export async function POST(request) {
 
           <!-- Total -->
           <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:28px;">
+            ${discount > 0 ? `
+            <tr>
+              <td style="padding:8px 0;border-top:1px solid #e8e8e0;">
+                <span style="font-size:14px;color:#888;">${zh ? '小計' : 'Subtotal'}</span>
+              </td>
+              <td style="padding:8px 0;border-top:1px solid #e8e8e0;text-align:right;">
+                <span style="font-size:14px;color:#888;">NT$${(total + discount).toLocaleString()}</span>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:8px 0;">
+                <span style="font-size:14px;color:#1a7a3a;">${couponName || (zh ? '優惠折扣' : 'Discount')}</span>
+              </td>
+              <td style="padding:8px 0;text-align:right;">
+                <span style="font-size:14px;font-weight:600;color:#1a7a3a;">-NT$${discount.toLocaleString()}</span>
+              </td>
+            </tr>
+            ` : ''}
             <tr>
               <td style="padding:14px 0;border-top:1.5px solid #1a1a1a;">
                 <span style="font-size:16px;font-weight:700;color:#1a1a1a;">${zh ? '總金額' : 'Total'}</span>
@@ -213,6 +231,16 @@ export async function POST(request) {
           </table>
 
           <table width="100%" cellpadding="0" cellspacing="0">
+            ${discount > 0 ? `
+            <tr>
+              <td style="padding:6px 0;font-size:14px;color:#888;">小計</td>
+              <td style="padding:6px 0;text-align:right;font-size:14px;color:#888;">NT$${(total + discount).toLocaleString()}</td>
+            </tr>
+            <tr>
+              <td style="padding:6px 0;font-size:14px;color:#1a7a3a;">${couponName || '優惠折扣'}</td>
+              <td style="padding:6px 0;text-align:right;font-size:14px;font-weight:600;color:#1a7a3a;">-NT$${discount.toLocaleString()}</td>
+            </tr>
+            ` : ''}
             <tr>
               <td style="padding:12px 0;border-top:1.5px solid #1a1a1a;font-size:16px;font-weight:700;color:#1a1a1a;">總金額</td>
               <td style="padding:12px 0;border-top:1.5px solid #1a1a1a;text-align:right;font-size:20px;font-weight:700;color:#1a1a1a;">NT$${total.toLocaleString()}</td>
@@ -231,7 +259,7 @@ export async function POST(request) {
 
   resend.emails.send({
     from: 'Daigogo <no-reply@daigogotw.com>',
-    to: 'daigogosg@gmail.com',
+    to: notifyEmail || 'daigogosg@gmail.com',
     subject: `📦 新訂單 #${orderNo} — ${order.name}（NT$${total.toLocaleString()}）`,
     html: notifyHtml,
   }).catch(err => console.error('Store notify error:', err))
