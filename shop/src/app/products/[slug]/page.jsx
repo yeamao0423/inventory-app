@@ -126,7 +126,7 @@ export default function ProductDetailPage() {
       variantLabel,
       customNote,
       qty,
-      image: null,
+      image: sortedImages[0]?.url || null,
       isCollection: !!sp.collection_end,
     })
     setAdded(true)

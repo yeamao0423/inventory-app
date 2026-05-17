@@ -36,7 +36,10 @@ export default function CartPage() {
         const key = `${item.id}-${item.variantLabel || ''}`
         return (
           <div key={key} className="cart-item">
-            <div className="cart-item-img">📦</div>
+            {item.image
+              ? <img src={item.image} alt={item.name} className="cart-item-img" style={{ objectFit: 'cover' }} />
+              : <div className="cart-item-img">📦</div>
+            }
             <div className="cart-item-info">
               <div className="cart-item-name">{item.name}</div>
               <div className="cart-item-variant">
