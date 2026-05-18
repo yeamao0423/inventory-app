@@ -23,6 +23,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
 
   // Step 2: Selling settings
   const [sellingMode, setSellingMode] = useState('stock') // stock | collection
+  const [skipStockCheck, setSkipStockCheck] = useState(false)
   const [quantity, setQuantity] = useState('')
   const [collectionEnd, setCollectionEnd] = useState('')
   const [descZh, setDescZh] = useState('')
@@ -162,7 +163,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
     if (step === 1) return name.trim() && shopPrice
     if (step === 2) {
       if (sellingMode === 'collection' && !collectionEnd) return false
-      if (sellingMode === 'stock') {
+      if (!skipStockCheck) {
         if (hasVariants && localVariants.length > 0) {
           return localVariants.some(v => v.stock > 0)
         }
@@ -240,6 +241,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
         published,
         collection_end: sellingMode === 'collection' ? new Date(collectionEnd).toISOString() : null,
         sold_out: false,
+        skip_stock_check: skipStockCheck,
       })
 
       if (sfErr) {
@@ -385,7 +387,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
             <div className="form-label" style={{ marginBottom: 8 }}>販售模式 *</div>
             <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
               <button
-                onClick={() => setSellingMode('stock')}
+                onClick={() => { setSellingMode('stock'); setSkipStockCheck(false) }}
                 style={{
                   flex: 1, padding: '14px 8px', borderRadius: 12, fontSize: 14, fontWeight: 600,
                   cursor: 'pointer', transition: 'all .15s', textAlign: 'center',
@@ -400,6 +402,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
               <button
                 onClick={() => {
                   setSellingMode('collection')
+                  setSkipStockCheck(true)
                   if (!collectionEnd) {
                     const d = new Date(); d.setDate(d.getDate() + 7)
                     const pad = n => String(n).padStart(2, '0')
@@ -427,10 +430,36 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
             )}
 
             {sellingMode === 'collection' && (
-              <div className="form-group">
-                <label className="form-label">結單時間 *</label>
-                <input className="form-input" type="datetime-local" value={collectionEnd} onChange={e => setCollectionEnd(e.target.value)} />
-              </div>
+              <>
+                <div className="form-group">
+                  <label className="form-label">結單時間 *</label>
+                  <input className="form-input" type="datetime-local" value={collectionEnd} onChange={e => setCollectionEnd(e.target.value)} />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                  <label className="form-label fs13" style={{ margin: 0 }}>跳過庫存檢查</label>
+                  <div
+                    onClick={() => setSkipStockCheck(v => !v)}
+                    style={{
+                      width: 44, height: 26, borderRadius: 13, cursor: 'pointer', transition: 'background .2s',
+                      background: skipStockCheck ? 'var(--blue, #3b82f6)' : 'var(--border)',
+                      position: 'relative',
+                    }}
+                  >
+                    <div style={{
+                      width: 20, height: 20, borderRadius: '50%', background: '#fff',
+                      position: 'absolute', top: 3, transition: 'left .2s',
+                      left: skipStockCheck ? 21 : 3,
+                    }} />
+                  </div>
+                  <span className="muted fs12">{skipStockCheck ? '不檢查庫存，可無限下單' : '需有庫存才能下單'}</span>
+                </div>
+                {!skipStockCheck && !hasVariants && (
+                  <div className="form-group">
+                    <label className="form-label">庫存數量 *</label>
+                    <input className="form-input" type="number" placeholder="0" value={quantity} onChange={e => setQuantity(e.target.value)} style={{ width: 140 }} />
+                  </div>
+                )}
+              </>
             )}
 
             {/* Variant section */}
@@ -532,7 +561,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
                         </div>
 
                         {/* Batch controls */}
-                        {sellingMode === 'stock' && (
+                        {!skipStockCheck && (
                           <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
                             <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                               <span className="muted fs12">批次庫存:</span>
@@ -565,7 +594,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
                             <thead>
                               <tr style={{ borderBottom: '1px solid var(--border)' }}>
                                 <th style={{ padding: '8px 6px', textAlign: 'left', fontSize: 12, color: 'var(--text-3)', fontWeight: 600 }}>規格</th>
-                                {sellingMode === 'stock' && (
+                                {!skipStockCheck && (
                                   <th style={{ padding: '8px 6px', width: 70, textAlign: 'center', fontSize: 12, color: 'var(--text-3)', fontWeight: 600 }}>庫存</th>
                                 )}
                                 <th style={{ padding: '8px 6px', width: 90, textAlign: 'center', fontSize: 12, color: 'var(--text-3)', fontWeight: 600 }}>售價(NT$)</th>
@@ -578,7 +607,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
                                   <td style={{ padding: '8px 6px' }}>
                                     <span className="fw600">{resolveVariantLabel(v.options)}</span>
                                   </td>
-                                  {sellingMode === 'stock' && (
+                                  {!skipStockCheck && (
                                     <td style={{ padding: '8px 6px', textAlign: 'center' }}>
                                       <input
                                         type="number"
@@ -721,6 +750,9 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
                   : `現貨（庫存 ${quantity}）`
                 : `限時單（截止 ${formatDateTime(collectionEnd)}）`
             } />
+            {sellingMode === 'collection' && (
+              <ConfirmRow label="庫存檢查" value={skipStockCheck ? '跳過（不檢查庫存）' : '啟用'} />
+            )}
 
             {/* Variant summary in confirm */}
             {hasVariants && localVariants.length > 0 && (
@@ -735,8 +767,8 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
                   }}>
                     <span className="fs13">{resolveVariantLabel(v.options)}</span>
                     <span className="fs12 muted">
-                      {sellingMode === 'stock' && `庫存 ${v.stock}`}
-                      {sellingMode === 'stock' && v.variant_price != null && ' · '}
+                      {!skipStockCheck && `庫存 ${v.stock}`}
+                      {!skipStockCheck && v.variant_price != null && ' · '}
                       {v.variant_price != null ? `NT$${v.variant_price.toLocaleString()}` : ''}
                     </span>
                   </div>

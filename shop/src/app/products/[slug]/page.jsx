@@ -79,13 +79,14 @@ export default function ProductDetailPage() {
   const isCollection = !!sp.collection_end
   const collectionExpired = isCollection && new Date(sp.collection_end) < new Date()
   const markedSoldOut = sp.sold_out
+  const skipStock = sp.skip_stock_check || isCollection
 
   // Find current variant based on selected options
   const currentVariant = variants.find(v =>
     Object.entries(selectedOptions).every(([tid, vid]) => v.options?.[tid] === vid)
   )
   const stock = currentVariant?.stock ?? (variants.length === 0 ? p.quantity : 0)
-  const stockSoldOut = stock <= 0 && !isCollection // only check stock for non-collection items
+  const stockSoldOut = stock <= 0 && !skipStock
   const isSoldOut = markedSoldOut || stockSoldOut
   const isUnavailable = isSoldOut || collectionExpired
   const price = currentVariant?.variant_price != null ? Number(currentVariant.variant_price) : sp.shop_price + (currentVariant?.price_adjustment || 0)
@@ -99,6 +100,7 @@ export default function ProductDetailPage() {
 
   // Check if a value is sold out given current selections for other types
   function isValueSoldOut(typeId, valueId) {
+    if (skipStock) return false
     const matching = variants.filter(v => {
       if (v.options?.[String(typeId)] !== valueId) return false
       return Object.entries(selectedOptions).every(([tid, vid]) => {
@@ -127,7 +129,7 @@ export default function ProductDetailPage() {
       customNote,
       qty,
       image: sortedImages[0]?.url || null,
-      isCollection: !!sp.collection_end,
+      isCollection: skipStock,
     })
     setAdded(true)
     setTimeout(() => setAdded(false), 2000)
@@ -243,8 +245,8 @@ export default function ProductDetailPage() {
             <div className="qty-wrap">
               <button className="qty-btn" onClick={() => setQty(q => Math.max(1, q - 1))} disabled={isUnavailable}>−</button>
               <span className="qty-num">{qty}</span>
-              <button className="qty-btn" onClick={() => setQty(q => isCollection ? q + 1 : Math.min(stock, q + 1))} disabled={isUnavailable}>+</button>
-              {!isCollection && (
+              <button className="qty-btn" onClick={() => setQty(q => skipStock ? q + 1 : Math.min(stock, q + 1))} disabled={isUnavailable}>+</button>
+              {!skipStock && (
                 <span style={{ fontSize: 13, color: 'var(--text-3)' }}>
                   {isSoldOut
                     ? <span style={{ color: 'var(--red)' }}>{t('product.sold_out')}</span>

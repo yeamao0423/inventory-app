@@ -55,7 +55,8 @@ export default function ProductsPage() {
     const allVariantsSoldOut = variants.length > 0
       ? variants.every(v => (v.stock ?? 0) <= 0)
       : (sp.products?.quantity ?? 0) <= 0
-    const stockUnavailable = !isCollection && allVariantsSoldOut
+    const skipStock = sp.skip_stock_check
+    const stockUnavailable = !isCollection && !skipStock && allVariantsSoldOut
     const matchStock = !inStockOnly || (!sp.sold_out && !collectionExpired && !stockUnavailable)
     return matchSearch && matchCat && matchTag && matchSource && matchStock
   })

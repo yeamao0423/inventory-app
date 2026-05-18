@@ -139,7 +139,7 @@ export default function StorefrontPage() {
       const baseQty = item.products?.quantity || 0
       const hasAnyStock = baseQty > 0 || hasVariantStock
 
-      if (!hasAnyStock && !item.collection_end) {
+      if (!hasAnyStock && !item.collection_end && !item.skip_stock_check) {
         // No stock → prompt for collection end time
         setCollectionPrompt({ item, collectionEnd: '' })
         return
@@ -154,7 +154,7 @@ export default function StorefrontPage() {
   async function confirmCollectionPublish() {
     if (!collectionPrompt?.collectionEnd) return
     await supabase.from('storefront_products')
-      .update({ published: true, collection_end: localToISO(collectionPrompt.collectionEnd) })
+      .update({ published: true, collection_end: localToISO(collectionPrompt.collectionEnd), skip_stock_check: true })
       .eq('id', collectionPrompt.item.id)
     setCollectionPrompt(null)
     fetchAll()
@@ -750,6 +750,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
     published: item?.published ?? false,
     collection_end: utcToLocal(item?.collection_end),
     sold_out: item?.sold_out ?? false,
+    skip_stock_check: item?.skip_stock_check ?? false,
   })
   const [variants, setVariants] = useState([])
   const [optionTypes, setOptionTypes] = useState([])
@@ -817,6 +818,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
       published: form.published,
       collection_end: localToISO(form.collection_end),
       sold_out: form.sold_out,
+      skip_stock_check: form.skip_stock_check,
     }
 
     // 無規格商品：儲存基礎庫存到 products.quantity
@@ -852,12 +854,12 @@ function ListingSheet({ item, products, onClose, onSaved }) {
   function validate() {
     if (!form.product_id && !editingItem) { alert('請選擇商品'); return false }
     if (!form.shop_price) { alert('請填寫商城售價'); return false }
-    if (sellingMode === 'stock') {
+    if (!form.skip_stock_check) {
       if (variants.length > 0) {
         const totalStock = variants.reduce((sum, v) => sum + (v.stock || 0), 0)
-        if (totalStock <= 0) { alert('現貨模式下至少需要一個規格有庫存，或改用收單模式'); return false }
+        if (totalStock <= 0) { alert('至少需要一個規格有庫存，或開啟「跳過庫存檢查」'); return false }
       } else if ((Number(form.base_stock) || 0) <= 0) {
-        alert('現貨模式請填寫庫存數量，或改用收單模式')
+        alert('請填寫庫存數量，或開啟「跳過庫存檢查」')
         return false
       }
     }
@@ -946,8 +948,8 @@ function ListingSheet({ item, products, onClose, onSaved }) {
               />
             )}
 
-            {/* 無規格 + 現貨模式 → 顯示庫存欄位 */}
-            {variants.length === 0 && !showVariants && sellingMode === 'stock' && (
+            {/* 無規格 + 需要庫存 → 顯示庫存欄位 */}
+            {variants.length === 0 && !showVariants && (sellingMode === 'stock' || !form.skip_stock_check) && (
               <div className="form-group" style={{ marginTop: 12 }}>
                 <label className="form-label">庫存數量</label>
                 <input
@@ -967,7 +969,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
         <div className="sec" style={{ marginTop: 16 }}>銷售模式</div>
         <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
           <button
-            onClick={() => set('collection_end', '')}
+            onClick={() => { set('collection_end', ''); set('skip_stock_check', false) }}
             style={{
               flex: 1, padding: '12px 8px', borderRadius: 10, fontSize: 13, fontWeight: 600,
               cursor: 'pointer', transition: 'all .15s', textAlign: 'center',
@@ -980,23 +982,21 @@ function ListingSheet({ item, products, onClose, onSaved }) {
             <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2, opacity: 0.8 }}>依庫存銷售</div>
           </button>
           <button
-            onClick={() => { if (!form.collection_end) set('collection_end', '') }}
+            onClick={() => {
+              if (sellingMode !== 'collection') {
+                const d = new Date(); d.setDate(d.getDate() + 7)
+                const pad = n => String(n).padStart(2, '0')
+                const val = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+                set('collection_end', val)
+                set('skip_stock_check', true)
+              }
+            }}
             style={{
               flex: 1, padding: '12px 8px', borderRadius: 10, fontSize: 13, fontWeight: 600,
               cursor: 'pointer', transition: 'all .15s', textAlign: 'center',
               background: sellingMode === 'collection' ? 'var(--text)' : 'var(--surface)',
               color: sellingMode === 'collection' ? '#fff' : 'var(--text-3)',
               border: `0.5px solid ${sellingMode === 'collection' ? 'var(--text)' : 'var(--border)'}`,
-            }}
-            // clicking this enables collection mode by setting a placeholder date
-            onClickCapture={() => {
-              if (sellingMode !== 'collection') {
-                // Set a default collection_end 7 days from now
-                const d = new Date(); d.setDate(d.getDate() + 7)
-                const pad = n => String(n).padStart(2, '0')
-                const val = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
-                set('collection_end', val)
-              }
             }}
           >
             🛒 收單模式
@@ -1005,10 +1005,30 @@ function ListingSheet({ item, products, onClose, onSaved }) {
         </div>
 
         {sellingMode === 'collection' && (
-          <div className="form-group">
-            <label className="form-label">收單截止時間</label>
-            <input className="form-input" type="datetime-local" value={form.collection_end} onChange={e => set('collection_end', e.target.value)} />
-          </div>
+          <>
+            <div className="form-group">
+              <label className="form-label">收單截止時間</label>
+              <input className="form-input" type="datetime-local" value={form.collection_end} onChange={e => set('collection_end', e.target.value)} />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <label className="form-label fs13" style={{ margin: 0 }}>跳過庫存檢查</label>
+              <div
+                onClick={() => set('skip_stock_check', !form.skip_stock_check)}
+                style={{
+                  width: 44, height: 26, borderRadius: 13, cursor: 'pointer', transition: 'background .2s',
+                  background: form.skip_stock_check ? 'var(--blue, #3b82f6)' : 'var(--border)',
+                  position: 'relative',
+                }}
+              >
+                <div style={{
+                  width: 20, height: 20, borderRadius: '50%', background: '#fff',
+                  position: 'absolute', top: 3, transition: 'left .2s',
+                  left: form.skip_stock_check ? 21 : 3,
+                }} />
+              </div>
+              <span className="muted fs12">{form.skip_stock_check ? '不檢查庫存，可無限下單' : '需有庫存才能下單'}</span>
+            </div>
+          </>
         )}
 
         {/* ── 5. 商品描述 ── */}
