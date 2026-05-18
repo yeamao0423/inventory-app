@@ -35,6 +35,7 @@ export default function OrdersPage() {
   const [consumerFilterOpen, setConsumerFilterOpen] = useState(false)
   const [showExportSheet, setShowExportSheet] = useState(false)
   const [cancelledOpen, setCancelledOpen] = useState(false)
+  const [internalCancelledOpen, setInternalCancelledOpen] = useState(false)
   const [consumerSearch, setConsumerSearch] = useState('')
   const [consumerDateFilter, setConsumerDateFilter] = useState('all')
   const [consumerPage, setConsumerPage] = useState(1)
@@ -205,8 +206,10 @@ export default function OrdersPage() {
     }
   }, [tab])
 
-  const unpaid = orders.filter(o => o.payment_status !== '已付清')
-  const paid   = orders.filter(o => o.payment_status === '已付清')
+  const activeOrders = orders.filter(o => o.status !== '已取消')
+  const cancelledInternalOrders = orders.filter(o => o.status === '已取消')
+  const unpaid = activeOrders.filter(o => o.payment_status !== '已付清')
+  const paid   = activeOrders.filter(o => o.payment_status === '已付清')
   const pendingConsumer = consumerOrders.filter(o => o.status === '待確認').length
 
   return (
@@ -215,7 +218,7 @@ export default function OrdersPage() {
         <div>
           <div className="ph-title">訂單管理</div>
           <div className="ph-sub">
-            {tab === 'orders' ? `共 ${orders.length + consumerOrders.filter(o => o.status !== '已取消').length} 筆` : tab === 'procurement' ? '待採購品項' : '採購紀錄'}
+            {tab === 'orders' ? `共 ${activeOrders.length + consumerOrders.filter(o => o.status !== '已取消').length} 筆` : tab === 'procurement' ? '待採購品項' : '採購紀錄'}
           </div>
         </div>
         {tab === 'orders' && can('add') && <button className="icon-btn" onClick={() => setSheet('add')}>+</button>}
@@ -283,7 +286,7 @@ export default function OrdersPage() {
             </div>
 
             {/* Internal orders section */}
-            {showInternal && orders.length > 0 && (
+            {showInternal && activeOrders.length > 0 && (
               <>
                 {orderSubFilter === 'all' && <div className="sec">自建訂單</div>}
                 <div className="stats" style={{ marginBottom: 10 }}>
@@ -301,7 +304,36 @@ export default function OrdersPage() {
               </>
             )}
 
-            {showInternal && orders.length === 0 && orderSubFilter === 'internal' && (
+            {showInternal && cancelledInternalOrders.length > 0 && (
+              <div style={{ marginTop: 20 }}>
+                <button
+                  onClick={() => setInternalCancelledOpen(v => !v)}
+                  style={{
+                    width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '10px 14px', borderRadius: 10,
+                    background: 'var(--bg)', border: '0.5px solid var(--border)',
+                    cursor: 'pointer', fontSize: 13, fontWeight: 600, color: 'var(--text-3)',
+                  }}
+                >
+                  <span>已取消訂單（{cancelledInternalOrders.length} 筆）</span>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+                    style={{ transition: 'transform .2s', transform: internalCancelledOpen ? 'rotate(180deg)' : '' }}>
+                    <path d="M6 9l6 6 6-6" />
+                  </svg>
+                </button>
+                {internalCancelledOpen && (
+                  <div style={{ marginTop: 8 }}>
+                    {cancelledInternalOrders.map(o => (
+                      <div key={`ic-${o.id}`} style={{ opacity: 0.6 }}>
+                        <OrderCard order={o} onTap={() => setSheet(o)} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {showInternal && activeOrders.length === 0 && cancelledInternalOrders.length === 0 && orderSubFilter === 'internal' && (
               <div className="empty">還沒有自建訂單</div>
             )}
 
@@ -760,6 +792,12 @@ function statusBadge(s) {
   return <span className="badge badge-low">未付</span>
 }
 
+function orderStatusBadge(s) {
+  if (s === '完成') return <span className="badge badge-ok">完成</span>
+  if (s === '已取消') return <span className="badge badge-low" style={{ color: 'var(--red)' }}>已取消</span>
+  return <span className="badge badge-warn">處理中</span>
+}
+
 function OrderCard({ order: o, onTap }) {
   const balance = (Number(o.total_amount) || 0) - (Number(o.deposit) || 0)
   return (
@@ -768,7 +806,10 @@ function OrderCard({ order: o, onTap }) {
         <div style={{flex:1,minWidth:0}}>
           <div className="row-sb">
             <span className="fw600 fs15">{o.customer}</span>
-            {statusBadge(o.payment_status)}
+            <div style={{ display: 'flex', gap: 6 }}>
+              {o.status && o.status !== '處理中' && orderStatusBadge(o.status)}
+              {statusBadge(o.payment_status)}
+            </div>
           </div>
           <div className="muted fs12 mt8">#{o.id?.toString().slice(-6)} · {o.items}</div>
         </div>
@@ -1615,17 +1656,20 @@ function AddOrderSheet({ onClose, onSaved }) {
 function OrderDetailSheet({ order, onClose, onSaved, canEdit }) {
   const [payment, setPayment] = useState('')
   const [note, setNote] = useState('')
+  const [orderStatus, setOrderStatus] = useState(order.status || '處理中')
   const [saving, setSaving] = useState(false)
+
+  const isCancelled = orderStatus === '已取消'
 
   async function addPayment() {
     if (!payment) return
     setSaving(true)
     const paid = (Number(order.deposit) || 0) + Number(payment)
     const total = Number(order.total_amount) || 0
-    const status = total > 0 && paid >= total ? '已付清' : '已付訂金'
+    const payStatus = total > 0 && paid >= total ? '已付清' : '已付訂金'
     await supabase.from('orders').update({
       deposit: paid,
-      payment_status: status,
+      payment_status: payStatus,
       note: note || order.note,
     }).eq('id', order.id)
     setSaving(false)
@@ -1633,7 +1677,17 @@ function OrderDetailSheet({ order, onClose, onSaved, canEdit }) {
     onClose()
   }
 
+  async function saveStatus() {
+    if (orderStatus === '已取消' && !window.confirm('確定要取消此訂單？取消後可在「已取消」區塊查看。')) return
+    setSaving(true)
+    await supabase.from('orders').update({ status: orderStatus }).eq('id', order.id)
+    setSaving(false)
+    onSaved()
+    onClose()
+  }
+
   const balance = (Number(order.total_amount) || 0) - (Number(order.deposit) || 0)
+  const statusChanged = orderStatus !== (order.status || '處理中')
 
   return (
     <Sheet title={order.customer} onClose={onClose}>
@@ -1661,15 +1715,49 @@ function OrderDetailSheet({ order, onClose, onSaved, canEdit }) {
           </div>
         )}
         <div className="card-row row-sb">
-          <span className="muted fs13">狀態</span>
+          <span className="muted fs13">付款狀態</span>
           {statusBadge(order.payment_status)}
+        </div>
+        <div className="card-row row-sb">
+          <span className="muted fs13">訂單狀態</span>
+          {orderStatusBadge(order.status || '處理中')}
         </div>
         {order.note && (
           <div className="card-row"><span className="muted fs13">備註：{order.note}</span></div>
         )}
       </div>
 
-      {canEdit && order.payment_status !== '已付清' && (
+      {canEdit && (
+        <>
+          <div className="form-group">
+            <label className="form-label">訂單狀態</label>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {['處理中', '完成', '已取消'].map(s => (
+                <button
+                  key={s}
+                  onClick={() => setOrderStatus(s)}
+                  style={{
+                    flex: 1, padding: '8px 0', borderRadius: 10, border: '1px solid var(--border)',
+                    background: orderStatus === s ? (s === '已取消' ? 'var(--red)' : 'var(--text)') : 'var(--card)',
+                    color: orderStatus === s ? '#fff' : 'var(--text-2)',
+                    fontSize: 13, fontWeight: orderStatus === s ? 700 : 400, cursor: 'pointer',
+                  }}
+                >{s}</button>
+              ))}
+            </div>
+          </div>
+          {statusChanged && (
+            <button className="btn" onClick={saveStatus} disabled={saving} style={{
+              marginBottom: 16,
+              background: orderStatus === '已取消' ? 'var(--red)' : undefined,
+            }}>
+              {saving ? '更新中…' : orderStatus === '已取消' ? '確認取消訂單' : '更新狀態'}
+            </button>
+          )}
+        </>
+      )}
+
+      {canEdit && !isCancelled && order.payment_status !== '已付清' && (
         <>
           <div className="form-group">
             <label className="form-label">新增付款金額（NT$）</label>
