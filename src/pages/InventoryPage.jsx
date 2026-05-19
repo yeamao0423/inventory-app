@@ -481,6 +481,7 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete, exi
       .update({ category_id: catId ? Number(catId) : null })
       .eq('id', product.id)
     setSelectedCategory(catId)
+    if (onSaved) onSaved()
   }
 
   async function toggleTag(tagId, checked) {
@@ -491,6 +492,7 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete, exi
       await supabase.from('product_tags').delete().eq('product_id', product.id).eq('tag_id', tagId)
       setSelectedTags(prev => prev.filter(id => id !== tagId))
     }
+    if (onSaved) onSaved()
   }
 
   async function onImagesChange(e) {
