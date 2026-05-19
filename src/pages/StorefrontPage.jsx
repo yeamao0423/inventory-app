@@ -758,6 +758,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
   const [createdItem, setCreatedItem] = useState(null)
   const [showVariants, setShowVariants] = useState(false)
   const [exchangeRates, setExchangeRates] = useState({})
+  const [recentEnds, setRecentEnds] = useState([])
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   const editingItem = item || createdItem
@@ -778,6 +779,16 @@ function ListingSheet({ item, products, onClose, onSaved }) {
         const map = {}
         ;(data || []).forEach(r => { map[r.currency] = Number(r.rate) })
         setExchangeRates(map)
+      })
+    // Load recent collection_end times (future only, deduplicated)
+    supabase.from('storefront_products')
+      .select('collection_end')
+      .not('collection_end', 'is', null)
+      .gt('collection_end', new Date().toISOString())
+      .then(({ data }) => {
+        const unique = [...new Set((data || []).map(d => d.collection_end))]
+          .sort((a, b) => new Date(a) - new Date(b))
+        setRecentEnds(unique.map(utcToLocal))
       })
   }, [])
 
@@ -1008,6 +1019,23 @@ function ListingSheet({ item, products, onClose, onSaved }) {
           <>
             <div className="form-group">
               <label className="form-label">收單截止時間</label>
+              {recentEnds.length > 0 && (
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                  {recentEnds.map(t => {
+                    const d = new Date(t.replace('T', ' '))
+                    const label = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+                    const isActive = form.collection_end === t
+                    return (
+                      <button key={t} onClick={() => set('collection_end', t)} style={{
+                        fontSize: 12, padding: '4px 10px', borderRadius: 16, cursor: 'pointer',
+                        border: '0.5px solid var(--border)', transition: 'all .15s',
+                        background: isActive ? 'var(--text)' : 'var(--surface)',
+                        color: isActive ? '#fff' : 'var(--text-2)',
+                      }}>{label}</button>
+                    )
+                  })}
+                </div>
+              )}
               <input className="form-input" type="datetime-local" value={form.collection_end} onChange={e => set('collection_end', e.target.value)} />
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>

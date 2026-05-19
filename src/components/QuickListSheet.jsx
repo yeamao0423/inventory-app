@@ -42,6 +42,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
   const [localVariants, setLocalVariants] = useState([])
   const [batchStock, setBatchStock] = useState('')
   const [batchPrice, setBatchPrice] = useState('')
+  const [recentEnds, setRecentEnds] = useState([])
 
   useEffect(() => {
     Promise.all([
@@ -50,10 +51,21 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
       supabase.from('variant_option_types')
         .select('*, variant_option_values(id, value, sort_order)')
         .order('sort_order').order('name'),
-    ]).then(([{ data: cats }, { data: tgs }, { data: opts }]) => {
+      supabase.from('storefront_products')
+        .select('collection_end')
+        .not('collection_end', 'is', null)
+        .gt('collection_end', new Date().toISOString()),
+    ]).then(([{ data: cats }, { data: tgs }, { data: opts }, { data: ends }]) => {
       setCategories(cats || [])
       setAllTags(tgs || [])
       setOptionTypes(opts || [])
+      const unique = [...new Set((ends || []).map(d => d.collection_end))]
+        .sort((a, b) => new Date(a) - new Date(b))
+      const pad = n => String(n).padStart(2, '0')
+      setRecentEnds(unique.map(iso => {
+        const d = new Date(iso)
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+      }))
     })
   }, [])
 
@@ -433,6 +445,23 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
               <>
                 <div className="form-group">
                   <label className="form-label">結單時間 *</label>
+                  {recentEnds.length > 0 && (
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                      {recentEnds.map(t => {
+                        const d = new Date(t.replace('T', ' '))
+                        const label = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+                        const isActive = collectionEnd === t
+                        return (
+                          <button key={t} onClick={() => setCollectionEnd(t)} style={{
+                            fontSize: 12, padding: '4px 10px', borderRadius: 16, cursor: 'pointer',
+                            border: '0.5px solid var(--border)', transition: 'all .15s',
+                            background: isActive ? 'var(--text)' : 'var(--surface)',
+                            color: isActive ? '#fff' : 'var(--text-2)',
+                          }}>{label}</button>
+                        )
+                      })}
+                    </div>
+                  )}
                   <input className="form-input" type="datetime-local" value={collectionEnd} onChange={e => setCollectionEnd(e.target.value)} />
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
