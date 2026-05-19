@@ -968,7 +968,8 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
   const activeSubtotal = activeItems.reduce((sum, i) => sum + (Number(i.price) || 0) * (Number(i.qty) || 0), 0)
   const hasAnyCancel = cancelledItems.length > 0
   const hasQtyChange = activeItems.some(i => i.qty < i._originalQty)
-  const hasAnyChange = hasAnyCancel || hasQtyChange
+  const hasAddedItems = itemStatuses.some(i => i._added)
+  const hasAnyChange = hasAnyCancel || hasQtyChange || hasAddedItems
   const meetsThreshold = activeSubtotal >= FREE_SHIPPING_THRESHOLD
   const effectiveShippingFee = !hasAnyChange ? shippingFee : (meetsThreshold ? 0 : shippingFee)
   const newTotal = activeSubtotal + effectiveShippingFee
@@ -1255,7 +1256,7 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
       </div>
 
       {/* 加購商品區塊 */}
-      {canEdit && hasAnyChange && activeItems.length > 0 && (
+      {canEdit && activeItems.length > 0 && (
         <>
           <div className="sec" style={{ marginTop: 0 }}>加購商品（選填）</div>
           <div className="card" style={{ marginBottom: 16, padding: 12 }}>
@@ -1659,7 +1660,15 @@ function OrderDetailSheet({ order, onClose, onSaved, canEdit }) {
   const [orderStatus, setOrderStatus] = useState(order.status || '處理中')
   const [saving, setSaving] = useState(false)
 
+  // 加購商品
+  const [addedItems, setAddedItems] = useState([])
+  const [addItemName, setAddItemName] = useState('')
+  const [addItemPrice, setAddItemPrice] = useState('')
+  const [addItemQty, setAddItemQty] = useState(1)
+
   const isCancelled = orderStatus === '已取消'
+  const addedSubtotal = addedItems.reduce((sum, i) => sum + i.price * i.qty, 0)
+  const updatedTotal = (Number(order.total_amount) || 0) + addedSubtotal
 
   async function addPayment() {
     if (!payment) return
@@ -1680,7 +1689,27 @@ function OrderDetailSheet({ order, onClose, onSaved, canEdit }) {
   async function saveStatus() {
     if (orderStatus === '已取消' && !window.confirm('確定要取消此訂單？取消後可在「已取消」區塊查看。')) return
     setSaving(true)
-    await supabase.from('orders').update({ status: orderStatus }).eq('id', order.id)
+    const updates = { status: orderStatus }
+    // 如果有加購商品，一併更新 items 和 total_amount
+    if (addedItems.length > 0) {
+      const addedText = addedItems.map(i => `${i.name} x${i.qty}`).join('、')
+      updates.items = order.items ? `${order.items}、${addedText}` : addedText
+      updates.total_amount = updatedTotal
+    }
+    await supabase.from('orders').update(updates).eq('id', order.id)
+    setSaving(false)
+    onSaved()
+    onClose()
+  }
+
+  async function saveAddedItems() {
+    if (addedItems.length === 0) return
+    setSaving(true)
+    const addedText = addedItems.map(i => `${i.name} x${i.qty}`).join('、')
+    await supabase.from('orders').update({
+      items: order.items ? `${order.items}、${addedText}` : addedText,
+      total_amount: updatedTotal,
+    }).eq('id', order.id)
     setSaving(false)
     onSaved()
     onClose()
@@ -1702,7 +1731,10 @@ function OrderDetailSheet({ order, onClose, onSaved, canEdit }) {
         </div>
         <div className="card-row row-sb">
           <span className="muted fs13">應付總額</span>
-          <span className="fw600">{order.total_amount ? `NT$${Number(order.total_amount).toLocaleString()}` : '未設定'}</span>
+          <span className="fw600">{addedItems.length > 0
+            ? `NT$${updatedTotal.toLocaleString()}`
+            : (order.total_amount ? `NT$${Number(order.total_amount).toLocaleString()}` : '未設定')
+          }</span>
         </div>
         <div className="card-row row-sb">
           <span className="muted fs13">已付金額</span>
@@ -1726,6 +1758,73 @@ function OrderDetailSheet({ order, onClose, onSaved, canEdit }) {
           <div className="card-row"><span className="muted fs13">備註：{order.note}</span></div>
         )}
       </div>
+
+      {/* 加購商品區塊 */}
+      {canEdit && !isCancelled && (
+        <>
+          <div className="sec" style={{ marginTop: 0 }}>加購商品</div>
+          <div className="card" style={{ marginBottom: 16, padding: 12 }}>
+            {addedItems.length > 0 && addedItems.map((item, i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '0.5px solid var(--border)' }}>
+                <div>
+                  <span className="fs13 fw600">{item.name}</span>
+                  <span className="muted fs12" style={{ marginLeft: 6 }}>× {item.qty}</span>
+                  <span style={{ fontSize: 10, color: 'var(--blue)', marginLeft: 4 }}>(加購)</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span className="muted fs12">NT${(item.price * item.qty).toLocaleString()}</span>
+                  <button onClick={() => setAddedItems(prev => prev.filter((_, idx) => idx !== i))} style={{
+                    fontSize: 11, padding: '2px 8px', borderRadius: 6, border: 'none', cursor: 'pointer',
+                    background: 'var(--red)', color: '#fff',
+                  }}>移除</button>
+                </div>
+              </div>
+            ))}
+            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 8, marginTop: addedItems.length > 0 ? 8 : 0 }}>
+              <input className="form-input" placeholder="商品名稱" value={addItemName}
+                onChange={e => setAddItemName(e.target.value)} style={{ fontSize: 13 }} />
+              <input className="form-input" type="number" placeholder="單價" value={addItemPrice}
+                onChange={e => setAddItemPrice(e.target.value)} style={{ fontSize: 13 }} />
+              <input className="form-input" type="number" min={1} placeholder="數量" value={addItemQty}
+                onChange={e => setAddItemQty(Number(e.target.value))} style={{ fontSize: 13 }} />
+            </div>
+            <button style={{
+              marginTop: 8, width: '100%', padding: '6px 0', borderRadius: 8,
+              border: '1px dashed var(--border)', background: 'none', cursor: 'pointer',
+              fontSize: 13, color: 'var(--text-2)',
+            }} onClick={() => {
+              if (!addItemName || !addItemPrice) return
+              setAddedItems(prev => [...prev, { name: addItemName, price: Number(addItemPrice), qty: addItemQty || 1 }])
+              setAddItemName('')
+              setAddItemPrice('')
+              setAddItemQty(1)
+            }}>
+              + 加入訂單
+            </button>
+          </div>
+          {addedItems.length > 0 && (
+            <div className="card" style={{ marginBottom: 16 }}>
+              <div className="card-row row-sb">
+                <span className="muted fs13">原訂單金額</span>
+                <span className="fs13">NT${Number(order.total_amount || 0).toLocaleString()}</span>
+              </div>
+              <div className="card-row row-sb">
+                <span className="muted fs13">加購小計</span>
+                <span className="fs13" style={{ color: 'var(--blue)' }}>+NT${addedSubtotal.toLocaleString()}</span>
+              </div>
+              <div className="card-row row-sb" style={{ borderTop: '1.5px solid var(--text)', paddingTop: 10 }}>
+                <span className="fw600 fs13">更新後總金額</span>
+                <span className="fw600">NT${updatedTotal.toLocaleString()}</span>
+              </div>
+            </div>
+          )}
+          {addedItems.length > 0 && (
+            <button className="btn" onClick={saveAddedItems} disabled={saving} style={{ marginBottom: 16 }}>
+              {saving ? '更新中…' : '儲存加購商品'}
+            </button>
+          )}
+        </>
+      )}
 
       {canEdit && (
         <>
