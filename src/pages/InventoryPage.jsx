@@ -461,7 +461,7 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete, exi
   const [uploading, setUploading] = useState(false)
   const [categories, setCategories] = useState([])
   const [allTags, setAllTags] = useState([])
-  const [selectedCategory, setSelectedCategory] = useState(product.category_id || '')
+  const [selectedCategory, setSelectedCategory] = useState(product.category_id ? String(product.category_id) : '')
   const [selectedTags, setSelectedTags] = useState(
     (product.product_tags || []).map(pt => pt.tag_id)
   )
