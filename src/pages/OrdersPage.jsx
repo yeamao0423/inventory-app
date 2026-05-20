@@ -45,7 +45,7 @@ export default function OrdersPage() {
   async function fetchProcurement() {
     setLoading(true)
     const [{ data: pending }, { data: products }, { data: spProducts }, { data: rates }, { data: images }, { data: allVariants }, { data: existingBatchItems }] = await Promise.all([
-      supabase.from('consumer_orders').select('*').not('status', 'in', '("已出貨","完成","已取消")'),
+      supabase.from('consumer_orders').select('*').not('status', 'in', '("已購買","已出貨","完成","已取消")'),
       supabase.from('products').select('id, name, sku, source, cost, currency'),
       supabase.from('storefront_products').select('product_id, shop_price'),
       supabase.from('exchange_rates').select('*'),
@@ -345,6 +345,7 @@ export default function OrdersPage() {
           { key: 'all', label: '全部' },
           { key: '待確認', label: '待確認' },
           { key: '處理中', label: '處理中' },
+          { key: '已購買', label: '已購買' },
           { key: '已出貨', label: '已出貨' },
           { key: '完成', label: '完成' },
         ]
@@ -828,6 +829,7 @@ function OrderCard({ order: o, onTap }) {
 
 function consumerStatusBadge(s) {
   if (s === '已出貨') return <span className="badge badge-ok">已出貨</span>
+  if (s === '已購買') return <span className="badge badge-warn" style={{ background: 'var(--blue, #3b82f6)', color: '#fff' }}>已購買</span>
   if (s === '處理中') return <span className="badge badge-warn">處理中</span>
   if (s === '完成')   return <span className="badge badge-ok">完成</span>
   if (s === '已取消') return <span className="badge badge-low" style={{ color: 'var(--red)' }}>已取消</span>
@@ -1356,7 +1358,7 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
               <CustomSelect
                 label={status}
                 value={status}
-                options={['待確認', '處理中', '已出貨', '完成', '已取消'].map(s => ({ value: s, label: s }))}
+                options={['待確認', '處理中', '已購買', '已出貨', '完成', '已取消'].map(s => ({ value: s, label: s }))}
                 onChange={v => v && setStatus(v)}
                 allowClear={false}
               />
@@ -1881,7 +1883,7 @@ function ExportShippingSheet({ orders, onClose }) {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
 
-  const allStatuses = ['待確認', '處理中', '已出貨', '完成', '已取消']
+  const allStatuses = ['待確認', '處理中', '已購買', '已出貨', '完成', '已取消']
   const allPayStatuses = ['未付', '已付清']
 
   const toggleArr = (arr, setArr, val) =>
