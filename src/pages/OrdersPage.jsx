@@ -437,6 +437,7 @@ export default function OrdersPage() {
                       padding: '0 14px', borderRadius: 12, border: '1px solid var(--border)',
                       background: 'var(--card)', color: 'var(--text)', height: 42,
                       cursor: 'pointer', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap',
+                      outline: 'none',
                     }}
                   >
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -450,25 +451,26 @@ export default function OrdersPage() {
                     <>
                       <div onClick={() => setShowExportMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 19 }} />
                       <div style={{
-                        position: 'absolute', top: 48, right: 0, zIndex: 20, minWidth: 140,
+                        position: 'absolute', top: 48, right: 0, zIndex: 20, width: 140,
                         background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12,
-                        boxShadow: '0 8px 24px rgba(0,0,0,.12)', overflow: 'hidden',
+                        boxShadow: '0 4px 16px rgba(0,0,0,.10)', overflow: 'hidden',
                       }}>
                         {[
-                          { label: '出貨單', open: () => setShowExportSheet(true) },
-                          { label: '營收報表', open: () => setShowRevenueSheet(true) },
+                          { icon: '📦', label: '出貨單', open: () => setShowExportSheet(true) },
+                          { icon: '📊', label: '營收報表', open: () => setShowRevenueSheet(true) },
                         ].map((m, i) => (
                           <button
                             key={m.label}
                             onClick={() => { setShowExportMenu(false); m.open() }}
                             style={{
-                              display: 'block', width: '100%', padding: '12px 16px', textAlign: 'left',
-                              background: 'none', border: 'none', cursor: 'pointer',
+                              display: 'flex', alignItems: 'center', gap: 8,
+                              width: '100%', padding: '11px 14px', textAlign: 'left',
+                              background: 'none', border: 'none', cursor: 'pointer', outline: 'none',
                               borderTop: i > 0 ? '1px solid var(--border)' : 'none',
-                              fontSize: 14, fontWeight: 600, color: 'var(--text)',
+                              fontSize: 13, fontWeight: 500, color: 'var(--text)',
                             }}
                           >
-                            {m.label}
+                            <span>{m.icon}</span>{m.label}
                           </button>
                         ))}
                       </div>
