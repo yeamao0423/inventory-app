@@ -452,7 +452,7 @@ export default function OrdersPage() {
                       <div onClick={() => setShowExportMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 19 }} />
                       <div style={{
                         position: 'absolute', top: 48, right: 0, zIndex: 20, width: 140,
-                        background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12,
+                        background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12,
                         boxShadow: '0 4px 16px rgba(0,0,0,.10)', overflow: 'hidden',
                       }}>
                         {[
@@ -465,7 +465,7 @@ export default function OrdersPage() {
                             style={{
                               display: 'flex', alignItems: 'center', gap: 8,
                               width: '100%', padding: '11px 14px', textAlign: 'left',
-                              background: 'none', border: 'none', cursor: 'pointer', outline: 'none',
+                              background: 'var(--surface)', border: 'none', cursor: 'pointer', outline: 'none',
                               borderTop: i > 0 ? '1px solid var(--border)' : 'none',
                               fontSize: 13, fontWeight: 500, color: 'var(--text)',
                             }}
