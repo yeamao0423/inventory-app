@@ -3,6 +3,8 @@
 -- Run this in Supabase Dashboard → SQL Editor
 -- ============================================
 
+BEGIN;
+
 -- Add variant_price column (nullable, when NULL falls back to shop_price)
 ALTER TABLE public.product_variants
 ADD COLUMN IF NOT EXISTS variant_price numeric(10,2) DEFAULT NULL;
@@ -18,3 +20,5 @@ WHERE sp.product_id = pv.product_id
 
 -- For variants with zero adjustment, leave variant_price NULL
 -- (will fall back to shop_price in the UI)
+
+COMMIT;

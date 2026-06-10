@@ -34,6 +34,8 @@ export default function OrdersPage() {
   const [consumerStatusFilter, setConsumerStatusFilter] = useState('all') // 'all' | status
   const [consumerFilterOpen, setConsumerFilterOpen] = useState(false)
   const [showExportSheet, setShowExportSheet] = useState(false)
+  const [showExportMenu, setShowExportMenu] = useState(false)
+  const [showRevenueSheet, setShowRevenueSheet] = useState(false)
   const [cancelledOpen, setCancelledOpen] = useState(false)
   const [internalCancelledOpen, setInternalCancelledOpen] = useState(false)
   const [consumerSearch, setConsumerSearch] = useState('')
@@ -299,8 +301,10 @@ export default function OrdersPage() {
                     <div className="stat-lbl"><span className="dot" style={{background:'var(--green)'}} />已付清</div>
                   </div>
                 </div>
-                {unpaid.map(o => <OrderCard key={`i-${o.id}`} order={o} onTap={() => setSheet(o)} />)}
-                {paid.map(o => <OrderCard key={`i-${o.id}`} order={o} onTap={() => setSheet(o)} />)}
+                <div className="card-grid">
+                  {unpaid.map(o => <OrderCard key={`i-${o.id}`} order={o} onTap={() => setSheet(o)} />)}
+                  {paid.map(o => <OrderCard key={`i-${o.id}`} order={o} onTap={() => setSheet(o)} />)}
+                </div>
               </>
             )}
 
@@ -322,7 +326,7 @@ export default function OrdersPage() {
                   </svg>
                 </button>
                 {internalCancelledOpen && (
-                  <div style={{ marginTop: 8 }}>
+                  <div className="card-grid" style={{ marginTop: 8 }}>
                     {cancelledInternalOrders.map(o => (
                       <div key={`ic-${o.id}`} style={{ opacity: 0.6 }}>
                         <OrderCard order={o} onTap={() => setSheet(o)} />
@@ -425,22 +429,52 @@ export default function OrdersPage() {
                 )}
               </div>
               {isAdmin && (
-                <button
-                  onClick={() => setShowExportSheet(true)}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                    padding: '0 14px', borderRadius: 12, border: '1px solid var(--border)',
-                    background: 'var(--card)', color: 'var(--text)', height: 42,
-                    cursor: 'pointer', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap',
-                  }}
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                    <polyline points="7 10 12 15 17 10" />
-                    <line x1="12" y1="15" x2="12" y2="3" />
-                  </svg>
-                  出貨單
-                </button>
+                <div style={{ position: 'relative' }}>
+                  <button
+                    onClick={() => setShowExportMenu(v => !v)}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                      padding: '0 14px', borderRadius: 12, border: '1px solid var(--border)',
+                      background: 'var(--card)', color: 'var(--text)', height: 42,
+                      cursor: 'pointer', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap',
+                    }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                      <polyline points="7 10 12 15 17 10" />
+                      <line x1="12" y1="15" x2="12" y2="3" />
+                    </svg>
+                    匯出
+                  </button>
+                  {showExportMenu && (
+                    <>
+                      <div onClick={() => setShowExportMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 19 }} />
+                      <div style={{
+                        position: 'absolute', top: 48, right: 0, zIndex: 20, minWidth: 140,
+                        background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12,
+                        boxShadow: '0 8px 24px rgba(0,0,0,.12)', overflow: 'hidden',
+                      }}>
+                        {[
+                          { label: '出貨單', open: () => setShowExportSheet(true) },
+                          { label: '營收報表', open: () => setShowRevenueSheet(true) },
+                        ].map((m, i) => (
+                          <button
+                            key={m.label}
+                            onClick={() => { setShowExportMenu(false); m.open() }}
+                            style={{
+                              display: 'block', width: '100%', padding: '12px 16px', textAlign: 'left',
+                              background: 'none', border: 'none', cursor: 'pointer',
+                              borderTop: i > 0 ? '1px solid var(--border)' : 'none',
+                              fontSize: 14, fontWeight: 600, color: 'var(--text)',
+                            }}
+                          >
+                            {m.label}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
               )}
             </div>
 
@@ -527,9 +561,11 @@ export default function OrdersPage() {
 
             {/* 訂單列表 */}
             {pagedConsumer.length === 0 && <div className="empty">沒有符合的訂單</div>}
-            {pagedConsumer.map(o => (
-              <ConsumerOrderCard key={o.id} order={o} onTap={() => setSheet({ _type: 'consumer', ...o })} />
-            ))}
+            <div className="card-grid">
+              {pagedConsumer.map(o => (
+                <ConsumerOrderCard key={o.id} order={o} onTap={() => setSheet({ _type: 'consumer', ...o })} />
+              ))}
+            </div>
 
             {/* 分頁 */}
             {totalPages > 1 && (
@@ -579,7 +615,7 @@ export default function OrdersPage() {
                   </svg>
                 </button>
                 {cancelledOpen && (
-                  <div style={{ marginTop: 8 }}>
+                  <div className="card-grid" style={{ marginTop: 8 }}>
                     {cancelledOrders.map(o => (
                       <div key={o.id} style={{ opacity: 0.6 }}>
                         <ConsumerOrderCard order={o} onTap={() => setSheet({ _type: 'consumer', ...o })} />
@@ -779,6 +815,9 @@ export default function OrdersPage() {
       )}
       {sheet && sheet._type === 'consumer' && (
         <ConsumerOrderDetailSheet order={sheet} onClose={() => setSheet(null)} onSaved={fetchAll} canEdit={can('pay')} />
+      )}
+      {showRevenueSheet && (
+        <ExportRevenueSheet onClose={() => setShowRevenueSheet(false)} />
       )}
       {showExportSheet && (
         <ExportShippingSheet orders={consumerOrders} onClose={() => setShowExportSheet(false)} />
@@ -1994,6 +2033,239 @@ function ExportShippingSheet({ orders, onClose }) {
           }}
         >
           匯出 CSV（{filtered.length} 筆）
+        </button>
+      </div>
+    </Sheet>
+  )
+}
+
+function ExportRevenueSheet({ onClose }) {
+  const allStatuses = ['待確認', '處理中', '已購買', '已出貨', '完成', '已取消']
+  const allPayStatuses = ['未付', '已付清']
+  const [statuses, setStatuses] = useState(allStatuses.filter(s => s !== '已取消'))
+  const [payStatuses, setPayStatuses] = useState([])
+  const [idFrom, setIdFrom] = useState('')
+  const [idTo, setIdTo] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [level, setLevel] = useState('both')
+  const [preview, setPreview] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [exporting, setExporting] = useState(false)
+
+  const toggleArr = (arr, setArr, val) =>
+    setArr(prev => prev.includes(val) ? prev.filter(v => v !== val) : [...prev, val])
+
+  const rpcParams = {
+    p_date_from: dateFrom || null,
+    p_date_to: dateTo || null,
+    p_id_from: idFrom ? Number(idFrom) : null,
+    p_id_to: idTo ? Number(idTo) : null,
+    p_statuses: statuses.length > 0 ? statuses : null,
+    p_pay_statuses: payStatuses.length > 0 ? payStatuses : null,
+  }
+
+  // 篩選變更時（debounce）重新計算彙總預覽
+  useEffect(() => {
+    let alive = true
+    setLoading(true)
+    const t = setTimeout(async () => {
+      const { data, error } = await supabase.rpc('revenue_report_orders', rpcParams)
+      if (!alive) return
+      setLoading(false)
+      if (error || !data) { setPreview(null); return }
+      const sum = key => data.reduce((s, r) => s + Number(r[key] || 0), 0)
+      setPreview({ count: data.length, revenue: sum('total_amount'), cost: sum('total_cost'), profit: sum('profit') })
+    }, 400)
+    return () => { alive = false; clearTimeout(t) }
+  }, [statuses, payStatuses, idFrom, idTo, dateFrom, dateTo])
+
+  const esc = v => {
+    const s = String(v ?? '')
+    return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s
+  }
+  const fmtTime = s => new Date(s).toLocaleString('zh-TW', {
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+  })
+
+  function downloadCSV(rows, filename) {
+    const blob = new Blob(['\uFEFF' + rows.join('\r\n')], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  function buildOrdersCSV(data) {
+    const rows = [
+      ['訂單編號', '訂單時間', '下單人', 'Email', '電話', '末五碼', '訂單狀態', '付款狀態',
+       '件數', '商品小計', '折扣金額', '運費', '訂單總金額', '訂單總成本(TWD)', '訂單利潤', '毛利率(%)', '物流追蹤碼'].join(','),
+    ]
+    data.forEach(r => {
+      rows.push([
+        r.order_id, fmtTime(r.created_at), esc(r.customer_name), esc(r.email), esc(r.phone),
+        esc(r.remittance_last5), r.status, r.payment_status,
+        r.item_count, r.subtotal, r.discount_amount, r.shipping_fee ?? '',
+        r.total_amount, r.total_cost, r.profit, r.margin ?? '', esc(r.tracking_number),
+      ].join(','))
+    })
+    const sum = key => data.reduce((s, r) => s + Number(r[key] || 0), 0)
+    const totalRevenue = sum('total_amount')
+    const totalProfit = sum('profit')
+    rows.push([
+      '合計', '', '', '', '', '', '', '',
+      sum('item_count'), sum('subtotal'), sum('discount_amount'), sum('shipping_fee'),
+      totalRevenue, sum('total_cost'), totalProfit,
+      totalRevenue > 0 ? (totalProfit / totalRevenue * 100).toFixed(1) : '', '',
+    ].join(','))
+    return rows
+  }
+
+  function buildItemsCSV(data) {
+    const rows = [
+      ['訂單編號', '訂單時間', '訂單狀態', '商品名稱', 'SKU', '規格', '品項狀態',
+       '數量', '售價', '小計', '幣別', '原幣成本', '成本(TWD)', '成本小計', '品項利潤', '備註'].join(','),
+    ]
+    data.forEach(r => {
+      rows.push([
+        r.order_id, fmtTime(r.created_at), r.order_status, esc(r.item_name), esc(r.sku),
+        esc(r.variant_label), r.item_status === 'cancelled' ? '已取消' : '',
+        r.qty, r.unit_price ?? '', r.subtotal ?? '', r.currency ?? '',
+        r.unit_cost_orig ?? '', r.unit_cost_twd ?? '', r.cost_subtotal ?? '', r.item_profit ?? '',
+        esc(r.custom_note),
+      ].join(','))
+    })
+    return rows
+  }
+
+  async function exportCSV() {
+    setExporting(true)
+    try {
+      const today = new Date().toISOString().slice(0, 10)
+      if (level === 'orders' || level === 'both') {
+        const { data, error } = await supabase.rpc('revenue_report_orders', rpcParams)
+        if (error) throw error
+        if (!data?.length) return alert('沒有符合條件的訂單')
+        downloadCSV(buildOrdersCSV(data), `營收報表_訂單_${today}.csv`)
+      }
+      if (level === 'items' || level === 'both') {
+        const { data, error } = await supabase.rpc('revenue_report_items', rpcParams)
+        if (error) throw error
+        if (!data?.length) return level === 'items' ? alert('沒有符合條件的訂單') : undefined
+        downloadCSV(buildItemsCSV(data), `營收報表_品項_${today}.csv`)
+      }
+    } catch (e) {
+      alert('匯出失敗：' + (e.message || e))
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const chipStyle = (active) => ({
+    padding: '5px 12px', borderRadius: 20, border: '1px solid var(--border)',
+    background: active ? 'var(--text)' : 'var(--card)',
+    color: active ? '#fff' : 'var(--text-2)',
+    fontSize: 13, fontWeight: active ? 700 : 400, cursor: 'pointer',
+  })
+  const labelStyle = { fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }
+  const inputStyle = {
+    flex: 1, padding: '8px 12px', borderRadius: 10, border: '1px solid var(--border)',
+    background: 'var(--card)', color: 'var(--text)', fontSize: 14,
+  }
+  const fmtMoney = n => 'NT$' + Math.round(n).toLocaleString()
+  const canExport = !exporting && (preview?.count ?? 0) > 0
+
+  return (
+    <Sheet title="匯出營收報表" onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+        {/* 報表層級 */}
+        <div>
+          <div style={labelStyle}>報表內容</div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {[['orders', '訂單總表'], ['items', '品項明細'], ['both', '兩者都要']].map(([key, label]) => (
+              <button key={key} style={chipStyle(level === key)} onClick={() => setLevel(key)}>{label}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* 訂單狀態 */}
+        <div>
+          <div style={labelStyle}>訂單狀態</div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {allStatuses.map(s => (
+              <button key={s} style={chipStyle(statuses.includes(s))}
+                onClick={() => toggleArr(statuses, setStatuses, s)}>{s}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* 付款狀態 */}
+        <div>
+          <div style={labelStyle}>付款狀態</div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {allPayStatuses.map(s => (
+              <button key={s} style={chipStyle(payStatuses.includes(s))}
+                onClick={() => toggleArr(payStatuses, setPayStatuses, s)}>{s}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* 訂單編號區間 */}
+        <div>
+          <div style={labelStyle}>訂單編號區間</div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input type="number" placeholder="從" value={idFrom} onChange={e => setIdFrom(e.target.value)} style={inputStyle} />
+            <span style={{ color: 'var(--text-3)' }}>~</span>
+            <input type="number" placeholder="到" value={idTo} onChange={e => setIdTo(e.target.value)} style={inputStyle} />
+          </div>
+        </div>
+
+        {/* 下單時間區間 */}
+        <div>
+          <div style={labelStyle}>下單時間區間</div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} style={inputStyle} />
+            <span style={{ color: 'var(--text-3)' }}>~</span>
+            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} style={inputStyle} />
+          </div>
+        </div>
+
+        {/* 彙總預覽 */}
+        <div style={{
+          border: '1px solid var(--border)', borderRadius: 12, padding: '12px 14px',
+          display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10,
+        }}>
+          {loading ? (
+            <div style={{ gridColumn: '1 / -1', textAlign: 'center', color: 'var(--text-3)', fontSize: 13 }}>計算中…</div>
+          ) : preview ? (
+            [['訂單數', `${preview.count} 筆`], ['總營收', fmtMoney(preview.revenue)],
+             ['總成本', fmtMoney(preview.cost)], ['總利潤', fmtMoney(preview.profit)]].map(([k, v]) => (
+              <div key={k}>
+                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>{k}</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>{v}</div>
+              </div>
+            ))
+          ) : (
+            <div style={{ gridColumn: '1 / -1', textAlign: 'center', color: 'var(--text-3)', fontSize: 13 }}>
+              無法取得彙總（請確認已套用報表 migration）
+            </div>
+          )}
+        </div>
+
+        {/* 匯出按鈕 */}
+        <button
+          onClick={exportCSV}
+          disabled={!canExport}
+          style={{
+            width: '100%', padding: '14px 0', borderRadius: 12, border: 'none',
+            background: canExport ? 'var(--text)' : 'var(--border)',
+            color: '#fff', fontSize: 15, fontWeight: 700, cursor: canExport ? 'pointer' : 'default',
+            marginTop: 4,
+          }}
+        >
+          {exporting ? '匯出中…' : `匯出 CSV（${preview?.count ?? 0} 筆訂單）`}
         </button>
       </div>
     </Sheet>
