@@ -64,6 +64,7 @@ export default function App() {
       </Routes>
 
       <nav className="tabbar">
+        <div className="side-brand"><img src="/logo.png" alt="" />Daigogo</div>
         {tabs.map(({ path, label, icon: Icon }) => (
           <button
             key={path}

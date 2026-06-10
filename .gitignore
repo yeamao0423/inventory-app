@@ -13,3 +13,4 @@ backend-update/
 *.docx
 migrate_roles.sql
 migration_*.sql
+.gstack/

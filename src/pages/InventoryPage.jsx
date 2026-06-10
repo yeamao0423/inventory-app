@@ -132,14 +132,18 @@ export default function InventoryPage() {
       {pagedLow.length > 0 && (
         <>
           <div className="sec">⚠ 低庫存警示</div>
-          {pagedLow.map(p => <ProductRow key={p.id} product={p} onTap={() => setSheet(p)} low />)}
+          <div className="card-grid">
+            {pagedLow.map(p => <ProductRow key={p.id} product={p} onTap={() => setSheet(p)} low />)}
+          </div>
         </>
       )}
 
       {pagedNormal.length > 0 && (
         <>
           <div className="sec">所有商品</div>
-          {pagedNormal.map(p => <ProductRow key={p.id} product={p} onTap={() => setSheet(p)} />)}
+          <div className="card-grid">
+            {pagedNormal.map(p => <ProductRow key={p.id} product={p} onTap={() => setSheet(p)} />)}
+          </div>
         </>
       )}
 

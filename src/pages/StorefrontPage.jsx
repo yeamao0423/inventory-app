@@ -397,6 +397,7 @@ export default function StorefrontPage() {
           {paged.length === 0 && (
             <div className="empty">{listings.length === 0 ? '尚未上架任何商品，點右上角 + 開始上架' : '沒有符合篩選條件的商品'}</div>
           )}
+          <div className="card-grid">
           {paged.map(item => {
             const isCollection = !!item.collection_end
             const collectionExpired = isCollection && new Date(item.collection_end) < new Date()
@@ -472,6 +473,7 @@ export default function StorefrontPage() {
               </div>
             )
           })}
+          </div>
 
           {/* 分頁 */}
           {totalPages > 1 && (

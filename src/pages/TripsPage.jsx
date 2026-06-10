@@ -389,6 +389,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
           <div
             ref={carouselRef}
             onScroll={handleScroll}
+            className="trip-carousel"
             style={{
               display: 'flex',
               overflowX: 'auto',
@@ -398,7 +399,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
             }}
           >
             {/* Slide 1: 核心財務 */}
-            <div style={{ minWidth: '100%', flexShrink: 0, scrollSnapAlign: 'start', boxSizing: 'border-box', paddingRight: 24 }}>
+            <div className="trip-slide" style={{ minWidth: '100%', flexShrink: 0, scrollSnapAlign: 'start', boxSizing: 'border-box', paddingRight: 24 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-3)', marginBottom: 10 }}>核心財務</div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 <div style={mCard}>
@@ -425,7 +426,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
             </div>
 
             {/* Slide 2: 營運指標 */}
-            <div style={{ minWidth: '100%', flexShrink: 0, scrollSnapAlign: 'start', boxSizing: 'border-box', paddingRight: 24 }}>
+            <div className="trip-slide" style={{ minWidth: '100%', flexShrink: 0, scrollSnapAlign: 'start', boxSizing: 'border-box', paddingRight: 24 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-3)', marginBottom: 10 }}>營運指標</div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 <div style={mCard}>
@@ -450,7 +451,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
             </div>
 
             {/* Slide 3: 客群概覽 */}
-            <div style={{ minWidth: '100%', flexShrink: 0, scrollSnapAlign: 'start', boxSizing: 'border-box' }}>
+            <div className="trip-slide" style={{ minWidth: '100%', flexShrink: 0, scrollSnapAlign: 'start', boxSizing: 'border-box' }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-3)', marginBottom: 10 }}>客群概覽</div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 <div style={mCard}>
@@ -474,7 +475,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
           </div>
 
           {/* Dots indicator */}
-          <div style={{ display: 'flex', justifyContent: 'center', gap: 6, marginTop: 12 }}>
+          <div className="trip-dots" style={{ display: 'flex', justifyContent: 'center', gap: 6, marginTop: 12 }}>
             {Array.from({ length: SLIDE_COUNT }).map((_, i) => (
               <div key={i} style={{
                 width: activeSlide === i ? 18 : 6,

@@ -277,3 +277,95 @@ html, body, #root {
 .mt12  { margin-top: 12px; }
 .mt16  { margin-top: 16px; }
 .gap8  { gap: 8px; }
+
+/* ── Desktop layout (≥768px) ──────────────────────────────
+   手機版樣式完全不動，桌面樣式全部包在此 media query 內。
+   .side-brand / .card-grid / .trip-* 在手機上是無樣式的純容器。 */
+.side-brand { display: none; }
+
+@keyframes modalIn {
+  from { opacity: 0; transform: translateY(10px) scale(.98); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (min-width: 768px) {
+  .app { max-width: none; flex-direction: row; }
+
+  /* 底部 tabbar → 左側 sidebar */
+  .tabbar {
+    order: -1;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 2px;
+    width: 220px;
+    flex-shrink: 0;
+    border-top: none;
+    border-right: 0.5px solid var(--border);
+    padding: 20px 12px;
+    background: var(--surface);
+  }
+  .side-brand {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 17px; font-weight: 700;
+    padding: 6px 14px 22px;
+  }
+  .side-brand img { height: 26px; }
+  .tab-btn {
+    flex: 0 0 auto;
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 12px;
+    padding: 11px 14px;
+    border-radius: 10px;
+  }
+  .tab-btn:hover { background: var(--bg); }
+  .tab-btn.active { background: var(--text); color: #fff; }
+  .tab-btn svg { width: 20px; height: 20px; }
+  .tab-lbl { font-size: 14px; }
+
+  /* 內容區置中限寬 */
+  .page { padding: 36px max(40px, calc((100% - 920px) / 2)) 48px; }
+
+  .stats { grid-template-columns: repeat(4, 1fr); gap: 12px; }
+
+  /* 卡片列表 → 雙欄網格 */
+  .card-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 8px;
+    align-items: start;
+  }
+  .card-grid .card { margin-bottom: 0; }
+
+  /* bottom sheet → 置中 modal */
+  .sheet-overlay {
+    bottom: 0;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+  }
+  .sheet {
+    max-width: 640px;
+    border-radius: 20px;
+    padding: 24px 28px 28px;
+    max-height: 86vh; max-height: 86dvh;
+    animation: modalIn .18s ease;
+  }
+  .sheet-handle { display: none; }
+
+  .custom-dropdown-menu { max-height: 320px; }
+
+  .btn:hover { opacity: .88; }
+  .icon-btn:hover { opacity: .85; }
+
+  /* 行程報告：輪播攤平成三欄（覆蓋 inline style 需 !important） */
+  .trip-carousel {
+    display: grid !important;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+    overflow-x: visible !important;
+  }
+  .trip-slide { min-width: 0 !important; padding-right: 0 !important; }
+  .trip-dots { display: none !important; }
+}
