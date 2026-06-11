@@ -10,19 +10,23 @@ const FIXED_CATEGORIES = [
 ]
 
 export default function TripsPage() {
-  const { profile } = useAuth()
+  const { profile, storeId } = useAuth()
   const [trips, setTrips] = useState([])
   const [loading, setLoading] = useState(true)
   const [sheet, setSheet] = useState(null) // null | 'add' | trip obj (for editing)
   const [reportTrip, setReportTrip] = useState(null) // trip obj to show report
 
-  useEffect(() => { fetchTrips() }, [])
+  useEffect(() => {
+    if (!storeId) return
+    fetchTrips()
+  }, [storeId])
 
   async function fetchTrips() {
     setLoading(true)
     const { data } = await supabase
       .from('trips')
       .select('*, trip_expenses(*)')
+      .eq('store_id', storeId)
       .order('depart_date', { ascending: false })
     setTrips(data || [])
     setLoading(false)
@@ -134,6 +138,7 @@ export default function TripsPage() {
 
 // ─── Trip Report Dashboard ──────────────────────────────────────
 function TripReport({ trip, onBack, onEdit, onDelete }) {
+  const { storeId } = useAuth()
   const [loading, setLoading] = useState(true)
   const [data, setData] = useState(null)
   const [costEdits, setCostEdits] = useState({}) // { productId: { cost, currency } }
@@ -151,21 +156,26 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
     setActiveSlide(idx)
   }, [])
 
-  useEffect(() => { fetchReportData() }, [trip.id])
+  useEffect(() => {
+    if (!storeId) return
+    fetchReportData()
+  }, [trip.id, storeId])
 
   async function fetchReportData() {
     setLoading(true)
 
     const [{ data: orders }, { data: products }, { data: spProducts }, { data: rates }, { data: allOrders }, { data: images }] = await Promise.all([
       supabase.from('consumer_orders').select('*')
+        .eq('store_id', storeId)
         .gte('created_at', trip.depart_date)
         .lte('created_at', trip.return_date + 'T23:59:59')
         .neq('status', '已取消')
         .order('created_at', { ascending: false }),
-      supabase.from('products').select('id, name, sku, source, cost, currency'),
-      supabase.from('storefront_products').select('product_id, shop_price'),
-      supabase.from('exchange_rates').select('*'),
+      supabase.from('products').select('id, name, sku, source, cost, currency').eq('store_id', storeId),
+      supabase.from('storefront_products').select('product_id, shop_price').eq('store_id', storeId),
+      supabase.from('exchange_rates').select('*').eq('store_id', storeId),
       supabase.from('consumer_orders').select('email, created_at')
+        .eq('store_id', storeId)
         .lt('created_at', trip.depart_date)
         .neq('status', '已取消'),
       supabase.from('product_images').select('product_id, url, sort_order').order('sort_order', { ascending: true }),
@@ -809,6 +819,7 @@ function CustomerRow({ c, i }) {
 
 // ─── Trip Edit Sheet ────────────────────────────────────────────
 function TripSheet({ trip, onClose, onSaved, onDelete }) {
+  const { storeId } = useAuth()
   const isEdit = !!trip
   const [destination, setDestination] = useState(trip?.destination || '')
   const [departDate, setDepartDate] = useState(trip?.depart_date || '')
@@ -889,6 +900,7 @@ function TripSheet({ trip, onClose, onSaved, onDelete }) {
       }
     } else {
       const { data: newTrip, error } = await supabase.from('trips').insert({
+        store_id: storeId,
         destination: destination.trim(),
         depart_date: departDate,
         return_date: returnDate,

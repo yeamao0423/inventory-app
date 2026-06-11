@@ -5,7 +5,7 @@ import CustomSelect from '../components/CustomSelect'
 import ProcurementBatchTab, { CreateBatchSheet } from '../components/ProcurementBatchTab'
 
 export default function OrdersPage() {
-  const { can, profile } = useAuth()
+  const { can, profile, storeId } = useAuth()
   const [tab, setTab] = useState('orders')
   const [orderSubFilter, setOrderSubFilter] = useState('all') // 'all' | 'internal' | 'consumer'
   const [orders, setOrders] = useState([])
@@ -14,13 +14,16 @@ export default function OrdersPage() {
   const [sheet, setSheet] = useState(null)
   const [procurementData, setProcurementData] = useState(null) // { grouped, ungrouped }
 
-  useEffect(() => { fetchAll() }, [])
+  useEffect(() => {
+    if (!storeId) return
+    fetchAll()
+  }, [storeId])
 
   async function fetchAll() {
     setLoading(true)
     const [{ data: ord }, { data: cord }] = await Promise.all([
-      supabase.from('orders').select('*').order('created_at', { ascending: false }),
-      supabase.from('consumer_orders').select('*').order('created_at', { ascending: false }),
+      supabase.from('orders').select('*').eq('store_id', storeId).order('created_at', { ascending: false }),
+      supabase.from('consumer_orders').select('*').eq('store_id', storeId).order('created_at', { ascending: false }),
     ])
     setOrders(ord || [])
     setConsumerOrders(cord || [])
@@ -47,10 +50,10 @@ export default function OrdersPage() {
   async function fetchProcurement() {
     setLoading(true)
     const [{ data: pending }, { data: products }, { data: spProducts }, { data: rates }, { data: images }, { data: allVariants }, { data: existingBatchItems }] = await Promise.all([
-      supabase.from('consumer_orders').select('*').not('status', 'in', '("已購買","已出貨","完成","已取消")'),
-      supabase.from('products').select('id, name, sku, source, cost, currency'),
-      supabase.from('storefront_products').select('product_id, shop_price'),
-      supabase.from('exchange_rates').select('*'),
+      supabase.from('consumer_orders').select('*').eq('store_id', storeId).not('status', 'in', '("已購買","已出貨","完成","已取消")'),
+      supabase.from('products').select('id, name, sku, source, cost, currency').eq('store_id', storeId),
+      supabase.from('storefront_products').select('product_id, shop_price').eq('store_id', storeId),
+      supabase.from('exchange_rates').select('*').eq('store_id', storeId),
       supabase.from('product_images').select('product_id, url, sort_order').order('sort_order', { ascending: true }),
       supabase.from('product_variants').select('id, product_id, options'),
       supabase.from('procurement_items').select('product_id, variant_id, quantity, actual_qty, status, batch:batch_id(status)'),
@@ -202,11 +205,12 @@ export default function OrdersPage() {
   }
 
   useEffect(() => {
+    if (!storeId) return
     if (tab === 'procurement') {
       setSourceFilter('all')
       fetchProcurement()
     }
-  }, [tab])
+  }, [tab, storeId])
 
   const activeOrders = orders.filter(o => o.status !== '已取消')
   const cancelledInternalOrders = orders.filter(o => o.status === '已取消')
@@ -1450,6 +1454,7 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
 }
 
 function AddOrderSheet({ onClose, onSaved }) {
+  const { storeId } = useAuth()
   const [form, setForm] = useState({ customer: '', phone: '', email: '', address: '', line_id: '', deposit: '0', note: '' })
   const [saving, setSaving] = useState(false)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
@@ -1463,11 +1468,12 @@ function AddOrderSheet({ onClose, onSaved }) {
   const [showPicker, setShowPicker] = useState(false)
 
   useEffect(() => {
+    if (!storeId) return
     async function load() {
       const [{ data: prods }, { data: vars }, { data: sp }] = await Promise.all([
-        supabase.from('products').select('id, name, sku, source'),
+        supabase.from('products').select('id, name, sku, source').eq('store_id', storeId),
         supabase.from('product_variants').select('*'),
-        supabase.from('storefront_products').select('product_id, shop_price'),
+        supabase.from('storefront_products').select('product_id, shop_price').eq('store_id', storeId),
       ])
       setProducts(prods || [])
       const vMap = {}
@@ -1481,7 +1487,7 @@ function AddOrderSheet({ onClose, onSaved }) {
       setSpMap(sm)
     }
     load()
-  }, [])
+  }, [storeId])
 
   function addProduct(prod, variant) {
     const price = spMap[prod.id]?.shop_price
@@ -1511,6 +1517,7 @@ function AddOrderSheet({ onClose, onSaved }) {
     const itemsJson = selectedItems.map(({ _key, ...rest }) => rest)
 
     await supabase.from('orders').insert({
+      store_id: storeId,
       customer: form.customer,
       items: itemsStr,
       deposit,
@@ -1521,6 +1528,7 @@ function AddOrderSheet({ onClose, onSaved }) {
 
     // 同時建立 consumer_orders 以便採購彙整計算
     await supabase.from('consumer_orders').insert({
+      store_id: storeId,
       customer_name: form.customer,
       phone: form.phone || null,
       email: form.email || null,
@@ -1917,6 +1925,7 @@ function OrderDetailSheet({ order, onClose, onSaved, canEdit }) {
 }
 
 function ExportShippingSheet({ orders, onClose }) {
+  const { store } = useAuth()
   const [statuses, setStatuses] = useState(['處理中'])
   const [payStatuses, setPayStatuses] = useState(['已付清'])
   const [idFrom, setIdFrom] = useState('')
@@ -1942,9 +1951,13 @@ function ExportShippingSheet({ orders, onClose }) {
 
   function exportCSV() {
     if (filtered.length === 0) return alert('沒有符合條件的訂單')
+    const s = store?.settings ?? {}
+    if (!s.sender_name || !s.sender_phone) {
+      return alert('請先到「設定」填寫出貨單寄件人資訊')
+    }
     const esc = v => {
-      const s = String(v ?? '')
-      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s
+      const str = String(v ?? '')
+      return str.includes(',') || str.includes('"') || str.includes('\n') ? `"${str.replace(/"/g, '""')}"` : str
     }
     const rows = [
       ['一般交貨便-取貨不付款(以下欄位皆必填)', '', '', '', '', '', '', '', '', '', '', ''].join(','),
@@ -1952,10 +1965,10 @@ function ExportShippingSheet({ orders, onClose }) {
     ]
     filtered.forEach(o => {
       rows.push([
-        '', '徐承豊', '0955367287', 'daigogosg@gmail.com', '999',
+        '', esc(s.sender_name), esc(s.sender_phone), esc(s.sender_email || ''), esc(s.package_value ?? 999),
         esc(o.store_name || ''), esc(o.store_number || ''),
         esc(o.customer_name || ''), esc(o.phone || ''), esc(o.email || ''),
-        '和復門市', '263115'
+        esc(s.return_store_name || ''), esc(s.return_store_number || '')
       ].join(','))
     })
     const blob = new Blob(['\uFEFF' + rows.join('\r\n')], { type: 'text/csv;charset=utf-8' })
@@ -2042,6 +2055,7 @@ function ExportShippingSheet({ orders, onClose }) {
 }
 
 function ExportRevenueSheet({ onClose }) {
+  const { storeId } = useAuth()
   const allStatuses = ['待確認', '處理中', '已購買', '已出貨', '完成', '已取消']
   const allPayStatuses = ['未付', '已付清']
   const [statuses, setStatuses] = useState(allStatuses.filter(s => s !== '已取消'))
@@ -2059,6 +2073,7 @@ function ExportRevenueSheet({ onClose }) {
     setArr(prev => prev.includes(val) ? prev.filter(v => v !== val) : [...prev, val])
 
   const rpcParams = {
+    p_store_id: storeId,
     p_date_from: dateFrom || null,
     p_date_to: dateTo || null,
     p_id_from: idFrom ? Number(idFrom) : null,
@@ -2069,6 +2084,7 @@ function ExportRevenueSheet({ onClose }) {
 
   // 篩選變更時（debounce）重新計算彙總預覽
   useEffect(() => {
+    if (!storeId) return
     let alive = true
     setLoading(true)
     const t = setTimeout(async () => {
@@ -2080,7 +2096,7 @@ function ExportRevenueSheet({ onClose }) {
       setPreview({ count: data.length, revenue: sum('total_amount'), cost: sum('total_cost'), profit: sum('profit') })
     }, 400)
     return () => { alive = false; clearTimeout(t) }
-  }, [statuses, payStatuses, idFrom, idTo, dateFrom, dateTo])
+  }, [statuses, payStatuses, idFrom, idTo, dateFrom, dateTo, storeId])
 
   const esc = v => {
     const s = String(v ?? '')

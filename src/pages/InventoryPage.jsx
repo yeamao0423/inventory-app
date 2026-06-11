@@ -10,7 +10,7 @@ const LOW = 10
 const PAGE_SIZE = 20
 
 export default function InventoryPage() {
-  const { profile, signOut, can } = useAuth()
+  const { profile, signOut, can, storeId } = useAuth()
   const [products, setProducts] = useState([])
   const [search, setSearch] = useState('')
   const [filterSource, setFilterSource] = useState('')
@@ -21,19 +21,20 @@ export default function InventoryPage() {
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(1)
 
-  useEffect(() => { fetchProducts(); fetchCategories() }, [])
+  useEffect(() => { if (!storeId) return; fetchProducts(); fetchCategories() }, [storeId])
 
   async function fetchProducts() {
     const { data } = await supabase
       .from('products')
       .select('*, product_images(id, url, sort_order), categories(id, name), product_tags(tag_id)')
+      .eq('store_id', storeId)
       .order('name')
     setProducts(data || [])
     setLoading(false)
   }
 
   async function fetchCategories() {
-    const { data } = await supabase.from('categories').select('*').order('sort_order')
+    const { data } = await supabase.from('categories').select('*').eq('store_id', storeId).order('sort_order')
     setCategories(data || [])
   }
 
@@ -231,6 +232,7 @@ function ProductRow({ product: p, onTap, low }) {
 
 // ── 新增商品 ────────────────────────────────────────────
 function AddProductSheet({ onClose, onSaved, existingSources = [] }) {
+  const { storeId } = useAuth()
   const [form, setForm] = useState({ name:'', sku:'', quantity:'', unit:'個', cost:'', currency:'TWD', source:'' })
   const [saving, setSaving] = useState(false)
   const [imageFiles, setImageFiles] = useState([])
@@ -240,9 +242,10 @@ function AddProductSheet({ onClose, onSaved, existingSources = [] }) {
   const set = (k, v) => setForm(f => ({...f, [k]: v}))
 
   useEffect(() => {
-    supabase.from('categories').select('*').order('sort_order')
+    if (!storeId) return
+    supabase.from('categories').select('*').eq('store_id', storeId).order('sort_order')
       .then(({ data }) => setCategories(data || []))
-  }, [])
+  }, [storeId])
 
   function onImagesChange(e) {
     const files = Array.from(e.target.files)
@@ -262,6 +265,7 @@ function AddProductSheet({ onClose, onSaved, existingSources = [] }) {
     setSaving(true)
     const qty = Number(form.quantity) || 0
     const { data: inserted } = await supabase.from('products').insert({
+      store_id: storeId,
       name: form.name,
       sku: form.sku.trim() ? form.sku.toUpperCase() : null,
       quantity: qty,
@@ -278,6 +282,7 @@ function AddProductSheet({ onClose, onSaved, existingSources = [] }) {
 
     if (qty > 0 && inserted) {
       await supabase.from('history').insert({
+        store_id: storeId,
         sku: form.sku.toUpperCase() || null,
         product_id: inserted.id,
         change: qty,
@@ -457,6 +462,7 @@ function EditableSelectField({ productId, field, initialValue, canEdit, onSaved,
 
 // ── 商品詳情 ────────────────────────────────────────────
 function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete, existingSources = [] }) {
+  const { storeId } = useAuth()
   const [saving, setSaving] = useState(false)
   const [productName, setProductName] = useState(product.name)
   const [images, setImages] = useState(
@@ -471,14 +477,15 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete, exi
   )
 
   useEffect(() => {
+    if (!storeId) return
     Promise.all([
-      supabase.from('categories').select('*').order('sort_order'),
-      supabase.from('tags').select('*').order('sort_order'),
+      supabase.from('categories').select('*').eq('store_id', storeId).order('sort_order'),
+      supabase.from('tags').select('*').eq('store_id', storeId).order('sort_order'),
     ]).then(([{ data: cats }, { data: tgs }]) => {
       setCategories(cats || [])
       setAllTags(tgs || [])
     })
-  }, [product.sku])
+  }, [product.sku, storeId])
 
   async function saveCategory(catId) {
     await supabase.from('products')

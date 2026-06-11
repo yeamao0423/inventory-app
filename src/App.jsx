@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from './hooks/useAuth'
 import LoginPage from './pages/LoginPage'
@@ -8,20 +9,40 @@ import UsersPage from './pages/UsersPage'
 import TripsPage from './pages/TripsPage'
 import CouponsPage from './pages/CouponsPage'
 import InvitePage from './pages/InvitePage'
+import PlatformPage from './pages/PlatformPage'
+import SettingsPage from './pages/SettingsPage'
 
 const allTabs = [
-  { path: '/',           label: '庫存',  icon: BoxIcon },
-  { path: '/orders',     label: '訂單',  icon: ReceiptIcon },
-  { path: '/storefront', label: '商城',  icon: ShopIcon },
-  { path: '/coupons',    label: '優惠券', icon: CouponIcon },
+  { path: '/',           label: '庫存',  icon: BoxIcon, storeOnly: true },
+  { path: '/orders',     label: '訂單',  icon: ReceiptIcon, storeOnly: true },
+  { path: '/storefront', label: '商城',  icon: ShopIcon, storeOnly: true },
+  { path: '/coupons',    label: '優惠券', icon: CouponIcon, storeOnly: true },
   { path: '/trips',      label: '行程',  icon: TripIcon, superOnly: true },
   { path: '/users',      label: '成員',  icon: UsersIcon, adminOnly: true },
+  { path: '/settings',   label: '設定',  icon: GearIcon, superOnly: true },
+  { path: '/platform',   label: '平台',  icon: PlatformIcon, platformOnly: true },
 ]
 
 export default function App() {
-  const { user, profile, loading, isBackendUser, signOut } = useAuth()
+  const { user, profile, loading, isBackendUser, isPlatformAdmin, store, signOut } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
+
+  // 純平台管理員（無店身分）落地到平台頁
+  useEffect(() => {
+    if (!loading && user && !isBackendUser && isPlatformAdmin && location.pathname !== '/platform' && location.pathname !== '/invite') {
+      navigate('/platform', { replace: true })
+    }
+  }, [loading, user, isBackendUser, isPlatformAdmin, location.pathname])
+
+  // 新店主首次進入（settings 未設定）→ 開店精靈
+  useEffect(() => {
+    if (!loading && isBackendUser && profile?.role === 'super_admin'
+        && store && Object.keys(store.settings ?? {}).length === 0
+        && location.pathname === '/') {
+      navigate('/settings', { replace: true })
+    }
+  }, [loading, isBackendUser, profile?.role, store, location.pathname])
 
   if (loading) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh' }}><img src="/logo.png" alt="Daigogo" style={{ height: 48 }} /></div>
@@ -29,8 +50,8 @@ export default function App() {
   if (location.pathname === '/invite') return <InvitePage />
   if (!user) return <LoginPage />
 
-  // consumer 或無角色 → 無權限頁面
-  if (!isBackendUser) return (
+  // consumer 或無角色 → 無權限頁面（平台管理員例外，可進平台頁）
+  if (!isBackendUser && !isPlatformAdmin) return (
     <div className="login-wrap">
       <div style={{ textAlign:'center' }}>
         <div style={{ fontSize:36, marginBottom:12 }}>🔒</div>
@@ -46,9 +67,10 @@ export default function App() {
 
   const role = profile?.role
   const tabs = allTabs.filter(t => {
-    if (t.superOnly) return role === 'super_admin'
-    if (t.adminOnly) return role === 'super_admin' || role === 'admin'
-    return true
+    if (t.platformOnly) return isPlatformAdmin
+    if (t.superOnly) return isBackendUser && role === 'super_admin'
+    if (t.adminOnly) return isBackendUser && (role === 'super_admin' || role === 'admin')
+    return isBackendUser
   })
 
   return (
@@ -60,11 +82,13 @@ export default function App() {
         <Route path="/coupons"    element={<CouponsPage />} />
         <Route path="/trips"      element={<TripsPage />} />
         <Route path="/users"      element={<UsersPage />} />
+        <Route path="/settings"   element={<SettingsPage />} />
+        <Route path="/platform"   element={<PlatformPage />} />
         <Route path="/invite"     element={<InvitePage />} />
       </Routes>
 
       <nav className="tabbar">
-        <div className="side-brand"><img src="/logo.png" alt="" />Daigogo</div>
+        <div className="side-brand"><img src="/logo.png" alt="" />{store?.name ?? '平台'}</div>
         {tabs.map(({ path, label, icon: Icon }) => (
           <button
             key={path}
@@ -97,4 +121,10 @@ function TripIcon() {
 }
 function UsersIcon() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
+}
+function PlatformIcon() {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+}
+function GearIcon() {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33h.01a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51h.01a1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82v.01a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
 }

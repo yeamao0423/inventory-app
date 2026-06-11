@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../hooks/useAuth'
 import { uploadImages } from '../lib/imageUtils'
 import CustomSelect from './CustomSelect'
 
 const STEPS = ['拍照', '基本資訊', '販售設定', '確認上架']
 
 export default function QuickListSheet({ onClose, onSaved, existingSources = [] }) {
+  const { storeId } = useAuth()
   const [step, setStep] = useState(0)
   const [saving, setSaving] = useState(false)
 
@@ -45,14 +47,17 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
   const [recentEnds, setRecentEnds] = useState([])
 
   useEffect(() => {
+    if (!storeId) return
     Promise.all([
-      supabase.from('categories').select('*').order('sort_order'),
-      supabase.from('tags').select('*').order('sort_order'),
+      supabase.from('categories').select('*').eq('store_id', storeId).order('sort_order'),
+      supabase.from('tags').select('*').eq('store_id', storeId).order('sort_order'),
       supabase.from('variant_option_types')
         .select('*, variant_option_values(id, value, sort_order)')
+        .eq('store_id', storeId)
         .order('sort_order').order('name'),
       supabase.from('storefront_products')
         .select('collection_end')
+        .eq('store_id', storeId)
         .not('collection_end', 'is', null)
         .gt('collection_end', new Date().toISOString()),
     ]).then(([{ data: cats }, { data: tgs }, { data: opts }, { data: ends }]) => {
@@ -202,6 +207,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
         currency,
         category_id: selectedCategory ? Number(selectedCategory) : null,
         source: source.trim() || null,
+        store_id: storeId,
       }).select('id').single()
 
       if (prodErr || !inserted) {
@@ -223,6 +229,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
           product_id: productId,
           change: baseQty,
           reason: '初始建立',
+          store_id: storeId,
         })
       }
 
@@ -254,6 +261,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
         collection_end: sellingMode === 'collection' ? new Date(collectionEnd).toISOString() : null,
         sold_out: false,
         skip_stock_check: skipStockCheck,
+        store_id: storeId,
       })
 
       if (sfErr) {

@@ -2,20 +2,18 @@ import { useState } from 'react'
 import { useAuth } from '../hooks/useAuth'
 
 export default function LoginPage() {
-  const { signIn, signUp, sendPasswordReset } = useAuth()
-  const [mode, setMode] = useState('login') // 'login' | 'register' | 'forgot'
+  const { signIn, sendPasswordReset } = useAuth()
+  const [mode, setMode] = useState('login') // 'login' | 'forgot'
 
   const [email, setEmail]               = useState('')
   const [password, setPassword]         = useState('')
-  const [name, setName]                 = useState('')
-  const [confirm, setConfirm]           = useState('')
   const [error, setError]               = useState('')
   const [success, setSuccess]           = useState('')
   const [loading, setLoading]           = useState(false)
 
   function switchMode(m) {
     setMode(m)
-    setEmail(''); setPassword(''); setName(''); setConfirm('')
+    setEmail(''); setPassword('')
     setError(''); setSuccess('')
   }
 
@@ -24,36 +22,6 @@ export default function LoginPage() {
     setError(''); setLoading(true)
     const { error } = await signIn(email, password)
     if (error) setError('帳號或密碼錯誤，請重試。')
-    setLoading(false)
-  }
-
-  async function handleRegister(e) {
-    e.preventDefault()
-    setError('')
-    if (password !== confirm) return setError('兩次密碼輸入不一致。')
-    if (password.length < 6) return setError('密碼至少需要 6 個字元。')
-    setLoading(true)
-    try {
-      const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/register-backend`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-          },
-          body: JSON.stringify({ email, password, name }),
-        },
-      )
-      const data = await res.json()
-      if (!res.ok) {
-        setError(data.error || '註冊失敗，請稍後再試。')
-      } else {
-        setSuccess('帳號已建立！請至信箱完成驗證後登入。')
-      }
-    } catch {
-      setError('註冊失敗，請稍後再試。')
-    }
     setLoading(false)
   }
 
@@ -70,27 +38,6 @@ export default function LoginPage() {
     <div className="login-wrap">
       <div className="login-logo">📦</div>
       <div className="login-title">庫存管理</div>
-
-      {mode !== 'forgot' && (
-        <div style={{ display:'flex', gap:8, marginBottom:28, width:'100%', maxWidth:360 }}>
-          <button
-            type="button"
-            className={`btn ${mode === 'login' ? '' : 'btn-outline'}`}
-            style={{ flex:1, padding:'10px 0', fontSize:15 }}
-            onClick={() => switchMode('login')}
-          >
-            登入
-          </button>
-          <button
-            type="button"
-            className={`btn ${mode === 'register' ? '' : 'btn-outline'}`}
-            style={{ flex:1, padding:'10px 0', fontSize:15 }}
-            onClick={() => switchMode('register')}
-          >
-            註冊
-          </button>
-        </div>
-      )}
 
       <div className="login-card">
         {error   && <div className="error-msg">{error}</div>}
@@ -119,34 +66,6 @@ export default function LoginPage() {
               style={{ display:'block', width:'100%', marginTop:14, background:'none', border:'none',
                 color:'var(--text-3)', fontSize:13, cursor:'pointer', textAlign:'center' }}>
               忘記密碼？
-            </button>
-          </form>
-        )}
-
-        {mode === 'register' && (
-          <form onSubmit={handleRegister}>
-            <div className="form-group">
-              <label className="form-label">姓名</label>
-              <input className="form-input" type="text" placeholder="您的姓名"
-                value={name} onChange={e => setName(e.target.value)} required />
-            </div>
-            <div className="form-group">
-              <label className="form-label">電子郵件</label>
-              <input className="form-input" type="email" placeholder="your@email.com"
-                value={email} onChange={e => setEmail(e.target.value)} required autoCapitalize="none" />
-            </div>
-            <div className="form-group">
-              <label className="form-label">密碼</label>
-              <input className="form-input" type="password" placeholder="至少 6 個字元"
-                value={password} onChange={e => setPassword(e.target.value)} required />
-            </div>
-            <div className="form-group">
-              <label className="form-label">確認密碼</label>
-              <input className="form-input" type="password" placeholder="再次輸入密碼"
-                value={confirm} onChange={e => setConfirm(e.target.value)} required />
-            </div>
-            <button className="btn" type="submit" disabled={loading || !!success}>
-              {loading ? '建立中…' : '建立帳號'}
             </button>
           </form>
         )}

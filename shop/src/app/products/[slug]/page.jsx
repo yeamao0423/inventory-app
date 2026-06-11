@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '../../../lib/supabase'
+import { getStoreId } from '../../../lib/store'
 import { useI18n } from '../../layout'
 import { useCart } from '../../layout'
 
@@ -23,9 +24,11 @@ export default function ProductDetailPage() {
 
   useEffect(() => {
     async function load() {
+      const storeId = await getStoreId()
       const { data: spData } = await supabase
         .from('storefront_products')
         .select('*, products!inner(*, product_images(id, url, sort_order))')
+        .eq('store_id', storeId)
         .eq('product_id', slug)
         .single()
 
@@ -37,6 +40,7 @@ export default function ProductDetailPage() {
         supabase.from('custom_options').select('*').eq('product_id', spData.product_id),
         supabase.from('variant_option_types')
           .select('*, variant_option_values(id, value, sort_order)')
+          .eq('store_id', storeId)
           .order('sort_order'),
         supabase.from('product_tags').select('tag_id, tags(id, name, name_en)').eq('product_id', spData.product_id),
       ])

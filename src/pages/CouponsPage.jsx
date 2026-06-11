@@ -3,19 +3,21 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 
 export default function CouponsPage() {
-  const { can } = useAuth()
+  const { can, storeId } = useAuth()
   const [coupons, setCoupons] = useState([])
   const [loading, setLoading] = useState(true)
   const [sheet, setSheet] = useState(null) // null | 'add' | coupon obj
   const [detailCoupon, setDetailCoupon] = useState(null) // coupon obj for detail view
 
-  useEffect(() => { fetchCoupons() }, [])
+  useEffect(() => { fetchCoupons() }, [storeId])
 
   async function fetchCoupons() {
+    if (!storeId) return
     setLoading(true)
     const { data } = await supabase
       .from('coupons')
       .select('*')
+      .eq('store_id', storeId)
       .order('created_at', { ascending: false })
     setCoupons(data || [])
     setLoading(false)
@@ -403,6 +405,7 @@ function StatCard({ label, value }) {
 
 // ─── Coupon Sheet (Add / Edit) ──────────────────────────────────
 function CouponSheet({ coupon, onClose, onSaved }) {
+  const { storeId } = useAuth()
   const isEdit = !!coupon
 
   const [type, setType] = useState(coupon?.type || 'shared')
@@ -457,7 +460,7 @@ function CouponSheet({ coupon, onClose, onSaved }) {
       const { error } = await supabase.from('coupons').update(payload).eq('id', coupon.id)
       if (error) { alert('更新失敗：' + error.message); setSaving(false); return }
     } else {
-      const { data: newCoupon, error } = await supabase.from('coupons').insert(payload).select().single()
+      const { data: newCoupon, error } = await supabase.from('coupons').insert({ ...payload, store_id: storeId }).select().single()
       if (error) { alert('建立失敗：' + error.message); setSaving(false); return }
 
       // unique 型：批量產生代碼

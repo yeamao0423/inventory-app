@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '../../lib/supabase'
+import { getStoreId } from '../../lib/store'
 import { useI18n, useUser } from '../layout'
 
 export default function AccountPage() {
@@ -43,9 +44,11 @@ export default function AccountPage() {
 
   async function loadOrders() {
     setOrdersLoading(true)
+    const storeId = await getStoreId()
     const { data } = await supabase
       .from('consumer_orders')
       .select('*')
+      .eq('store_id', storeId)
       .eq('email', user.email)
       .order('created_at', { ascending: false })
     setOrders(data || [])

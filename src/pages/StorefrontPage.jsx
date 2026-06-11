@@ -4,7 +4,7 @@ import { useAuth } from '../hooks/useAuth'
 import CustomSelect from '../components/CustomSelect'
 
 export default function StorefrontPage() {
-  const { can } = useAuth()
+  const { can, storeId } = useAuth()
   const [tab, setTab] = useState('listings')   // listings | taxonomy
   const [listings, setListings] = useState([])
   const [products, setProducts] = useState([])
@@ -28,23 +28,27 @@ export default function StorefrontPage() {
   const PAGE_SIZE = 15
 
   useEffect(() => {
-    supabase.from('exchange_rates').select('*')
+    if (!storeId) return
+    supabase.from('exchange_rates').select('*').eq('store_id', storeId)
       .then(({ data }) => {
         const map = {}
         ;(data || []).forEach(r => { map[r.currency] = Number(r.rate) })
         setExchangeRates(map)
       })
-  }, [])
-  useEffect(() => { fetchAll() }, [tab])
+  }, [storeId])
+  useEffect(() => {
+    if (!storeId) return
+    fetchAll()
+  }, [tab, storeId])
 
   async function fetchAll() {
     setLoading(true)
     if (tab === 'listings') {
       const [{ data: sp }, { data: pr }, { data: cats }, { data: tgs }] = await Promise.all([
-        supabase.from('storefront_products').select('*, products(*, product_images(id, url, sort_order), categories(id, name), product_tags(tag_id))').order('sort_order'),
-        supabase.from('products').select('id, name, sku, cost, currency').order('name'),
-        supabase.from('categories').select('id, name').order('sort_order').order('name'),
-        supabase.from('tags').select('id, name').order('sort_order').order('name'),
+        supabase.from('storefront_products').select('*, products(*, product_images(id, url, sort_order), categories(id, name), product_tags(tag_id))').eq('store_id', storeId).order('sort_order'),
+        supabase.from('products').select('id, name, sku, cost, currency').eq('store_id', storeId).order('name'),
+        supabase.from('categories').select('id, name').eq('store_id', storeId).order('sort_order').order('name'),
+        supabase.from('tags').select('id, name').eq('store_id', storeId).order('sort_order').order('name'),
       ])
       setListings(sp || [])
       setCategories(cats || [])
@@ -53,10 +57,11 @@ export default function StorefrontPage() {
       setProducts((pr || []).filter(p => !listed.has(p.id)))
     } else if (tab === 'taxonomy') {
       const [{ data: cats }, { data: tgs }, { data: opts }] = await Promise.all([
-        supabase.from('categories').select('*').order('sort_order').order('name'),
-        supabase.from('tags').select('*').order('sort_order').order('name'),
+        supabase.from('categories').select('*').eq('store_id', storeId).order('sort_order').order('name'),
+        supabase.from('tags').select('*').eq('store_id', storeId).order('sort_order').order('name'),
         supabase.from('variant_option_types')
           .select('*, variant_option_values(id, value, sort_order)')
+          .eq('store_id', storeId)
           .order('sort_order').order('name'),
       ])
       setCategories(cats || [])
@@ -68,7 +73,7 @@ export default function StorefrontPage() {
 
   async function addCategory() {
     if (!newCat.name.trim()) return
-    await supabase.from('categories').insert({ name: newCat.name.trim(), name_en: newCat.name_en.trim() || null })
+    await supabase.from('categories').insert({ name: newCat.name.trim(), name_en: newCat.name_en.trim() || null, store_id: storeId })
     setNewCat({ name: '', name_en: '' })
     fetchAll()
   }
@@ -81,7 +86,7 @@ export default function StorefrontPage() {
 
   async function addTag() {
     if (!newTag.name.trim()) return
-    await supabase.from('tags').insert({ name: newTag.name.trim(), name_en: newTag.name_en.trim() || null })
+    await supabase.from('tags').insert({ name: newTag.name.trim(), name_en: newTag.name_en.trim() || null, store_id: storeId })
     setNewTag({ name: '', name_en: '' })
     fetchAll()
   }
@@ -94,7 +99,7 @@ export default function StorefrontPage() {
 
   async function addOptionType() {
     if (!newOptTypeName.trim()) return
-    const { error } = await supabase.from('variant_option_types').insert({ name: newOptTypeName.trim() })
+    const { error } = await supabase.from('variant_option_types').insert({ name: newOptTypeName.trim(), store_id: storeId })
     if (error) { alert('建立失敗：' + error.message); return }
     setNewOptTypeName('')
     fetchAll()
@@ -742,6 +747,7 @@ function CopyNameBar({ name }) {
 
 // ── Add/Edit listing sheet ─────────────────────────────
 function ListingSheet({ item, products, onClose, onSaved }) {
+  const { storeId } = useAuth()
   const isEdit = !!item
   const [form, setForm] = useState({
     product_id: item?.product_id || '',
@@ -770,13 +776,15 @@ function ListingSheet({ item, products, onClose, onSaved }) {
   const activeProductId = editingItem?.product_id || (form.product_id ? Number(form.product_id) : null)
 
   useEffect(() => {
+    if (!storeId) return
     // Load global option types with their values
     supabase.from('variant_option_types')
       .select('*, variant_option_values(id, value, sort_order)')
+      .eq('store_id', storeId)
       .order('sort_order')
       .then(({ data }) => setOptionTypes(data || []))
     // Load exchange rates
-    supabase.from('exchange_rates').select('*')
+    supabase.from('exchange_rates').select('*').eq('store_id', storeId)
       .then(({ data }) => {
         const map = {}
         ;(data || []).forEach(r => { map[r.currency] = Number(r.rate) })
@@ -785,6 +793,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
     // Load recent collection_end times (future only, deduplicated)
     supabase.from('storefront_products')
       .select('collection_end')
+      .eq('store_id', storeId)
       .not('collection_end', 'is', null)
       .gt('collection_end', new Date().toISOString())
       .then(({ data }) => {
@@ -792,7 +801,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
           .sort((a, b) => new Date(a) - new Date(b))
         setRecentEnds(unique.map(utcToLocal))
       })
-  }, [])
+  }, [storeId])
 
   // Load variants and base stock whenever activeProductId changes
   useEffect(() => {
@@ -848,6 +857,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
       const { data, error } = await supabase.from('storefront_products').insert({
         ...payload,
         product_id: Number(form.product_id),
+        store_id: storeId,
       }).select('*, products(*)').single()
       setSaving(false)
       onSaved()

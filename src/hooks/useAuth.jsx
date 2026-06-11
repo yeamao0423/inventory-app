@@ -6,6 +6,8 @@ const AuthContext = createContext(null)
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)   // { role, name }
+  const [store, setStore] = useState(null)       // { id, name, slug, settings } 使用者所屬店
+  const [isPlatformAdmin, setIsPlatformAdmin] = useState(false)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -23,11 +25,21 @@ export function AuthProvider({ children }) {
   }, [])
 
   async function fetchProfile(userId) {
-    const [{ data: profileData }, { data: roleData }] = await Promise.all([
+    const [{ data: profileData }, { data: roleRows }, { data: platformRow }] = await Promise.all([
       supabase.from('profiles').select('name, email').eq('id', userId).single(),
-      supabase.from('user_store_roles').select('role, store_id').eq('user_id', userId).eq('store_id', 1).single(),
+      // 使用者所屬店的後台角色（排除歷史遺留的 consumer rows），目前取第一間店
+      supabase.from('user_store_roles')
+        .select('role, store_id, stores ( id, name, slug, is_active, settings )')
+        .eq('user_id', userId)
+        .neq('role', 'consumer')
+        .order('created_at', { ascending: true })
+        .limit(1),
+      supabase.from('platform_admins').select('user_id').eq('user_id', userId).maybeSingle(),
     ])
-    setProfile({ ...profileData, role: roleData?.role ?? null })
+    const membership = roleRows?.[0] ?? null
+    setProfile({ ...profileData, role: membership?.role ?? null })
+    setStore(membership?.stores ?? null)
+    setIsPlatformAdmin(!!platformRow)
     setLoading(false)
   }
 
@@ -71,10 +83,19 @@ export function AuthProvider({ children }) {
     return false
   }
 
-  const isBackendUser = profile?.role && profile.role !== 'consumer'
+  const isBackendUser = !!(profile?.role && profile.role !== 'consumer')
+  const storeId = store?.id ?? null
+
+  // 店家設定變更後（如開店精靈、店家設定 Sheet）刷新 context
+  async function refreshStore() {
+    if (user) await fetchProfile(user.id)
+  }
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, signIn, signUp, sendPasswordReset, signOut, can, isBackendUser }}>
+    <AuthContext.Provider value={{
+      user, profile, loading, signIn, signUp, sendPasswordReset, signOut, can,
+      isBackendUser, store, storeId, isPlatformAdmin, refreshStore,
+    }}>
       {children}
     </AuthContext.Provider>
   )

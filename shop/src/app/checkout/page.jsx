@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
+import { getStore, getStoreId } from '../../lib/store'
 import { useI18n, useCart, useUser } from '../layout'
 
 export default function CheckoutPage() {
@@ -13,6 +14,11 @@ export default function CheckoutPage() {
   const [errors, setErrors] = useState({})
   const [submitting, setSubmitting] = useState(false)
   const [profileLoaded, setProfileLoaded] = useState(false)
+  const [store, setStore] = useState(null)
+
+  useEffect(() => {
+    getStore().then(setStore).catch(() => {})
+  }, [])
 
   // 登入用戶自動帶入個人資料
   useEffect(() => {
@@ -42,8 +48,8 @@ export default function CheckoutPage() {
   const [couponLoading, setCouponLoading] = useState(false)
 
   const subtotal = cart.reduce((s, i) => s + i.price * i.qty, 0)
-  const FREE_SHIPPING_THRESHOLD = 3800
-  const SHIPPING_FEE = 60
+  const FREE_SHIPPING_THRESHOLD = store?.settings?.free_shipping_threshold ?? 3800
+  const SHIPPING_FEE = store?.settings?.shipping_fee ?? 60
   const shippingFee = subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : SHIPPING_FEE
   const discountAmount = couponPreview?.discount_amount || 0
   const total = subtotal - discountAmount + shippingFee
@@ -58,10 +64,12 @@ export default function CheckoutPage() {
     setCouponPreview(null)
 
     try {
+      const storeId = await getStoreId()
       // 先查 shared 型
       let { data: coupon } = await supabase
         .from('coupons')
         .select('*')
+        .eq('store_id', storeId)
         .eq('code', code)
         .eq('type', 'shared')
         .single()
@@ -135,11 +143,14 @@ export default function CheckoutPage() {
     if (!validate() || cart.length === 0) return
     setSubmitting(true)
 
+    const storeId = await getStoreId()
+
     // Validate that all cart items are still available (not expired/sold out)
     const productIds = [...new Set(cart.map(i => i.id))]
     const { data: spCheck } = await supabase
       .from('storefront_products')
       .select('product_id, collection_end, sold_out, published')
+      .eq('store_id', storeId)
       .in('product_id', productIds)
 
     const unavailable = (spCheck || []).filter(sp =>
@@ -164,6 +175,7 @@ export default function CheckoutPage() {
     const orderTotal = subtotal + shippingFee  // 未折扣金額，RPC 內部會扣除折扣
 
     const { data: placeResult, error: placeError } = await supabase.rpc('place_order', {
+      p_store_id: storeId,
       p_customer_name: form.name,
       p_email: form.email,
       p_phone: form.phone,

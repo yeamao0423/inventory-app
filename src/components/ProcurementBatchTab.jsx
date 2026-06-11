@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../hooks/useAuth'
 import CustomSelect from './CustomSelect'
 
 // 取得 store 成員（profiles + user_store_roles）
-async function fetchStoreMembers() {
+async function fetchStoreMembers(storeId) {
   const { data: roles } = await supabase
     .from('user_store_roles')
     .select('user_id, role')
-    .eq('store_id', 1)
+    .eq('store_id', storeId)
   if (!roles || roles.length === 0) return []
   const { data: profiles } = await supabase
     .from('profiles')
@@ -23,6 +24,7 @@ async function fetchStoreMembers() {
 }
 
 export default function ProcurementBatchTab() {
+  const { storeId } = useAuth()
   const [batches, setBatches] = useState([])
   const [members, setMembers] = useState([])
   const [rates, setRates] = useState({})
@@ -33,14 +35,17 @@ export default function ProcurementBatchTab() {
   const [page, setPage] = useState(1)
   const PAGE_SIZE = 10
 
-  useEffect(() => { fetchAll() }, [])
+  useEffect(() => {
+    if (!storeId) return
+    fetchAll()
+  }, [storeId])
 
   async function fetchAll(silent = false) {
     if (!silent) setLoading(true)
     const [b, m, { data: r }] = await Promise.all([
-      supabase.from('procurement_batches').select('*, procurement_items(*, products:product_id(name, sku), variants:variant_id(options))').eq('store_id', 1).order('created_at', { ascending: false }),
-      fetchStoreMembers(),
-      supabase.from('exchange_rates').select('*'),
+      supabase.from('procurement_batches').select('*, procurement_items(*, products:product_id(name, sku), variants:variant_id(options))').eq('store_id', storeId).order('created_at', { ascending: false }),
+      fetchStoreMembers(storeId),
+      supabase.from('exchange_rates').select('*').eq('store_id', storeId),
     ])
     setBatches(b.data || [])
     setMembers(m)
@@ -521,6 +526,7 @@ function BatchDetailSheet({ batch, members, memberMap, rates, onClose, onSaved }
 
 /* ─── 庫存同步確認 Sheet ──────────────────────── */
 function InventorySyncSheet({ batch, items, onClose, onSaved }) {
+  const { storeId } = useAuth()
   const syncableItems = items.filter(i => i.status === 'bought' || i.status === 'partial')
   const [checked, setChecked] = useState(
     syncableItems.reduce((acc, item) => { acc[item.id] = true; return acc }, {})
@@ -560,6 +566,7 @@ function InventorySyncSheet({ batch, items, onClose, onSaved }) {
         product_id: item.product_id,
         change: qty,
         reason: `採購入庫（批次 #${batch.id}）`,
+        store_id: storeId,
       })
     }
 
@@ -683,6 +690,7 @@ function expandItemsToRows(items) {
 }
 
 export function CreateBatchSheet({ source, items, onClose, onSaved }) {
+  const { storeId } = useAuth()
   const [members, setMembers] = useState([])
   const [batchDate, setBatchDate] = useState(new Date().toISOString().slice(0, 10))
   const [buyerId, setBuyerId] = useState(null)
@@ -692,8 +700,9 @@ export function CreateBatchSheet({ source, items, onClose, onSaved }) {
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    fetchStoreMembers().then(m => setMembers(m))
-  }, [])
+    if (!storeId) return
+    fetchStoreMembers(storeId).then(m => setMembers(m))
+  }, [storeId])
 
   const toggleRow = (idx) => {
     setRows(prev => prev.map((r, i) =>
@@ -720,7 +729,7 @@ export function CreateBatchSheet({ source, items, onClose, onSaved }) {
       buyer_id: buyerId,
       manager_id: managerId || null,
       note: note.trim() || null,
-      store_id: 1,
+      store_id: storeId,
       status: 'done',
     }).select().single()
 

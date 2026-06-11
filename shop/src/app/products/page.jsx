@@ -2,6 +2,7 @@
 import { useEffect, useState, useRef } from 'react'
 import Link from 'next/link'
 import { supabase } from '../../lib/supabase'
+import { getStoreId } from '../../lib/store'
 import { useI18n } from '../layout'
 
 export default function ProductsPage() {
@@ -22,15 +23,16 @@ export default function ProductsPage() {
   const PAGE_SIZE = 20
 
   useEffect(() => {
-    Promise.all([
+    getStoreId().then(storeId => Promise.all([
       supabase
         .from('storefront_products')
         .select('*, products(*, product_images(url, sort_order), categories(id, name, name_en), product_tags(tag_id), product_variants(stock))')
+        .eq('store_id', storeId)
         .eq('published', true)
         .order('created_at', { ascending: false }),
-      supabase.from('categories').select('*').order('sort_order').order('name'),
-      supabase.from('tags').select('*').order('sort_order').order('name'),
-    ]).then(([{ data: sp }, { data: cats }, { data: tgs }]) => {
+      supabase.from('categories').select('*').eq('store_id', storeId).order('sort_order').order('name'),
+      supabase.from('tags').select('*').eq('store_id', storeId).order('sort_order').order('name'),
+    ])).then(([{ data: sp }, { data: cats }, { data: tgs }]) => {
       setProducts(sp || [])
       setCategories(cats || [])
       setTags(tgs || [])

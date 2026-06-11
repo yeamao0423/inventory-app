@@ -3,12 +3,12 @@ import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 
-const ROLE_LABEL = { admin: '管理員', editor: '編輯者' }
+const ROLE_LABEL = { super_admin: '店主', admin: '管理員', editor: '編輯者', viewer: '檢視者' }
 
 export default function InvitePage() {
   const [searchParams] = useSearchParams()
   const token = searchParams.get('token')
-  const { user, signIn, signUp } = useAuth()
+  const { user, signIn, signUp, refreshStore } = useAuth()
 
   const [invite, setInvite]   = useState(null)   // invitation record
   const [status, setStatus]   = useState('loading') // loading | valid | invalid | expired | accepted | done
@@ -61,6 +61,7 @@ export default function InvitePage() {
       .update({ status: 'accepted' })
       .eq('id', invite.id)
 
+    await refreshStore()   // 讓 context 立即帶上新店身分
     setStatus('done')
     setSubmitting(false)
   }
@@ -130,7 +131,9 @@ export default function InvitePage() {
 
       <div className="login-card" style={{ marginBottom:24 }}>
         <div style={{ fontSize:13, color:'var(--text-2)', marginBottom:4 }}>你收到一份邀請</div>
-        <div style={{ fontWeight:600, fontSize:17 }}>加入成為 {ROLE_LABEL[invite?.role]}</div>
+        <div style={{ fontWeight:600, fontSize:17 }}>
+          加入「{invite?.stores?.name}」成為 {ROLE_LABEL[invite?.role]}
+        </div>
         <div style={{ fontSize:12, color:'var(--text-3)', marginTop:4 }}>
           到期時間：{new Date(invite?.expires_at).toLocaleDateString('zh-TW')}
         </div>
