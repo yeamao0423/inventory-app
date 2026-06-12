@@ -27,7 +27,7 @@ export default function ProductDetailPage() {
       const storeId = await getStoreId()
       const { data: spData } = await supabase
         .from('storefront_products')
-        .select('*, products!inner(*, product_images(id, url, sort_order))')
+        .select('*, products:shop_products!inner(*, product_images(id, url, sort_order))')
         .eq('store_id', storeId)
         .eq('product_id', slug)
         .single()
