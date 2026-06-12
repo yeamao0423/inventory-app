@@ -65,32 +65,16 @@ export default function CheckoutPage() {
 
     try {
       const storeId = await getStoreId()
-      // 先查 shared 型
-      let { data: coupon } = await supabase
-        .from('coupons')
-        .select('*')
-        .eq('store_id', storeId)
-        .eq('code', code)
-        .eq('type', 'shared')
-        .single()
+      // 點查 RPC（coupons/coupon_codes 已不開放匿名直讀）
+      const { data: result } = await supabase
+        .rpc('lookup_coupon', { p_code: code, p_store_id: storeId })
 
-      let couponId = coupon?.id
-      let isUnique = false
+      if (!result?.found) { setCouponError(lang === 'zh' ? '優惠碼不存在' : 'Invalid coupon code'); setCouponLoading(false); return }
+      if (result.is_used) { setCouponError(lang === 'zh' ? '此優惠碼已被使用' : 'This coupon has been used'); setCouponLoading(false); return }
 
-      // 找不到則查 unique 型
-      if (!coupon) {
-        const { data: cc } = await supabase
-          .from('coupon_codes')
-          .select('*, coupons(*)')
-          .eq('code', code)
-          .single()
-
-        if (!cc) { setCouponError(lang === 'zh' ? '優惠碼不存在' : 'Invalid coupon code'); setCouponLoading(false); return }
-        if (cc.is_used) { setCouponError(lang === 'zh' ? '此優惠碼已被使用' : 'This coupon has been used'); setCouponLoading(false); return }
-        coupon = cc.coupons
-        couponId = coupon.id
-        isUnique = true
-      }
+      const coupon = result.coupon
+      const couponId = coupon.id
+      const isUnique = result.is_unique
 
       // 基本驗證
       if (!coupon.is_active) { setCouponError(lang === 'zh' ? '此優惠活動已停用' : 'This promotion is inactive'); setCouponLoading(false); return }

@@ -11,7 +11,7 @@ export default function OrderSuccessPage() {
   const [order, setOrder] = useState(null)
 
   useEffect(() => {
-    supabase.from('consumer_orders').select('*').eq('id', id).single()
+    supabase.rpc('get_consumer_order', { p_order_id: id })
       .then(({ data }) => setOrder(data))
   }, [id])
 

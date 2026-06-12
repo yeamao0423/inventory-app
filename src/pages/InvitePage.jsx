@@ -30,36 +30,28 @@ export default function InvitePage() {
   }, [user, invite, status])
 
   async function loadInvite() {
-    const { data, error } = await supabase
-      .from('invitations')
-      .select('id, email, role, store_id, status, expires_at, stores(name)')
-      .eq('token', token)
-      .single()
+    // invitations 已不開放匿名直讀（防 token 列舉），改走 RPC 點查
+    const { data, error } = await supabase.rpc('get_invitation', { p_token: token })
 
     if (error || !data) return setStatus('invalid')
     if (data.status === 'accepted') return setStatus('accepted')
     if (new Date(data.expires_at) < new Date()) return setStatus('expired')
 
-    setInvite(data)
+    setInvite({ ...data, stores: { name: data.store_name } })
     setEmail(data.email)
     setStatus('valid')
   }
 
   async function acceptInvite() {
     setSubmitting(true)
-    // upsert role
-    const { error } = await supabase
-      .from('user_store_roles')
-      .upsert({ user_id: user.id, store_id: invite.store_id, role: invite.role },
-               { onConflict: 'user_id,store_id' })
+    // 角色 upsert ＋ 標記 accepted 由 SECURITY DEFINER RPC 原子完成
+    const { data, error } = await supabase.rpc('accept_invitation', { p_token: token })
 
-    if (error) { setError('發生錯誤，請稍後再試。'); setSubmitting(false); return }
-
-    // mark invitation as accepted
-    await supabase
-      .from('invitations')
-      .update({ status: 'accepted' })
-      .eq('id', invite.id)
+    if (error || !data?.ok) {
+      setError(data?.error || '發生錯誤，請稍後再試。')
+      setSubmitting(false)
+      return
+    }
 
     await refreshStore()   // 讓 context 立即帶上新店身分
     setStatus('done')
