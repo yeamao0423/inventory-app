@@ -1159,14 +1159,22 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
       else fulfillment_type = 'cancelled'
     }
 
+    const cleanItem = ({ _cancelled, _added, _originalQty, _stock, ...item }) => item
+    // 全數取消時，所有品項（含未逐件標記的）都應出現在取消清單裡
+    const cancelledForEmail = fulfillment_type === 'cancelled'
+      ? itemStatuses.map(cleanItem)
+      : cancelled.map(cleanItem)
+
     return {
-      activeItems: active.map(({ _cancelled, _added, _originalQty, ...item }) => ({
-        ...item,
-        ...(item.qty < _originalQty ? { note: `原訂 ${_originalQty}，到貨 ${item.qty}` } : {}),
-      })),
-      cancelledItems: cancelled.map(({ _cancelled, _added, _originalQty, ...item }) => item),
+      activeItems: fulfillment_type === 'cancelled'
+        ? []
+        : active.map(({ _cancelled, _added, _originalQty, _stock, ...item }) => ({
+            ...item,
+            ...(item.qty < _originalQty ? { note: `原訂 ${_originalQty}，到貨 ${item.qty}` } : {}),
+          })),
+      cancelledItems: cancelledForEmail,
       shippingFee: effectiveShippingFee,
-      newTotal: activeItems.length > 0 ? newTotal : 0,
+      newTotal: activeItems.length > 0 && fulfillment_type !== 'cancelled' ? newTotal : 0,
       fulfillment_type,
       trackingNumber: trackingNumber || null,
     }
@@ -1242,7 +1250,7 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
 
     const updatedTotal = active.length > 0 ? newTotal : 0
 
-    const updatedItemsJson = itemStatuses.map(({ _cancelled, _added, _originalQty, ...item }) => ({
+    const updatedItemsJson = itemStatuses.map(({ _cancelled, _added, _originalQty, _stock, ...item }) => ({
       ...item,
       originalQty: _originalQty,
       status: _cancelled ? 'cancelled' : 'active',
