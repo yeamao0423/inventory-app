@@ -1004,10 +1004,102 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
     onClose()
   }
 
-  // 加購商品欄位
+  // 加購商品：商品庫選擇器
+  const { storeId } = useAuth()
+  const [addProducts, setAddProducts] = useState([])
+  const [addVariants, setAddVariants] = useState({})
+  const [addSpMap, setAddSpMap] = useState({})
+  const [addValueMap, setAddValueMap] = useState({}) // option_value_id → value string
+  const [showAddPicker, setShowAddPicker] = useState(false)
+  const [addSearch, setAddSearch] = useState('')
+  const [addPickerStep, setAddPickerStep] = useState('product') // 'product' | 'variant'
+  const [addSelectedProd, setAddSelectedProd] = useState(null)
+  useEffect(() => {
+    if (!storeId) return
+    Promise.all([
+      supabase.from('products').select('id, name, sku, quantity').eq('store_id', storeId),
+      supabase.from('product_variants').select('*'),
+      supabase.from('storefront_products').select('product_id, shop_price').eq('store_id', storeId),
+      supabase.from('variant_option_values').select('id, value'),
+    ]).then(([{ data: prods }, { data: vars }, { data: sp }, { data: vals }]) => {
+      setAddProducts(prods || [])
+      const vm = {}
+      ;(vals || []).forEach(v => { vm[v.id] = v.value })
+      setAddValueMap(vm)
+      const vMap = {}
+      ;(vars || []).forEach(v => { if (!vMap[v.product_id]) vMap[v.product_id] = []; vMap[v.product_id].push(v) })
+      setAddVariants(vMap)
+      const sm = {}
+      ;(sp || []).forEach(s => { sm[s.product_id] = s })
+      setAddSpMap(sm)
+    })
+  }, [storeId])
+
+  function closePicker() {
+    setShowAddPicker(false)
+    setAddSearch('')
+    setAddPickerStep('product')
+    setAddSelectedProd(null)
+  }
+
+  function pickProduct(prod, variant) {
+    const basePrice = addSpMap[prod.id] ? Number(addSpMap[prod.id].shop_price) : 0
+    const price = variant?.variant_price != null
+      ? Number(variant.variant_price)
+      : basePrice + (variant ? Number(variant.price_adjustment) || 0 : 0)
+    const vLabel = variant
+      ? Object.values(variant.options || {}).map(valId => addValueMap[valId]).filter(Boolean).join(' / ')
+      : ''
+    // 庫存上限：規格用 variant.stock，無規格用 product.quantity（從 addProducts 找）
+    const stockLimit = variant
+      ? (variant.stock ?? 999)
+      : (addProducts.find(p => p.id === prod.id)?.quantity ?? 999)
+
+    setItemStatuses(prev => {
+      // 同商品 + 同規格已存在 → 合併（數量 +1，不超過庫存）
+      const existing = prev.findIndex(it =>
+        it.id === prod.id &&
+        (it.variantId ?? null) === (variant?.id ?? null) &&
+        !it._cancelled
+      )
+      if (existing !== -1) {
+        return prev.map((it, idx) => idx === existing
+          ? { ...it, qty: Math.min(it.qty + 1, it._stock ?? stockLimit) }
+          : it
+        )
+      }
+      return [...prev, {
+        id: prod.id,
+        name: prod.name,
+        sku: prod.sku,
+        variantId: variant?.id || null,
+        variantLabel: vLabel || null,
+        price,
+        qty: 1,
+        _cancelled: false,
+        _added: true,
+        _originalQty: 1,
+        _stock: stockLimit,   // 供 + 按鈕用
+      }]
+    })
+    closePicker()
+  }
+
+  function selectProdForVariant(prod) {
+    const pvs = addVariants[prod.id]
+    if (!pvs || pvs.length === 0) {
+      pickProduct(prod, null)
+    } else {
+      setAddSelectedProd(prod)
+      setAddPickerStep('variant')
+    }
+  }
+
+  // 加購商品：手動輸入（自訂品項用）
   const [addItemName, setAddItemName] = useState('')
   const [addItemPrice, setAddItemPrice] = useState('')
   const [addItemQty, setAddItemQty] = useState(1)
+  const [showManualAdd, setShowManualAdd] = useState(false)
 
   // 計算邏輯
   const activeItems = itemStatuses.filter(i => !i._cancelled)
@@ -1097,6 +1189,44 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
     const active = itemStatuses.filter(i => !i._cancelled)
     const cancelled = itemStatuses.filter(i => i._cancelled)
     const qtyReduced = active.some(i => i.qty < i._originalQty)
+
+    // ── 庫存驗證（僅加購品項）──
+    const addedItems = active.filter(i => i._added && i.id)
+    if (addedItems.length > 0) {
+      setSaving(true)
+
+      // 分為有規格、無規格兩批查詢
+      const withVariant = addedItems.filter(i => i.variantId)
+      const noVariant   = addedItems.filter(i => !i.variantId)
+
+      const checks = await Promise.all([
+        withVariant.length > 0
+          ? supabase.from('product_variants').select('id, stock').in('id', withVariant.map(i => i.variantId))
+          : Promise.resolve({ data: [] }),
+        noVariant.length > 0
+          ? supabase.from('products').select('id, name, quantity').in('id', noVariant.map(i => i.id))
+          : Promise.resolve({ data: [] }),
+      ])
+
+      const variantStockMap = Object.fromEntries((checks[0].data || []).map(v => [v.id, v.stock]))
+      const productStockMap = Object.fromEntries((checks[1].data || []).map(p => [p.id, { name: p.name, stock: p.quantity }]))
+
+      const failed = []
+      for (const item of withVariant) {
+        const stock = variantStockMap[item.variantId] ?? 0
+        if (item.qty > stock) failed.push(`${item.name}（${item.variantLabel || '無規格'}）：需要 ${item.qty} 件，庫存剩 ${stock} 件`)
+      }
+      for (const item of noVariant) {
+        const stock = productStockMap[item.id]?.stock ?? 0
+        if (item.qty > stock) failed.push(`${item.name}：需要 ${item.qty} 件，庫存剩 ${stock} 件`)
+      }
+
+      if (failed.length > 0) {
+        alert('加購商品庫存不足，無法儲存：\n\n' + failed.join('\n'))
+        setSaving(false)
+        return
+      }
+    }
 
     setSaving(true)
 
@@ -1247,8 +1377,8 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
                 {item.name}
                 {item._added && <span style={{ fontSize: 10, color: 'var(--blue)', marginLeft: 4 }}>(加購)</span>}
               </div>
-              {(item.color || item.size) && (
-                <div className="muted fs12">{[item.color, item.size].filter(Boolean).join(' / ')}</div>
+              {(item.variantLabel || item.color || item.size) && (
+                <div className="muted fs12">{item.variantLabel || [item.color, item.size].filter(Boolean).join(' / ')}</div>
               )}
               {item.customNote && <div className="muted fs12">備註：{item.customNote}</div>}
               {item._cancelled && (
@@ -1269,16 +1399,23 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
                   <button style={{
                     width: 22, height: 22, borderRadius: 6, border: '1px solid var(--border)',
                     background: 'var(--bg)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 0,
-                  }} onClick={() => setItemStatuses(prev => prev.map((it, idx) =>
-                    idx === i ? { ...it, qty: Math.min(it._originalQty, it.qty + 1) } : it
-                  ))}>+</button>
+                  }} onClick={() => setItemStatuses(prev => prev.map((it, idx) => {
+                    if (idx !== i) return it
+                    // 加購品項上限 = 庫存（_stock）；原始品項上限 = 原訂數量
+                    const max = it._added ? (it._stock ?? 999) : it._originalQty
+                    return { ...it, qty: Math.min(max, it.qty + 1) }
+                  }))}>+</button>
                 </div>
               ) : (
                 <div className="fs13">× {item.qty}</div>
               )}
               <div className="muted fs12">NT${((Number(item.price) || 0) * (Number(item.qty) || 0)).toLocaleString()}</div>
-              {/* 數量被調低時顯示提示 */}
-              {!item._cancelled && item.qty < item._originalQty && (
+              {/* 加購品項數量接近庫存時提示 */}
+              {item._added && item._stock != null && item.qty >= item._stock && (
+                <div style={{ fontSize: 10, color: 'var(--amber)' }}>已達庫存上限（{item._stock} 件）</div>
+              )}
+              {/* 原始品項數量被調低時提示 */}
+              {!item._added && !item._cancelled && item.qty < item._originalQty && (
                 <div style={{ fontSize: 10, color: 'var(--amber)' }}>原訂 {item._originalQty}，到貨 {item.qty}</div>
               )}
               {canEdit && (
@@ -1306,35 +1443,146 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
       {canEdit && activeItems.length > 0 && (
         <>
           <div className="sec" style={{ marginTop: 0 }}>加購商品（選填）</div>
-          <div className="card" style={{ marginBottom: 16, padding: 12 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 8 }}>
-              <input className="form-input" placeholder="商品名稱" value={addItemName}
-                onChange={e => setAddItemName(e.target.value)} style={{ fontSize: 13 }} />
-              <input className="form-input" type="number" placeholder="單價" value={addItemPrice}
-                onChange={e => setAddItemPrice(e.target.value)} style={{ fontSize: 13 }} />
-              <input className="form-input" type="number" min={1} placeholder="數量" value={addItemQty}
-                onChange={e => setAddItemQty(Number(e.target.value))} style={{ fontSize: 13 }} />
-            </div>
+
+          {/* 商品庫選擇器：兩步驟 */}
+          {!showAddPicker ? (
             <button style={{
-              marginTop: 8, width: '100%', padding: '6px 0', borderRadius: 8,
+              width: '100%', padding: '10px 0', borderRadius: 10,
               border: '1px dashed var(--border)', background: 'none', cursor: 'pointer',
-              fontSize: 13, color: 'var(--text-2)',
-            }} onClick={() => {
-              if (!addItemName || !addItemPrice) return
-              setItemStatuses(prev => [...prev, {
-                name: addItemName,
-                price: Number(addItemPrice),
-                qty: addItemQty || 1,
-                _cancelled: false,
-                _added: true,
-              }])
-              setAddItemName('')
-              setAddItemPrice('')
-              setAddItemQty(1)
-            }}>
-              + 加入訂單
+              fontSize: 13, color: 'var(--text-2)', marginBottom: 8,
+            }} onClick={() => { setShowAddPicker(true); setAddPickerStep('product') }}>
+              + 從商品庫選擇
             </button>
-          </div>
+          ) : (
+            <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 10, marginBottom: 8, background: 'var(--surface)' }}>
+
+              {/* Step 1：選商品 */}
+              {addPickerStep === 'product' && (<>
+                <input
+                  className="form-input"
+                  placeholder="搜尋商品名稱或 SKU…"
+                  value={addSearch}
+                  onChange={e => setAddSearch(e.target.value)}
+                  autoFocus
+                  style={{ marginBottom: 8 }}
+                />
+                <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+                  {(() => {
+                    const filtered = addProducts.filter(p =>
+                      !addSearch || p.name.toLowerCase().includes(addSearch.toLowerCase()) || (p.sku || '').toLowerCase().includes(addSearch.toLowerCase())
+                    )
+                    if (filtered.length === 0) return <div className="muted fs12" style={{ padding: 10 }}>找不到商品</div>
+                    return filtered.slice(0, 30).map(p => {
+                      const pvs = addVariants[p.id]
+                      const basePrice = addSpMap[p.id] ? Number(addSpMap[p.id].shop_price) : 0
+                      const hasVariants = pvs && pvs.length > 0
+                      return (
+                        <div key={p.id} onClick={() => selectProdForVariant(p)}
+                          style={{ padding: '9px 10px', cursor: 'pointer', borderRadius: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                          onMouseEnter={e => e.currentTarget.style.background = 'var(--bg)'}
+                          onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                        >
+                          <div>
+                            <div className="fs13 fw600">{p.name}</div>
+                            <div className="muted fs12">
+                              {hasVariants ? `${pvs.length} 種規格` : (basePrice > 0 ? `NT$${basePrice.toLocaleString()}` : '未定價')}
+                              {p.sku ? ` · ${p.sku}` : ''}
+                            </div>
+                          </div>
+                          <span style={{ fontSize: 12, color: 'var(--text-3)' }}>{hasVariants ? '▶' : ''}</span>
+                        </div>
+                      )
+                    })
+                  })()}
+                </div>
+              </>)}
+
+              {/* Step 2：選規格 */}
+              {addPickerStep === 'variant' && addSelectedProd && (<>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                  <button onClick={() => { setAddPickerStep('product'); setAddSelectedProd(null) }}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16, color: 'var(--text-3)', padding: 0, lineHeight: 1 }}>←</button>
+                  <div>
+                    <div className="fs13 fw600">{addSelectedProd.name}</div>
+                    <div className="muted fs12">選擇規格</div>
+                  </div>
+                </div>
+                <div style={{ maxHeight: 220, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {(addVariants[addSelectedProd.id] || []).map(v => {
+                    const vLabel = Object.values(v.options || {}).map(valId => addValueMap[valId]).filter(Boolean).join(' / ')
+                    const basePrice = addSpMap[addSelectedProd.id] ? Number(addSpMap[addSelectedProd.id].shop_price) : 0
+                    const vPrice = v.variant_price != null ? Number(v.variant_price) : basePrice + (Number(v.price_adjustment) || 0)
+                    const inStock = (v.stock ?? 0) > 0
+                    return (
+                      <div key={v.id} onClick={() => inStock ? pickProduct(addSelectedProd, v) : undefined}
+                        style={{
+                          padding: '10px 12px', borderRadius: 10, border: '1px solid var(--border)',
+                          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                          cursor: inStock ? 'pointer' : 'default',
+                          opacity: inStock ? 1 : 0.4,
+                          background: 'var(--bg)',
+                        }}
+                        onMouseEnter={e => { if (inStock) e.currentTarget.style.borderColor = 'var(--text)' }}
+                        onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)' }}
+                      >
+                        <div>
+                          <div className="fs13 fw600">{vLabel || '（無規格標籤）'}</div>
+                          <div className="muted fs12">庫存 {v.stock ?? 0} 件{!inStock ? ' · 缺貨' : ''}</div>
+                        </div>
+                        <span className="fs13 fw600">NT${vPrice.toLocaleString()}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </>)}
+
+              <button style={{
+                marginTop: 8, width: '100%', padding: '6px 0', borderRadius: 8,
+                border: 'none', background: 'var(--bg)', cursor: 'pointer', fontSize: 13, color: 'var(--text-2)',
+              }} onClick={closePicker}>取消</button>
+            </div>
+          )}
+
+          {/* 手動輸入自訂品項（運費補差額、特殊費用等） */}
+          <button style={{
+            width: '100%', padding: '7px 0', borderRadius: 10, marginBottom: 8,
+            border: '1px dashed var(--border)', background: 'none', cursor: 'pointer',
+            fontSize: 12, color: 'var(--text-3)',
+          }} onClick={() => setShowManualAdd(v => !v)}>
+            {showManualAdd ? '▲ 收起手動輸入' : '▼ 手動輸入自訂品項（運費補差額等）'}
+          </button>
+          {showManualAdd && (
+            <div className="card" style={{ marginBottom: 16, padding: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 8 }}>
+                <input className="form-input" placeholder="品項名稱" value={addItemName}
+                  onChange={e => setAddItemName(e.target.value)} style={{ fontSize: 13 }} />
+                <input className="form-input" type="number" placeholder="單價" value={addItemPrice}
+                  onChange={e => setAddItemPrice(e.target.value)} style={{ fontSize: 13 }} />
+                <input className="form-input" type="number" min={1} placeholder="數量" value={addItemQty}
+                  onChange={e => setAddItemQty(Number(e.target.value))} style={{ fontSize: 13 }} />
+              </div>
+              <button style={{
+                marginTop: 8, width: '100%', padding: '6px 0', borderRadius: 8,
+                border: '1px dashed var(--border)', background: 'none', cursor: 'pointer',
+                fontSize: 13, color: 'var(--text-2)',
+              }} onClick={() => {
+                if (!addItemName || !addItemPrice) return
+                setItemStatuses(prev => [...prev, {
+                  name: addItemName,
+                  price: Number(addItemPrice),
+                  qty: addItemQty || 1,
+                  _cancelled: false,
+                  _added: true,
+                  _originalQty: addItemQty || 1,
+                }])
+                setAddItemName('')
+                setAddItemPrice('')
+                setAddItemQty(1)
+              }}>
+                + 加入訂單
+              </button>
+            </div>
+          )}
         </>
       )}
 
@@ -1463,6 +1711,7 @@ function AddOrderSheet({ onClose, onSaved }) {
   const [products, setProducts] = useState([])
   const [variants, setVariants] = useState({}) // productId → [variants]
   const [spMap, setSpMap] = useState({}) // productId → storefront_product
+  const [valueMap, setValueMap] = useState({}) // option_value_id → value string
   const [search, setSearch] = useState('')
   const [selectedItems, setSelectedItems] = useState([]) // [{ id, name, price, qty, variantId, variantLabel }]
   const [showPicker, setShowPicker] = useState(false)
@@ -1470,10 +1719,11 @@ function AddOrderSheet({ onClose, onSaved }) {
   useEffect(() => {
     if (!storeId) return
     async function load() {
-      const [{ data: prods }, { data: vars }, { data: sp }] = await Promise.all([
+      const [{ data: prods }, { data: vars }, { data: sp }, { data: vals }] = await Promise.all([
         supabase.from('products').select('id, name, sku, source').eq('store_id', storeId),
         supabase.from('product_variants').select('*'),
         supabase.from('storefront_products').select('product_id, shop_price').eq('store_id', storeId),
+        supabase.from('variant_option_values').select('id, value'),
       ])
       setProducts(prods || [])
       const vMap = {}
@@ -1485,20 +1735,28 @@ function AddOrderSheet({ onClose, onSaved }) {
       const sm = {}
       ;(sp || []).forEach(s => { sm[s.product_id] = s })
       setSpMap(sm)
+      const vm = {}
+      ;(vals || []).forEach(v => { vm[v.id] = v.value })
+      setValueMap(vm)
     }
     load()
   }, [storeId])
 
+  function buildVariantLabel(variant) {
+    return Object.values(variant.options || {}).map(valId => valueMap[valId]).filter(Boolean).join(' / ')
+  }
+
   function addProduct(prod, variant) {
-    const price = spMap[prod.id]?.shop_price
-      ? Number(spMap[prod.id].shop_price) + (variant ? Number(variant.price_adjustment) || 0 : 0)
-      : 0
-    const vLabel = variant ? [variant.color, variant.size].filter(Boolean).join(' / ') : ''
+    const basePrice = spMap[prod.id] ? Number(spMap[prod.id].shop_price) : 0
+    const price = variant?.variant_price != null
+      ? Number(variant.variant_price)
+      : basePrice + (variant ? Number(variant.price_adjustment) || 0 : 0)
+    const vLabel = variant ? buildVariantLabel(variant) : ''
     const key = `${prod.id}-${variant?.id || ''}`
     setSelectedItems(prev => {
       const existing = prev.find(i => i._key === key)
       if (existing) return prev.map(i => i._key === key ? { ...i, qty: i.qty + 1 } : i)
-      return [...prev, { _key: key, id: prod.id, name: prod.name, price, qty: 1, variantId: variant?.id, variantLabel: vLabel, color: variant?.color, size: variant?.size }]
+      return [...prev, { _key: key, id: prod.id, name: prod.name, price, qty: 1, variantId: variant?.id, variantLabel: vLabel || null }]
     })
     setShowPicker(false)
     setSearch('')
@@ -1633,12 +1891,11 @@ function AddOrderSheet({ onClose, onSaved }) {
           <div style={{ maxHeight: 200, overflowY: 'auto' }}>
             {filtered.slice(0, 20).map(p => {
               const pvs = variants[p.id]
-              const sp = spMap[p.id]
-              const price = sp ? Number(sp.shop_price) : 0
+              const basePrice = spMap[p.id] ? Number(spMap[p.id].shop_price) : 0
               if (pvs && pvs.length > 0) {
                 return pvs.map(v => {
-                  const vLabel = [v.color, v.size].filter(Boolean).join(' / ')
-                  const vPrice = price + (Number(v.price_adjustment) || 0)
+                  const vLabel = buildVariantLabel(v)
+                  const vPrice = v.variant_price != null ? Number(v.variant_price) : basePrice + (Number(v.price_adjustment) || 0)
                   return (
                     <div key={`${p.id}-${v.id}`} onClick={() => addProduct(p, v)}
                       style={{ padding: '8px 10px', cursor: 'pointer', borderRadius: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
@@ -1647,7 +1904,7 @@ function AddOrderSheet({ onClose, onSaved }) {
                     >
                       <div>
                         <div className="fs13 fw600">{p.name}</div>
-                        <div className="muted fs12">{vLabel} · {p.sku}</div>
+                        <div className="muted fs12">{vLabel || '—'}{p.sku ? ` · ${p.sku}` : ''}</div>
                       </div>
                       <span className="fs13">NT${vPrice.toLocaleString()}</span>
                     </div>
@@ -1664,7 +1921,7 @@ function AddOrderSheet({ onClose, onSaved }) {
                     <div className="fs13 fw600">{p.name}</div>
                     <div className="muted fs12">{p.sku}</div>
                   </div>
-                  <span className="fs13">{price > 0 ? `NT$${price.toLocaleString()}` : '未定價'}</span>
+                  <span className="fs13">{basePrice > 0 ? `NT$${basePrice.toLocaleString()}` : '未定價'}</span>
                 </div>
               )
             })}
