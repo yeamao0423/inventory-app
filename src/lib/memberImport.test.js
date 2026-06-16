@@ -113,4 +113,32 @@ describe('mapShoplineRows', () => {
   it('empty CSV → zeros', () => {
     expect(mapShoplineRows('')).toEqual({ rows: [], total: 0, imported: 0, skipped: 0 })
   })
+
+  it('maps English headers (case-insensitive)', () => {
+    const csv = 'Customer ID,Name,Email,Created At,Order Count,Total Spending,Member,Accepts Marketing,Phone\n' +
+      'idE,John,JOHN@x.com,2026-02-02 10:00:00,2,"NT$2,000",Y,Y,0900000000'
+    const { rows, imported, skipped } = mapShoplineRows(csv)
+    expect(imported).toBe(1)
+    expect(skipped).toBe(0)
+    expect(rows[0].email).toBe('john@x.com')
+    expect(rows[0].imported_amount).toBe(2000)
+    expect(rows[0].imported_orders).toBe(2)
+  })
+
+  it('falls back to email-content detection when header is unknown', () => {
+    // email 欄名是程式不認得的「聯絡信箱」，靠值內容(@)偵測
+    const csv = 'ID,姓名,聯絡信箱\n' +
+      'idX,小明,ming@x.com'
+    const { rows, imported } = mapShoplineRows(csv)
+    expect(imported).toBe(1)
+    expect(rows[0].email).toBe('ming@x.com')
+  })
+
+  it('imports all email rows when no member column exists', () => {
+    const csv = 'Name,Email\n' +
+      'A,a@x.com\nB,b@x.com\nC,'   // 無會員欄 → 不過濾；第三列無 email 仍略過
+    const { imported, skipped } = mapShoplineRows(csv)
+    expect(imported).toBe(2)
+    expect(skipped).toBe(1)
+  })
 })
