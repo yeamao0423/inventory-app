@@ -257,12 +257,17 @@ export async function POST(request) {
 </body>
 </html>`
 
-  resend.emails.send({
-    from: 'Daigogo <no-reply@daigogotw.com>',
-    to: notifyEmail || 'daigogosg@gmail.com',
-    subject: `📦 新訂單 #${orderNo} — ${order.name}（NT$${total.toLocaleString()}）`,
-    html: notifyHtml,
-  }).catch(err => console.error('Store notify error:', err))
+  // 本機測試：略過寄給店家（daigogo）的新訂單通知；僅正式環境寄出
+  if (process.env.NODE_ENV === 'production') {
+    resend.emails.send({
+      from: 'Daigogo <no-reply@daigogotw.com>',
+      to: notifyEmail || 'daigogosg@gmail.com',
+      subject: `📦 新訂單 #${orderNo} — ${order.name}（NT$${total.toLocaleString()}）`,
+      html: notifyHtml,
+    }).catch(err => console.error('Store notify error:', err))
+  } else {
+    console.log(`[send-order-email] 本機模式：略過店家通知信 (#${orderNo})`)
+  }
 
   return NextResponse.json({ success: true })
 }

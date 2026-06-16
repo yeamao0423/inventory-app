@@ -39,6 +39,8 @@ export default function InvitePage() {
 
     setInvite({ ...data, stores: { name: data.store_name } })
     setEmail(data.email)
+    // 被邀請的 email 已註冊 → 預設「登入」；尚未註冊 → 預設「註冊」
+    setAuthMode(data.email_registered ? 'login' : 'register')
     setStatus('valid')
   }
 
@@ -70,9 +72,17 @@ export default function InvitePage() {
   async function handleRegister(e) {
     e.preventDefault()
     setError(''); setSubmitting(true)
-    const { error } = await signUp(email, password, name)
-    if (error) setError(error.message.includes('already') ? '此 Email 已被註冊，請直接登入。' : '註冊失敗，請稍後再試。')
+    // 驗證信導回「邀請連結本身」：驗證完回到邀請頁、已登入 → 自動接受邀請
+    const { data, error } = await signUp(email, password, name, window.location.href)
+    if (error) {
+      setError(error.message.includes('already') ? '此 Email 已被註冊，請直接登入。' : '註冊失敗，請稍後再試。')
+      setSubmitting(false)
+      return
+    }
     setSubmitting(false)
+    // email 確認開啟時，註冊後沒有 session → 提示去信箱驗證、再回來登入接受邀請
+    // （若未開 email 確認、已有 session，下方 useEffect 會自動接受）
+    if (!data?.session) setStatus('verify_sent')
   }
 
   // ── Render states ──
@@ -101,6 +111,21 @@ export default function InvitePage() {
       <div style={{ fontWeight:600, marginBottom:8 }}>此邀請已被接受</div>
       <p style={{ fontSize:13, color:'var(--text-3)' }}>請直接登入系統。</p>
       <a href="/" style={{ marginTop:16, display:'block', textAlign:'center', fontSize:14, color:'var(--text)' }}>前往登入</a>
+    </Wrap>
+  )
+
+  if (status === 'verify_sent') return (
+    <Wrap>
+      <div style={{ fontSize:36, marginBottom:12 }}>📧</div>
+      <div style={{ fontWeight:600, marginBottom:8 }}>註冊成功，請先驗證 Email</div>
+      <p style={{ fontSize:13, color:'var(--text-3)', lineHeight:1.6 }}>
+        驗證信已寄到 <strong>{email}</strong>。<br/>
+        請點擊信中連結完成驗證，再回來登入即可接受邀請。
+      </p>
+      <button className="btn" style={{ marginTop:16, maxWidth:240, margin:'16px auto 0' }}
+        onClick={() => { setStatus('valid'); setAuthMode('login'); setPassword('') }}>
+        前往登入
+      </button>
     </Wrap>
   )
 

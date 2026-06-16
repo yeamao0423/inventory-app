@@ -48,16 +48,16 @@ export function AuthProvider({ children }) {
     return { error }
   }
 
-  async function signUp(email, password, name) {
-    const { error } = await supabase.auth.signUp({
+  async function signUp(email, password, name, redirectTo) {
+    const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
         data: { name },
-        emailRedirectTo: window.location.origin,
+        emailRedirectTo: redirectTo || window.location.origin,
       },
     })
-    return { error }
+    return { data, error }
   }
 
   async function sendPasswordReset(email) {

@@ -21,6 +21,8 @@ export default function AccountPage() {
   const [selectedOrder, setSelectedOrder] = useState(null)
   const [cancelling, setCancelling] = useState(false)
 
+  const [membership, setMembership] = useState(null)
+
   useEffect(() => {
     if (!userLoading && !user) router.push('/auth')
   }, [user, userLoading])
@@ -29,7 +31,16 @@ export default function AccountPage() {
     if (!user) return
     loadProfile()
     loadOrders()
+    loadMembership()
   }, [user])
+
+  async function loadMembership() {
+    const storeId = await getStoreId()
+    // 首次登入：email 相符則晉升匯入名單 / 建立會員關係（store-scoped）
+    await supabase.rpc('promote_member', { p_store_id: storeId })
+    const { data } = await supabase.rpc('get_my_membership', { p_store_id: storeId })
+    setMembership(data || null)
+  }
 
   async function loadProfile() {
     const { data } = await supabase.from('consumers').select('*').eq('id', user.id).single()
@@ -87,6 +98,44 @@ export default function AccountPage() {
 
   return (
     <div className="account-wrap">
+
+      {/* ── Membership ── */}
+      {membership?.joined && membership?.level_name && (
+        <section className="account-section">
+          <h2 className="account-section-title">{zh ? '會員等級' : 'Membership'}</h2>
+          <div className="account-card">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <span style={{ fontSize: 13, color: 'var(--text-3)' }}>{zh ? '目前等級' : 'Current tier'}</span>
+              <span style={{ fontSize: 18, fontWeight: 700 }}>{membership.level_name}</span>
+            </div>
+            <div className="account-field" style={{ borderBottom: 'none', paddingBottom: 0 }}>
+              <span className="account-field-label">{zh ? '累積消費' : 'Qualifying spend'}</span>
+              <span className="account-field-value">NT${Number(membership.qualifying_amount || 0).toLocaleString()}</span>
+            </div>
+            {membership.next_level_name && (
+              <div style={{ marginTop: 12 }}>
+                {(() => {
+                  const next = Number(membership.next_threshold_amount || 0)
+                  const cur = Number(membership.qualifying_amount || 0)
+                  const pct = next > 0 ? Math.min(100, Math.round((cur / next) * 100)) : 0
+                  return (
+                    <>
+                      <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6 }}>
+                        {zh
+                          ? `距「${membership.next_level_name}」還差 NT$${Number(membership.amount_to_next || 0).toLocaleString()}`
+                          : `NT$${Number(membership.amount_to_next || 0).toLocaleString()} to ${membership.next_level_name}`}
+                      </div>
+                      <div style={{ height: 8, borderRadius: 999, background: 'var(--bg)', overflow: 'hidden' }}>
+                        <div style={{ width: `${pct}%`, height: '100%', background: 'var(--text-1, #111)', borderRadius: 999, transition: 'width .3s' }} />
+                      </div>
+                    </>
+                  )
+                })()}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* ── Profile ── */}
       <section className="account-section">

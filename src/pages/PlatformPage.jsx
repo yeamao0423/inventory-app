@@ -9,6 +9,7 @@ export default function PlatformPage() {
   const [stores, setStores] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(null)
+  const [domainDraft, setDomainDraft] = useState({})   // { [storeId]: 編輯中的自訂網域 }
 
   // create form
   const [name, setName] = useState('')
@@ -25,7 +26,7 @@ export default function PlatformPage() {
     setLoading(true)
     const { data: storeRows } = await supabase
       .from('stores')
-      .select('id, name, slug, is_active, created_at')
+      .select('id, name, slug, custom_domain, is_active, created_at')
       .order('id', { ascending: true })
 
     const rows = storeRows ?? []
@@ -38,7 +39,25 @@ export default function PlatformPage() {
       return { ...s, orderCount: orderCount ?? 0, productCount: productCount ?? 0 }
     }))
     setStores(counts)
+    setDomainDraft(Object.fromEntries(counts.map(s => [s.id, s.custom_domain || ''])))
     setLoading(false)
+  }
+
+  async function saveDomain(s) {
+    const v = (domainDraft[s.id] ?? '').trim().toLowerCase()
+    // 允許留空（清除）；否則需像 daigoking.com 的網域格式
+    if (v && !/^([a-z0-9-]+\.)+[a-z]{2,}$/.test(v)) {
+      return alert('網域格式不正確，例如 daigoking.com')
+    }
+    setSaving(s.id)
+    const { error } = await supabase.from('stores').update({ custom_domain: v || null }).eq('id', s.id)
+    if (error) {
+      alert(error.code === '23505' || error.message.includes('duplicate')
+        ? '此網域已被其他商店使用' : '儲存失敗：' + error.message)
+    } else {
+      setStores(prev => prev.map(x => x.id === s.id ? { ...x, custom_domain: v || null } : x))
+    }
+    setSaving(null)
   }
 
   async function createStore(e) {
@@ -179,6 +198,24 @@ export default function PlatformPage() {
                 <span className={`badge ${s.is_active ? 'badge-ok' : 'badge-low'}`}>
                   {s.is_active ? '營運中' : '已停權'}
                 </span>
+              </div>
+              <div style={{ display: 'flex', gap: 8, width: '100%', alignItems: 'center' }}>
+                <input
+                  className="form-input"
+                  placeholder="自訂網域（例：daigoking.com，留空＝未設定）"
+                  value={domainDraft[s.id] ?? ''}
+                  onChange={e => setDomainDraft(d => ({ ...d, [s.id]: e.target.value }))}
+                  autoCapitalize="none"
+                  style={{ flex: 1, padding: '8px 12px', fontSize: 13 }}
+                />
+                <button
+                  className="btn"
+                  disabled={saving === s.id || (domainDraft[s.id] ?? '') === (s.custom_domain ?? '')}
+                  onClick={() => saveDomain(s)}
+                  style={{ width: 'auto', padding: '8px 14px', fontSize: 13, whiteSpace: 'nowrap' }}
+                >
+                  儲存網域
+                </button>
               </div>
               <div style={{ display: 'flex', justifyContent: 'flex-end', width: '100%' }}>
                 <button onClick={() => toggleActive(s)} disabled={saving === s.id}

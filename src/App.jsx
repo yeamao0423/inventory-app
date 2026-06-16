@@ -11,12 +11,16 @@ import CouponsPage from './pages/CouponsPage'
 import InvitePage from './pages/InvitePage'
 import PlatformPage from './pages/PlatformPage'
 import SettingsPage from './pages/SettingsPage'
+import MembersPage from './pages/MembersPage'
+import MemberLevelsPage from './pages/MemberLevelsPage'
 
 const allTabs = [
   { path: '/',           label: '庫存',  icon: BoxIcon, storeOnly: true },
   { path: '/orders',     label: '訂單',  icon: ReceiptIcon, storeOnly: true },
   { path: '/storefront', label: '商城',  icon: ShopIcon, storeOnly: true },
   { path: '/coupons',    label: '優惠券', icon: CouponIcon, storeOnly: true },
+  { path: '/members',    label: '會員',  icon: MemberIcon, adminOnly: true },
+  { path: '/levels',     label: '等級',  icon: TierIcon, adminOnly: true },
   { path: '/trips',      label: '行程',  icon: TripIcon, superOnly: true },
   { path: '/users',      label: '成員',  icon: UsersIcon, adminOnly: true },
   { path: '/settings',   label: '設定',  icon: GearIcon, superOnly: true },
@@ -80,6 +84,8 @@ export default function App() {
         <Route path="/orders"     element={<OrdersPage />} />
         <Route path="/storefront" element={<StorefrontPage />} />
         <Route path="/coupons"    element={<CouponsPage />} />
+        <Route path="/members"    element={<MembersPage />} />
+        <Route path="/levels"     element={<MemberLevelsPage />} />
         <Route path="/trips"      element={<TripsPage />} />
         <Route path="/users"      element={<UsersPage />} />
         <Route path="/settings"   element={<SettingsPage />} />
@@ -118,6 +124,12 @@ function CouponIcon() {
 }
 function TripIcon() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5"/></svg>
+}
+function MemberIcon() {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11l-3 3-1.5-1.5"/></svg>
+}
+function TierIcon() {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.5-4.8 2.5.9-5.4L4.2 7.7l5.4-.8z"/></svg>
 }
 function UsersIcon() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>

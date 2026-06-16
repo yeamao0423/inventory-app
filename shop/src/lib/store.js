@@ -1,9 +1,11 @@
 import { supabase } from './supabase'
 
 const DEFAULT_SLUG = 'daigogo'
+const STORE_COLS = 'id, name, slug, settings, is_active'
 
 let storePromise = null
 
+// 子網域 / env / 本機 → slug
 function resolveSlug() {
   if (process.env.NEXT_PUBLIC_STORE_SLUG) return process.env.NEXT_PUBLIC_STORE_SLUG
   if (typeof window !== 'undefined') {
@@ -14,20 +16,41 @@ function resolveSlug() {
   return DEFAULT_SLUG
 }
 
+// 完整 hostname，供 custom_domain 比對（客戶綁自己的網域）。
+// env 指定 slug、本機、*.localhost 一律回 null（不走 custom_domain）。
+function resolveHost() {
+  if (process.env.NEXT_PUBLIC_STORE_SLUG) return null
+  if (typeof window === 'undefined') return null
+  const h = window.location.hostname
+  if (h === 'localhost' || h === '127.0.0.1' || h.endsWith('.localhost')) return null
+  return h
+}
+
+async function fetchStore() {
+  // 1) 先用完整網域比對 custom_domain（最後階段：客戶綁自己的網域，如 daigoking.com）
+  const host = resolveHost()
+  if (host) {
+    const { data } = await supabase
+      .from('stores').select(STORE_COLS)
+      .eq('custom_domain', host).eq('is_active', true)
+      .maybeSingle()
+    if (data) return data
+  }
+  // 2) 退回子網域 / env / 預設 slug（寄生期：daigoking.daigogo.com → slug=daigoking）
+  const { data, error } = await supabase
+    .from('stores').select(STORE_COLS)
+    .eq('slug', resolveSlug())
+    .single()
+  if (error || !data) throw error || new Error('Store not found')
+  return data
+}
+
 export function getStore() {
   if (!storePromise) {
-    storePromise = supabase
-      .from('stores')
-      .select('id, name, slug, settings, is_active')
-      .eq('slug', resolveSlug())
-      .single()
-      .then(({ data, error }) => {
-        if (error || !data) {
-          storePromise = null // allow retry on transient failure
-          throw error || new Error('Store not found')
-        }
-        return data
-      })
+    storePromise = fetchStore().catch(err => {
+      storePromise = null // 允許下次重試
+      throw err
+    })
   }
   return storePromise
 }
