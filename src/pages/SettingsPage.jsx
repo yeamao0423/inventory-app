@@ -61,9 +61,16 @@ export default function SettingsPage() {
     </div>
   )
 
-  const inputRow = (label, key, type = 'text', placeholder = '') => (
+  const inputRow = (label, key, type = 'text', placeholder = '', required = false) => (
     <div className="form-group" style={{ marginBottom: 10 }}>
-      <label className="form-label">{label}</label>
+      <label className="form-label">
+        {label}
+        {required && (
+          <span style={{ color: 'var(--red)', fontSize: 11, marginLeft: 6, fontWeight: 600 }}>
+            匯出出貨單必填
+          </span>
+        )}
+      </label>
       <input className="form-input" type={type} placeholder={placeholder}
         value={form[key] ?? ''} onChange={set(key)} />
     </div>
@@ -82,7 +89,8 @@ export default function SettingsPage() {
         <div className="card" style={{ padding: 16, marginBottom: 16, background: 'var(--blue-bg)', border: 'none' }}>
           <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--blue)', marginBottom: 4 }}>🎉 歡迎開店！</div>
           <div style={{ fontSize: 13, color: 'var(--blue)', lineHeight: 1.6 }}>
-            完成以下設定後，即可到「成員」邀請團隊、到「庫存」建立商品。
+            這些設定都可日後再填，現在就能到「庫存」建立商品。<br/>
+            標示「匯出出貨單必填」的欄位，等你要匯出交貨便出貨單時填好即可。
           </div>
         </div>
       )}
@@ -107,10 +115,10 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        <div className="sec">出貨單寄件人（交貨便匯出用）</div>
+        <div className="sec">出貨單寄件人（交貨便匯出用，可日後要匯出時再填）</div>
         <div className="card" style={{ padding: 16 }}>
-          {inputRow('寄件人姓名', 'sender_name', 'text', '例：徐承豊')}
-          {inputRow('寄件人電話', 'sender_phone', 'text', '例：0955367287')}
+          {inputRow('寄件人姓名', 'sender_name', 'text', '例：徐承豊', true)}
+          {inputRow('寄件人電話', 'sender_phone', 'text', '例：0955367287', true)}
           {inputRow('寄件人 Email', 'sender_email', 'text', '例：daigogosg@gmail.com')}
           {inputRow('退貨門市', 'return_store_name', 'text', '例：和復門市')}
           {inputRow('退貨門市店號', 'return_store_number', 'text', '例：263115')}

@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from './hooks/useAuth'
 import LoginPage from './pages/LoginPage'
@@ -39,14 +39,18 @@ export default function App() {
     }
   }, [loading, user, isBackendUser, isPlatformAdmin, location.pathname])
 
-  // 新店主首次進入（settings 未設定）→ 開店精靈
+  // 新店主首次進入（settings 未設定）→ 顯示可關閉的歡迎卡（不再強制導向，改 just-in-time 引導）
+  const isFirstSetup = isBackendUser && profile?.role === 'super_admin'
+    && store && Object.keys(store.settings ?? {}).length === 0
+  const welcomeKey = store ? `welcome_dismissed_${store.id}` : null
+  const [welcomeDismissed, setWelcomeDismissed] = useState(false)
   useEffect(() => {
-    if (!loading && isBackendUser && profile?.role === 'super_admin'
-        && store && Object.keys(store.settings ?? {}).length === 0
-        && location.pathname === '/') {
-      navigate('/settings', { replace: true })
-    }
-  }, [loading, isBackendUser, profile?.role, store, location.pathname])
+    if (welcomeKey) setWelcomeDismissed(localStorage.getItem(welcomeKey) === '1')
+  }, [welcomeKey])
+  function dismissWelcome() {
+    if (welcomeKey) localStorage.setItem(welcomeKey, '1')
+    setWelcomeDismissed(true)
+  }
 
   if (loading) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh' }}><img src="/logo.png" alt="Daigogo" style={{ height: 48 }} /></div>
@@ -77,8 +81,32 @@ export default function App() {
     return isBackendUser
   })
 
+  const showWelcome = isFirstSetup && !welcomeDismissed && location.pathname !== '/settings'
+
   return (
     <div className="app">
+      {showWelcome && (
+        <div style={{
+          margin: '12px 16px 0', padding: '12px 14px', borderRadius: 12,
+          background: 'var(--blue-bg)', display: 'flex', alignItems: 'center', gap: 12,
+        }}>
+          <div style={{ flex: 1, lineHeight: 1.5 }}>
+            <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--blue)' }}>🎉 歡迎開店！</div>
+            <div style={{ fontSize: 12.5, color: 'var(--blue)' }}>
+              可直接到「庫存」建立商品。出貨單寄件人等資訊待要匯出出貨單時再到「設定」填即可。
+            </div>
+          </div>
+          <button className="btn" onClick={() => navigate('/settings')}
+            style={{ width: 'auto', padding: '7px 14px', fontSize: 13, flexShrink: 0 }}>
+            前往設定
+          </button>
+          <button onClick={dismissWelcome} aria-label="關閉"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--blue)', fontSize: 20, lineHeight: 1, flexShrink: 0 }}>
+            ×
+          </button>
+        </div>
+      )}
+
       <Routes>
         <Route path="/"           element={<InventoryPage />} />
         <Route path="/orders"     element={<OrdersPage />} />

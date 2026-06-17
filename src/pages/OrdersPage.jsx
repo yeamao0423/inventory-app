@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import CustomSelect from '../components/CustomSelect'
@@ -2191,6 +2192,7 @@ function OrderDetailSheet({ order, onClose, onSaved, canEdit }) {
 
 function ExportShippingSheet({ orders, onClose }) {
   const { store } = useAuth()
+  const navigate = useNavigate()
   const [statuses, setStatuses] = useState(['處理中'])
   const [payStatuses, setPayStatuses] = useState(['已付清'])
   const [idFrom, setIdFrom] = useState('')
@@ -2218,7 +2220,12 @@ function ExportShippingSheet({ orders, onClose }) {
     if (filtered.length === 0) return alert('沒有符合條件的訂單')
     const s = store?.settings ?? {}
     if (!s.sender_name || !s.sender_phone) {
-      return alert('請先到「設定」填寫出貨單寄件人資訊')
+      // just-in-time：缺寄件人資訊時，提醒並可直接帶去設定頁填寫
+      if (confirm('出貨單需要寄件人姓名與電話，目前尚未填寫。要現在前往「設定」填寫嗎？')) {
+        onClose?.()
+        navigate('/settings')
+      }
+      return
     }
     const esc = v => {
       const str = String(v ?? '')
