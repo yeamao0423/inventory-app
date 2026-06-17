@@ -53,7 +53,9 @@ export default function App() {
   }
 
   if (loading) return (
-    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh' }}><img src="/logo.png" alt="Daigogo" style={{ height: 48 }} /></div>
+    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', color:'var(--text-3)' }}>
+      <BagIcon size={40} />
+    </div>
   )
   if (location.pathname === '/invite') return <InvitePage />
   if (!user) return <LoginPage />
@@ -122,7 +124,14 @@ export default function App() {
       </Routes>
 
       <nav className="tabbar">
-        <div className="side-brand"><img src="/logo.png" alt="" />{store?.name ?? '平台'}</div>
+        <div className="side-brand">
+          {(store?.settings?.brand_display ?? 'both') !== 'name' && (
+            store?.settings?.logo_url
+              ? <img src={store.settings.logo_url} alt="" style={{ objectFit: 'cover' }} />
+              : <BagIcon size={24} />
+          )}
+          {(store?.settings?.brand_display ?? 'both') !== 'logo' && (store?.name ?? '平台')}
+        </div>
         {tabs.map(({ path, label, icon: Icon }) => (
           <button
             key={path}
@@ -140,6 +149,9 @@ export default function App() {
 
 function BoxIcon() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 8L12 3 3 8m18 0v8l-9 5m0-13L3 8m9 13V11m9-3l-9 5M3 8l9 5"/></svg>
+}
+function BagIcon({ size = 24 }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
 }
 function ReceiptIcon() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 012-2h2a2 2 0 012 2M9 5h6m-3 4v6m-2-3h4"/></svg>

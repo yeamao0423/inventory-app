@@ -537,6 +537,22 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete, exi
     setImages(prev => prev.filter((_, i) => i !== idx))
   }
 
+  // 重排圖片：第一張即列表縮圖/封面。交換相鄰兩張後整體重新編號並存回。
+  async function moveImage(idx, dir) {
+    const j = idx + dir
+    if (j < 0 || j >= images.length) return
+    const next = [...images]
+    ;[next[idx], next[j]] = [next[j], next[idx]]
+    const renumbered = next.map((img, i) => ({ ...img, sort_order: i }))
+    setImages(renumbered)
+    await Promise.all(
+      renumbered.filter(img => img.id != null).map(img =>
+        supabase.from('product_images').update({ sort_order: img.sort_order }).eq('id', img.id)
+      )
+    )
+    if (onSaved) onSaved()
+  }
+
   async function deleteProduct() {
     if (!window.confirm(`確定刪除「${product.name}」？`)) return
     await supabase.from('products').delete().eq('id', product.id)
@@ -562,11 +578,26 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete, exi
             {images.map((img, idx) => (
               <div key={img.id ?? idx} style={{position:'relative'}}>
                 <img src={img.url} style={{width:72,height:72,objectFit:'cover',borderRadius:8,display:'block'}} />
+                {idx === 0 && (
+                  <span style={{position:'absolute',top:4,left:4,background:'rgba(0,0,0,0.65)',color:'#fff',fontSize:10,fontWeight:600,padding:'1px 6px',borderRadius:6}}>封面</span>
+                )}
                 {canEdit && (
-                  <button
-                    onClick={() => deleteImage(img.id, idx)}
-                    style={{position:'absolute',top:-6,right:-6,width:20,height:20,borderRadius:'50%',background:'var(--red)',color:'#fff',border:'none',cursor:'pointer',fontSize:12,lineHeight:'20px',textAlign:'center',padding:0}}
-                  >×</button>
+                  <>
+                    <button
+                      onClick={() => deleteImage(img.id, idx)}
+                      style={{position:'absolute',top:-6,right:-6,width:20,height:20,borderRadius:'50%',background:'var(--red)',color:'#fff',border:'none',cursor:'pointer',fontSize:12,lineHeight:'20px',textAlign:'center',padding:0}}
+                    >×</button>
+                    {images.length > 1 && (
+                      <div style={{position:'absolute',bottom:0,left:0,right:0,display:'flex',borderBottomLeftRadius:8,borderBottomRightRadius:8,overflow:'hidden'}}>
+                        <button onClick={() => moveImage(idx, -1)} disabled={idx === 0}
+                          style={{flex:1,border:'none',background:'rgba(0,0,0,0.55)',color:'#fff',cursor:idx===0?'default':'pointer',opacity:idx===0?0.35:1,fontSize:13,padding:'2px 0'}}
+                          aria-label="往前移">◀</button>
+                        <button onClick={() => moveImage(idx, 1)} disabled={idx === images.length - 1}
+                          style={{flex:1,border:'none',borderLeft:'1px solid rgba(255,255,255,0.25)',background:'rgba(0,0,0,0.55)',color:'#fff',cursor:idx===images.length-1?'default':'pointer',opacity:idx===images.length-1?0.35:1,fontSize:13,padding:'2px 0'}}
+                          aria-label="往後移">▶</button>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             ))}

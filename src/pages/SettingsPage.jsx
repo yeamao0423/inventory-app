@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
+import { compressImage } from '../lib/imageUtils'
 
 // 店家設定（僅店主）：把過去寫死在程式裡的營運參數搬進 stores.settings
 // 新店主首次進入（settings 為空）時作為開店精靈使用
@@ -22,6 +23,7 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
+  const [uploadingLogo, setUploadingLogo] = useState(false)
 
   const isFirstSetup = store && Object.keys(store.settings ?? {}).length === 0
 
@@ -34,6 +36,31 @@ export default function SettingsPage() {
   const set = (key) => (e) => {
     const v = e.target.value
     setForm(prev => ({ ...prev, [key]: e.target.type === 'number' ? (v === '' ? '' : Number(v)) : v }))
+    setSaved(false)
+  }
+
+  // Logo 上傳：壓縮後存進公開 bucket product-images 的 logos/ 路徑，url 寫入 settings.logo_url
+  async function onLogoChange(e) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setUploadingLogo(true); setError('')
+    try {
+      const compressed = await compressImage(file)
+      const ext = compressed.name.split('.').pop().toLowerCase()
+      const path = `logos/${storeId}-${Date.now()}.${ext}`
+      const { error: upErr } = await supabase.storage.from('product-images').upload(path, compressed, { upsert: true })
+      if (upErr) throw upErr
+      const { data: { publicUrl } } = supabase.storage.from('product-images').getPublicUrl(path)
+      setForm(prev => ({ ...prev, logo_url: publicUrl }))
+      setSaved(false)
+    } catch (err) {
+      setError('Logo 上傳失敗：' + err.message)
+    }
+    setUploadingLogo(false)
+  }
+  function removeLogo() {
+    setForm(prev => ({ ...prev, logo_url: '' }))
     setSaved(false)
   }
 
@@ -98,10 +125,45 @@ export default function SettingsPage() {
       <form onSubmit={save}>
         <div className="sec">商店資訊</div>
         <div className="card" style={{ padding: 16 }}>
-          <div className="form-group" style={{ marginBottom: 0 }}>
+          <div className="form-group" style={{ marginBottom: 14 }}>
             <label className="form-label">商店名稱</label>
             <input className="form-input" type="text" value={storeName}
               onChange={e => { setStoreName(e.target.value); setSaved(false) }} required />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">商店 Logo（顯示於後台與商城；未設定則顯示購物袋圖示＋店名）</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ width: 56, height: 56, borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 }}>
+                {form.logo_url
+                  ? <img src={form.logo_url} alt="logo" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  : <span style={{ fontSize: 22 }}>🛍️</span>}
+              </div>
+              <label className="btn" style={{ width: 'auto', display: 'inline-block', padding: '8px 14px', fontSize: 13, cursor: 'pointer' }}>
+                {uploadingLogo ? '上傳中…' : (form.logo_url ? '更換 Logo' : '上傳 Logo')}
+                <input type="file" accept="image/*" style={{ display: 'none' }} onChange={onLogoChange} disabled={uploadingLogo} />
+              </label>
+              {form.logo_url && (
+                <button type="button" onClick={removeLogo}
+                  style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 13 }}>移除</button>
+              )}
+            </div>
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 13, color: 'var(--text-2)', marginBottom: 6 }}>品牌顯示方式（後台側邊欄與商城導覽列）</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14 }}>
+                {[
+                  { v: 'both', label: 'Logo＋店名' },
+                  { v: 'logo', label: '只顯示 Logo' },
+                  { v: 'name', label: '只顯示店名' },
+                ].map(o => (
+                  <label key={o.v} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+                    <input type="radio" name="brand_display" value={o.v}
+                      checked={(form.brand_display || 'both') === o.v}
+                      onChange={() => { setForm(prev => ({ ...prev, brand_display: o.v })); setSaved(false) }} />
+                    {o.label}
+                  </label>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
 

@@ -3,8 +3,13 @@ import './globals.css'
 import { createContext, useContext, useState, useEffect } from 'react'
 import Link from 'next/link'
 import { supabase } from '../lib/supabase'
+import { getStore } from '../lib/store'
 import zhMessages from '../messages/zh.json'
 import enMessages from '../messages/en.json'
+
+function BagIcon({ size = 28 }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 6, verticalAlign: 'middle' }}><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
+}
 
 const messages = { zh: zhMessages, en: enMessages }
 
@@ -28,6 +33,24 @@ export default function RootLayout({ children }) {
   const [toast, setToast] = useState('')
   const [user, setUser] = useState(null)
   const [userLoading, setUserLoading] = useState(true)
+  const [store, setStore] = useState(null)
+
+  // 抓當前店資訊（名稱、logo），驅動導覽列/標題/favicon/footer
+  useEffect(() => {
+    getStore().then(setStore).catch(() => {})
+  }, [])
+
+  // 動態更新分頁標題與 favicon（沒 logo 就維持不指定，不顯示 Daigogo）
+  useEffect(() => {
+    if (!store) return
+    if (store.name) document.title = store.name
+    const logo = store.settings?.logo_url
+    if (logo) {
+      let link = document.querySelector("link[rel='icon']")
+      if (!link) { link = document.createElement('link'); link.rel = 'icon'; document.head.appendChild(link) }
+      link.href = logo
+    }
+  }, [store])
 
   useEffect(() => {
     const saved = localStorage.getItem('lang') || (navigator.language.startsWith('en') ? 'en' : 'zh')
@@ -92,8 +115,7 @@ export default function RootLayout({ children }) {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Daigogo</title>
-        <link rel="icon" href="/logo.png" />
+        <title>{store?.name || '商城'}</title>
       </head>
       <body>
         <UserContext.Provider value={{ user, loading: userLoading }}>
@@ -101,7 +123,14 @@ export default function RootLayout({ children }) {
             <CartContext.Provider value={{ cart, addItem, removeItem, clearCart }}>
               <nav className="nav">
                 <div className="nav-inner">
-                  <Link href="/" className="nav-logo"><img src="/logo.png" alt="Daigogo" style={{ height: 28, marginRight: 6, verticalAlign: 'middle' }} />Daigogo</Link>
+                  <Link href="/" className="nav-logo">
+                    {(store?.settings?.brand_display ?? 'both') !== 'name' && (
+                      store?.settings?.logo_url
+                        ? <img src={store.settings.logo_url} alt="" style={{ height: 28, marginRight: 6, verticalAlign: 'middle' }} />
+                        : <BagIcon size={28} />
+                    )}
+                    {(store?.settings?.brand_display ?? 'both') !== 'logo' && (store?.name || '')}
+                  </Link>
                   <div className="nav-links">
                     <Link href="/products" className="nav-link">{t('nav.products')}</Link>
                     <Link href="/cart" className="nav-cart">
@@ -124,7 +153,7 @@ export default function RootLayout({ children }) {
               {children}
 
               <footer className="footer">
-                © 2026 Daigogo. All rights reserved.
+                © 2026 {store?.name || ''}. All rights reserved.
               </footer>
 
               {toast && <div className="toast">{toast}</div>}
