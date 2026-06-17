@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { compressImage } from '../lib/imageUtils'
+import { SHARE_VARS, DEFAULT_SHARE_TEMPLATE, resolveShopBaseUrl } from '../lib/socialShare'
 
 // 店家設定（僅店主）：把過去寫死在程式裡的營運參數搬進 stores.settings
 // 新店主首次進入（settings 為空）時作為開店精靈使用
@@ -174,6 +175,32 @@ export default function SettingsPage() {
             <label className="form-label">免運門檻（NT$，商品小計達此金額免運）</label>
             <input className="form-input" type="number" placeholder="3800"
               value={form.free_shipping_threshold ?? ''} onChange={set('free_shipping_threshold')} />
+          </div>
+        </div>
+
+        <div className="sec">社群分享</div>
+        <div className="card" style={{ padding: 16 }}>
+          <div className="form-group" style={{ marginBottom: 10 }}>
+            <label className="form-label">分享文案模板</label>
+            <textarea className="form-input" rows={5}
+              style={{ resize: 'vertical', lineHeight: 1.6, fontFamily: 'inherit' }}
+              placeholder={DEFAULT_SHARE_TEMPLATE}
+              value={form.share_template ?? ''}
+              onChange={e => { setForm(prev => ({ ...prev, share_template: e.target.value })); setSaved(false) }} />
+            <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+              <span style={{ fontSize: 12, color: 'var(--text-2)' }}>可用變數：</span>
+              {SHARE_VARS.map(v => (
+                <button type="button" key={v.token} title={v.desc}
+                  onClick={() => { setForm(prev => ({ ...prev, share_template: (prev.share_template ?? '') + v.token })); setSaved(false) }}
+                  style={{ fontSize: 12, padding: '2px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', color: 'var(--text)' }}>
+                  {v.token}
+                </button>
+              ))}
+            </div>
+            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-3)' }}>
+              留空則使用預設文案。商品分享連結會自動帶入，網址為：
+              <span style={{ color: 'var(--text-2)' }}> {resolveShopBaseUrl(store) || '（尚未設定網域）'}/products/…</span>
+            </div>
           </div>
         </div>
 

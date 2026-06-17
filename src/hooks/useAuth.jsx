@@ -29,7 +29,7 @@ export function AuthProvider({ children }) {
       supabase.from('profiles').select('name, email').eq('id', userId).single(),
       // 使用者所屬店的後台角色（排除歷史遺留的 consumer rows），目前取第一間店
       supabase.from('user_store_roles')
-        .select('role, store_id, stores ( id, name, slug, is_active, settings )')
+        .select('role, store_id, stores ( id, name, slug, custom_domain, is_active, settings )')
         .eq('user_id', userId)
         .neq('role', 'consumer')
         .order('created_at', { ascending: true })

@@ -2,9 +2,13 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import CustomSelect from '../components/CustomSelect'
+import {
+  PLATFORMS, DEFAULT_SHARE_TEMPLATE, renderTemplate, buildShareUrl,
+  buildProductUrl, resolveShopBaseUrl,
+} from '../lib/socialShare'
 
 export default function StorefrontPage() {
-  const { can, storeId } = useAuth()
+  const { can, storeId, store } = useAuth()
   const [tab, setTab] = useState('listings')   // listings | taxonomy
   const [listings, setListings] = useState([])
   const [products, setProducts] = useState([])
@@ -17,6 +21,7 @@ export default function StorefrontPage() {
   const [newOptValues, setNewOptValues] = useState({}) // { typeId: inputString }
   const [loading, setLoading] = useState(true)
   const [sheet, setSheet] = useState(null)     // null | 'add' | listing obj
+  const [shareItem, setShareItem] = useState(null)  // 分享面板：上架商品 listing obj
   const [exchangeRates, setExchangeRates] = useState({})
   const [filter, setFilter] = useState('all')   // all | published | unpublished | sold_out | expired
   const [search, setSearch] = useState('')
@@ -469,6 +474,12 @@ export default function StorefrontPage() {
                         </button>
                       </>
                     )}
+                    {item.published && (
+                      <button onClick={() => setShareItem(item)}
+                        style={{ ...smallBtn, background: '#eef4ff', color: 'var(--blue)', borderColor: 'transparent' }}>
+                        分享
+                      </button>
+                    )}
                     <div style={{ flex: 1 }} />
                     {can('delete') && (
                       <button onClick={() => deleteListing(item.id)} style={{ ...smallBtn, color: 'var(--red)' }}>刪除</button>
@@ -686,6 +697,99 @@ export default function StorefrontPage() {
           onSaved={fetchAll}
         />
       )}
+
+      {/* 社群分享面板 */}
+      {shareItem && (
+        <ShareSheet item={shareItem} store={store} onClose={() => setShareItem(null)} />
+      )}
+    </div>
+  )
+}
+
+// ── 社群分享面板 ────────────────────────────────────────
+function ShareSheet({ item, store, onClose }) {
+  const baseUrl = resolveShopBaseUrl(store)
+  const link = buildProductUrl(baseUrl, item.product_id)
+  const template = store?.settings?.share_template?.trim() || DEFAULT_SHARE_TEMPLATE
+  const initial = renderTemplate(template, {
+    name: item.products?.name,
+    price: item.shop_price,
+    link,
+    storeName: store?.name,
+  })
+  const [text, setText] = useState(initial)
+  const [copied, setCopied] = useState('')   // '' | 'text' | 'link'
+
+  async function copy(value, which) {
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopied(which)
+      setTimeout(() => setCopied(''), 2000)
+    } catch {
+      alert('複製失敗，請手動選取文字複製')
+    }
+  }
+
+  function openShare(platform) {
+    const url = buildShareUrl(platform, text, link)
+    if (url) window.open(url, '_blank', 'noopener')
+  }
+
+  const missingBase = !baseUrl
+
+  return (
+    <div className="sheet-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="sheet" style={{ maxHeight: '85vh', overflowY: 'auto' }}>
+        <div className="sheet-handle" />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <div className="sheet-title" style={{ margin: 0 }}>分享商品</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: 'var(--text-3)' }}>×</button>
+        </div>
+
+        <div className="muted fs13" style={{ marginBottom: 4 }}>{item.products?.name}</div>
+
+        {missingBase && (
+          <div className="error-msg" style={{ marginBottom: 12 }}>
+            尚未設定商城網域，無法產生商品連結。請先在「平台管理」設定自訂網域或商店代稱。
+          </div>
+        )}
+
+        <div className="form-group" style={{ marginBottom: 10 }}>
+          <label className="form-label">分享文案（可臨時修改）</label>
+          <textarea className="form-input" rows={6}
+            style={{ resize: 'vertical', lineHeight: 1.6, fontFamily: 'inherit' }}
+            value={text} onChange={e => setText(e.target.value)} />
+          <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-3)', wordBreak: 'break-all' }}>
+            連結：{link || '—'}
+          </div>
+        </div>
+
+        <div style={{ fontSize: 13, fontWeight: 600, margin: '12px 0 8px' }}>直接分享</div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          {PLATFORMS.filter(p => p.mode === 'share').map(p => (
+            <button key={p.key} className="btn" onClick={() => openShare(p.key)} disabled={missingBase}
+              style={{ flex: 1, minWidth: 120 }}>
+              {p.label}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ fontSize: 13, fontWeight: 600, margin: '16px 0 8px' }}>複製後自行貼上（FB / IG 無法自動帶入文字）</div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <button className="btn" onClick={() => copy(text, 'text')}
+            style={{ flex: 1, minWidth: 120, background: 'var(--surface)', color: 'var(--text)' }}>
+            {copied === 'text' ? '✓ 已複製文案' : '複製文案'}
+          </button>
+          <button className="btn" onClick={() => copy(link, 'link')} disabled={missingBase}
+            style={{ flex: 1, minWidth: 120, background: 'var(--surface)', color: 'var(--text)' }}>
+            {copied === 'link' ? '✓ 已複製連結' : '複製連結'}
+          </button>
+          <button className="btn" onClick={() => openShare('facebook')} disabled={missingBase}
+            style={{ flex: 1, minWidth: 120, background: 'var(--surface)', color: 'var(--text)' }}>
+            開啟 Facebook
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
