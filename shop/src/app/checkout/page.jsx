@@ -83,6 +83,14 @@ export default function CheckoutPage() {
       if (coupon.expires_at && now > new Date(coupon.expires_at)) { setCouponError(lang === 'zh' ? '此優惠碼已過期' : 'This coupon has expired'); setCouponLoading(false); return }
       if (!isUnique && coupon.max_usage && coupon.usage_count >= coupon.max_usage) { setCouponError(lang === 'zh' ? '此優惠碼已達使用上限' : 'This coupon has reached its usage limit'); setCouponLoading(false); return }
       if (subtotal < Number(coupon.min_amount)) { setCouponError(lang === 'zh' ? `未達最低消費 NT$${Number(coupon.min_amount).toLocaleString()}` : `Minimum spend NT$${Number(coupon.min_amount).toLocaleString()} required`); setCouponLoading(false); return }
+      // 會員等級資格（限定等級的券需登入會員）
+      if (result.level_ok === false) {
+        const restricted = (coupon.allowed_level_ids || []).length > 0
+        setCouponError(lang === 'zh'
+          ? (restricted ? '此優惠僅限特定會員等級使用，請先登入符合資格的會員帳號' : '您不符合此優惠的使用資格')
+          : 'This coupon is limited to specific member levels. Please sign in with an eligible account')
+        setCouponLoading(false); return
+      }
 
       // 計算折扣
       let discount = 0

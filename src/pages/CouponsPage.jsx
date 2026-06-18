@@ -168,8 +168,16 @@ function CouponDetail({ coupon, onBack, onEdit, onDelete, onRefresh, formatDate,
   const [loadingData, setLoadingData] = useState(true)
   const [copiedId, setCopiedId] = useState(null)
   const [showCodes, setShowCodes] = useState(false)
+  const [levelNames, setLevelNames] = useState([])
 
   useEffect(() => { fetchDetail() }, [coupon.id])
+
+  useEffect(() => {
+    const ids = coupon.allowed_level_ids || []
+    if (ids.length === 0) { setLevelNames([]); return }
+    supabase.from('member_levels').select('name').in('id', ids)
+      .then(({ data }) => setLevelNames((data || []).map(l => l.name)))
+  }, [coupon.id])
 
   async function fetchDetail() {
     setLoadingData(true)
@@ -270,6 +278,7 @@ function CouponDetail({ coupon, onBack, onEdit, onDelete, onRefresh, formatDate,
           )}
           <InfoRow label="有效期間" value={`${formatDate(coupon.starts_at)} — ${formatDate(coupon.expires_at)}`} />
           <InfoRow label="每人限用" value={coupon.per_consumer_limit ? `${coupon.per_consumer_limit} 次` : '無限'} />
+          <InfoRow label="使用資格" value={(coupon.allowed_level_ids || []).length === 0 ? '不限會員等級' : `限 ${levelNames.join('、') || '…'}`} />
         </div>
       </div>
 
@@ -424,7 +433,22 @@ function CouponSheet({ coupon, onClose, onSaved }) {
   const [codePrefix, setCodePrefix] = useState('')
   const [codeCount, setCodeCount] = useState('10')
 
+  // 使用資格：會員等級白名單（空 = 不限）
+  const [levels, setLevels] = useState([])
+  const [allowedLevelIds, setAllowedLevelIds] = useState(coupon?.allowed_level_ids || [])
+
   const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!storeId) return
+    supabase.from('member_levels').select('id, name, sort_order')
+      .eq('store_id', storeId).order('sort_order', { ascending: true })
+      .then(({ data }) => setLevels(data || []))
+  }, [storeId])
+
+  function toggleLevel(id) {
+    setAllowedLevelIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  }
 
   function generateUniqueCodes(count, prefix = '') {
     const codes = new Set()
@@ -454,6 +478,7 @@ function CouponSheet({ coupon, onClose, onSaved }) {
       per_consumer_limit: type === 'unique' ? 1 : (perConsumerLimit ? Number(perConsumerLimit) : null),
       starts_at: new Date(startsAt).toISOString(),
       expires_at: expiresAt ? new Date(expiresAt + 'T23:59:59').toISOString() : null,
+      allowed_level_ids: allowedLevelIds,
     }
 
     if (isEdit) {
@@ -667,6 +692,37 @@ function CouponSheet({ coupon, onClose, onSaved }) {
             特殊代碼型：每組代碼只能使用一次
           </div>
         )}
+
+        <div style={{ borderTop: '1px solid var(--border)', marginBottom: 16 }} />
+
+        {/* 使用資格：會員等級 */}
+        <div style={{ marginBottom: 20 }}>
+          <div style={labelStyle}>使用資格（會員等級）</div>
+          {levels.length === 0 ? (
+            <div style={{ fontSize: 13, color: 'var(--text-3)' }}>尚無會員等級</div>
+          ) : (
+            <>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {levels.map(lv => {
+                  const on = allowedLevelIds.includes(lv.id)
+                  return (
+                    <button key={lv.id} type="button" onClick={() => toggleLevel(lv.id)}
+                      style={{
+                        padding: '8px 12px', borderRadius: 8, fontSize: 13, cursor: 'pointer',
+                        border: on ? '2px solid var(--text)' : '1px solid var(--border)',
+                        background: on ? 'var(--surface)' : 'transparent', fontWeight: on ? 600 : 400,
+                      }}>
+                      {on ? '✓ ' : ''}{lv.name}
+                    </button>
+                  )
+                })}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>
+                {allowedLevelIds.length === 0 ? '未選 = 所有人皆可使用' : '限定等級的優惠券需登入會員才能使用'}
+              </div>
+            </>
+          )}
+        </div>
 
         {/* Date range */}
         <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
