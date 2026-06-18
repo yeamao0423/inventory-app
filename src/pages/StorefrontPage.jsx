@@ -6,6 +6,7 @@ import {
   PLATFORMS, DEFAULT_SHARE_TEMPLATE, renderTemplate, buildShareUrl,
   buildProductUrl, resolveShopBaseUrl,
 } from '../lib/socialShare'
+import { buildCollageBlob, canShareFile, downloadBlob } from '../lib/shareImage'
 import { revalidateShop } from '../lib/revalidateShop'
 
 export default function StorefrontPage() {
@@ -726,6 +727,13 @@ function ShareSheet({ item, store, onClose }) {
   })
   const [text, setText] = useState(initial)
   const [copied, setCopied] = useState('')   // '' | 'text' | 'link'
+  const [imgBusy, setImgBusy] = useState(false)
+  const [imgError, setImgError] = useState('')
+
+  const imageUrls = [...(item.products?.product_images || [])]
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map(i => i.url)
+    .filter(Boolean)
 
   async function copy(value, which) {
     try {
@@ -740,6 +748,26 @@ function ShareSheet({ item, store, onClose }) {
   function openShare(platform) {
     const url = buildShareUrl(platform, text, link)
     if (url) window.open(url, '_blank', 'noopener')
+  }
+
+  // 把商品圖拼成一張，手機走原生分享（可直接帶圖進 Line）；桌機則下載＋複製文案
+  async function shareImages() {
+    setImgError(''); setImgBusy(true)
+    try {
+      const blob = await buildCollageBlob(imageUrls)
+      const file = new File([blob], `product-${item.product_id}.jpg`, { type: 'image/jpeg' })
+      // 文案一律先複製當備援（多數 App 帶圖時會忽略文字）
+      try { await navigator.clipboard.writeText(text) } catch {}
+      if (canShareFile(file)) {
+        await navigator.share({ files: [file], text })
+      } else {
+        downloadBlob(blob, `product-${item.product_id}.jpg`)
+        alert('已下載商品拼圖，文案也已複製到剪貼簿，請在 Line 貼上圖片與文字。')
+      }
+    } catch (e) {
+      if (e?.name !== 'AbortError') setImgError('圖片分享失敗：' + (e?.message || e))
+    }
+    setImgBusy(false)
   }
 
   const missingBase = !baseUrl
@@ -771,7 +799,19 @@ function ShareSheet({ item, store, onClose }) {
           </div>
         </div>
 
-        <div style={{ fontSize: 13, fontWeight: 600, margin: '12px 0 8px' }}>直接分享</div>
+        <div style={{ fontSize: 13, fontWeight: 600, margin: '12px 0 8px' }}>把商品圖分享出去</div>
+        <button className="btn" onClick={shareImages} disabled={imgBusy || imageUrls.length === 0}
+          style={{ width: '100%' }}>
+          {imageUrls.length === 0 ? '此商品沒有圖片'
+            : imgBusy ? '處理圖片中…'
+            : `分享商品圖（${Math.min(imageUrls.length, 8)} 張拼圖）`}
+        </button>
+        <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-3)' }}>
+          手機：開啟分享選單選 Line 即可帶圖；電腦：下載拼圖後自行貼上。文案會一併複製到剪貼簿。
+        </div>
+        {imgError && <div className="error-msg" style={{ marginTop: 8 }}>{imgError}</div>}
+
+        <div style={{ fontSize: 13, fontWeight: 600, margin: '16px 0 8px' }}>分享連結（文字／預覽卡）</div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           {PLATFORMS.filter(p => p.mode === 'share').map(p => (
             <button key={p.key} className="btn" onClick={() => openShare(p.key)} disabled={missingBase}
