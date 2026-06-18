@@ -730,10 +730,20 @@ function ShareSheet({ item, store, onClose }) {
   const [imgBusy, setImgBusy] = useState(false)
   const [imgError, setImgError] = useState('')
 
-  const imageUrls = [...(item.products?.product_images || [])]
+  const images = [...(item.products?.product_images || [])]
     .sort((a, b) => a.sort_order - b.sort_order)
-    .map(i => i.url)
-    .filter(Boolean)
+    .filter(i => i.url)
+
+  // 預設全選；includeText 預設帶文案＋連結
+  const [selected, setSelected] = useState(() => images.map(() => true))
+  const [includeText, setIncludeText] = useState(true)
+  const selectedUrls = images.filter((_, i) => selected[i]).map(i => i.url)
+  const selCount = selectedUrls.length
+
+  function toggleImg(idx) {
+    setSelected(prev => prev.map((v, i) => (i === idx ? !v : v)))
+  }
+  function setAll(v) { setSelected(images.map(() => v)) }
 
   async function copy(value, which) {
     try {
@@ -750,27 +760,53 @@ function ShareSheet({ item, store, onClose }) {
     if (url) window.open(url, '_blank', 'noopener')
   }
 
-  // 把商品圖拼成一張，手機走原生分享（可直接帶圖進 Line）；桌機則下載＋複製文案
-  async function shareImages() {
+  // 依勾選分享：圖片（拼圖）／文案＋連結，可單獨或一起。
+  // 手機走原生分享（可直接帶圖進 Line）；桌機則下載圖片＋複製文案。
+  async function shareSelected() {
+    if (selCount === 0 && !includeText) {
+      setImgError('請至少選擇圖片或勾選帶入文案')
+      return
+    }
     setImgError(''); setImgBusy(true)
     try {
-      const blob = await buildCollageBlob(imageUrls)
-      const file = new File([blob], `product-${item.product_id}.jpg`, { type: 'image/jpeg' })
-      // 文案一律先複製當備援（多數 App 帶圖時會忽略文字）
-      try { await navigator.clipboard.writeText(text) } catch {}
-      if (canShareFile(file)) {
-        await navigator.share({ files: [file], text })
-      } else {
+      let blob = null, file = null
+      if (selCount > 0) {
+        blob = await buildCollageBlob(selectedUrls, { max: 12 })
+        file = new File([blob], `product-${item.product_id}.jpg`, { type: 'image/jpeg' })
+      }
+      // 帶文案時一律先複製當備援（多數 App 帶圖時會忽略文字）
+      if (includeText) { try { await navigator.clipboard.writeText(text) } catch {} }
+
+      const payload = {}
+      if (file) payload.files = [file]
+      if (includeText) payload.text = text
+
+      const canShare = file
+        ? canShareFile(file)
+        : (typeof navigator !== 'undefined' && typeof navigator.share === 'function')
+
+      if (canShare) {
+        await navigator.share(payload)
+      } else if (file) {
         downloadBlob(blob, `product-${item.product_id}.jpg`)
-        alert('已下載商品拼圖，文案也已複製到剪貼簿，請在 Line 貼上圖片與文字。')
+        alert(includeText
+          ? '已下載商品拼圖、文案已複製到剪貼簿，請在 Line 貼上圖片與文字。'
+          : '已下載商品拼圖，請在 Line 貼上。')
+      } else {
+        await copy(text, 'text')
+        alert('文案＋連結已複製到剪貼簿，請貼到社群。')
       }
     } catch (e) {
-      if (e?.name !== 'AbortError') setImgError('圖片分享失敗：' + (e?.message || e))
+      if (e?.name !== 'AbortError') setImgError('分享失敗：' + (e?.message || e))
     }
     setImgBusy(false)
   }
 
   const missingBase = !baseUrl
+  const shareLabel = imgBusy ? '處理中…'
+    : selCount > 0
+      ? `分享${selCount}張圖${includeText ? '＋文案' : ''}`
+      : '分享文案＋連結'
 
   return (
     <div className="sheet-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -799,15 +835,50 @@ function ShareSheet({ item, store, onClose }) {
           </div>
         </div>
 
-        <div style={{ fontSize: 13, fontWeight: 600, margin: '12px 0 8px' }}>把商品圖分享出去</div>
-        <button className="btn" onClick={shareImages} disabled={imgBusy || imageUrls.length === 0}
+        {/* 選擇要分享的圖片 */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '12px 0 8px' }}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>選擇圖片{images.length > 0 && `（已選 ${selCount}/${images.length}）`}</span>
+          {images.length > 0 && (
+            <span style={{ fontSize: 12 }}>
+              <button type="button" onClick={() => setAll(true)} style={{ background: 'none', border: 'none', color: 'var(--blue)', cursor: 'pointer', padding: 0 }}>全選</button>
+              <span style={{ color: 'var(--text-3)', margin: '0 6px' }}>·</span>
+              <button type="button" onClick={() => setAll(false)} style={{ background: 'none', border: 'none', color: 'var(--blue)', cursor: 'pointer', padding: 0 }}>全不選</button>
+            </span>
+          )}
+        </div>
+        {images.length === 0 ? (
+          <div className="muted fs13">此商品沒有圖片</div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+            {images.map((im, idx) => {
+              const on = selected[idx]
+              const order = selected.slice(0, idx + 1).filter(Boolean).length
+              return (
+                <button key={im.id ?? idx} type="button" onClick={() => toggleImg(idx)}
+                  style={{ position: 'relative', padding: 0, border: 'none', background: 'none', cursor: 'pointer', aspectRatio: '1', borderRadius: 8, overflow: 'hidden' }}>
+                  <img src={im.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', opacity: on ? 1 : 0.4 }} />
+                  <span style={{
+                    position: 'absolute', top: 4, right: 4, width: 20, height: 20, borderRadius: '50%',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700,
+                    background: on ? 'var(--blue, #2f6bff)' : 'rgba(0,0,0,0.35)', color: '#fff',
+                  }}>{on ? order : ''}</span>
+                </button>
+              )
+            })}
+          </div>
+        )}
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '12px 0 8px', fontSize: 13, cursor: 'pointer' }}>
+          <input type="checkbox" checked={includeText} onChange={e => setIncludeText(e.target.checked)} disabled={missingBase} />
+          一併帶入文案＋連結{missingBase && '（未設定網域，暫不可用）'}
+        </label>
+
+        <button className="btn" onClick={shareSelected} disabled={imgBusy || (selCount === 0 && !includeText)}
           style={{ width: '100%' }}>
-          {imageUrls.length === 0 ? '此商品沒有圖片'
-            : imgBusy ? '處理圖片中…'
-            : `分享商品圖（${Math.min(imageUrls.length, 8)} 張拼圖）`}
+          {shareLabel}
         </button>
         <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-3)' }}>
-          手機：開啟分享選單選 Line 即可帶圖；電腦：下載拼圖後自行貼上。文案會一併複製到剪貼簿。
+          手機：開啟分享選單選 Line 即可帶圖；電腦：下載拼圖後自行貼上。帶文案時會一併複製到剪貼簿（Line 收圖時常忽略文字，貼上即可補）。
         </div>
         {imgError && <div className="error-msg" style={{ marginTop: 8 }}>{imgError}</div>}
 
