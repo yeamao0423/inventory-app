@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { compressImage } from '../lib/imageUtils'
 import { SHARE_VARS, DEFAULT_SHARE_TEMPLATE, resolveShopBaseUrl } from '../lib/socialShare'
+import { revalidateShop } from '../lib/revalidateShop'
 
 // 店家設定（僅店主）：把過去寫死在程式裡的營運參數搬進 stores.settings
 // 新店主首次進入（settings 為空）時作為開店精靈使用
@@ -25,6 +26,7 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
   const [uploadingLogo, setUploadingLogo] = useState(false)
+  const [cacheState, setCacheState] = useState('idle') // idle | clearing | done
 
   const isFirstSetup = store && Object.keys(store.settings ?? {}).length === 0
 
@@ -75,9 +77,19 @@ export default function SettingsPage() {
     if (err) setError('儲存失敗：' + err.message)
     else {
       await refreshStore()
+      // 設定（店名/Logo/運費等）會影響商城顯示 → 通知商城清快取
+      revalidateShop({ storeId, slug: store?.slug })
       setSaved(true)
     }
     setSaving(false)
+  }
+
+  // 手動清除商城快取（強制全體同步）
+  async function clearShopCache() {
+    setCacheState('clearing')
+    await revalidateShop({ storeId, slug: store?.slug })
+    setCacheState('done')
+    setTimeout(() => setCacheState('idle'), 2500)
   }
 
   if (!isOwner) return (
@@ -224,6 +236,19 @@ export default function SettingsPage() {
           {saving ? '儲存中…' : saved ? '✓ 已儲存' : '儲存設定'}
         </button>
       </form>
+
+      <div className="sec" style={{ marginTop: 24 }}>商城快取</div>
+      <div className="card" style={{ padding: 16 }}>
+        <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6, marginBottom: 12 }}>
+          商城為了速度會把頁面快取起來。一般情況下你改商品或設定時系統會自動刷新；
+          若發現商城沒即時更新，可手動清除快取強制全體同步。
+        </div>
+        <button type="button" className="btn" onClick={clearShopCache}
+          disabled={cacheState === 'clearing'}
+          style={{ width: 'auto', display: 'inline-block', padding: '8px 16px', fontSize: 13 }}>
+          {cacheState === 'clearing' ? '清除中…' : cacheState === 'done' ? '✓ 已清除，商城已同步' : '重新整理商城快取'}
+        </button>
+      </div>
     </div>
   )
 }

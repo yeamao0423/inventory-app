@@ -6,9 +6,12 @@ import {
   PLATFORMS, DEFAULT_SHARE_TEMPLATE, renderTemplate, buildShareUrl,
   buildProductUrl, resolveShopBaseUrl,
 } from '../lib/socialShare'
+import { revalidateShop } from '../lib/revalidateShop'
 
 export default function StorefrontPage() {
   const { can, storeId, store } = useAuth()
+  // 改動商品後通知商城清快取（store tag 涵蓋列表＋所有商品詳情）
+  const syncShop = () => revalidateShop({ storeId, slug: store?.slug })
   const [tab, setTab] = useState('listings')   // listings | taxonomy
   const [listings, setListings] = useState([])
   const [products, setProducts] = useState([])
@@ -158,6 +161,7 @@ export default function StorefrontPage() {
     await supabase.from('storefront_products')
       .update({ published: !item.published })
       .eq('id', item.id)
+    syncShop()
     fetchAll()
   }
 
@@ -167,6 +171,7 @@ export default function StorefrontPage() {
       .update({ published: true, collection_end: localToISO(collectionPrompt.collectionEnd), skip_stock_check: true })
       .eq('id', collectionPrompt.item.id)
     setCollectionPrompt(null)
+    syncShop()
     fetchAll()
   }
 
@@ -174,12 +179,14 @@ export default function StorefrontPage() {
     await supabase.from('storefront_products')
       .update({ sold_out: !item.sold_out })
       .eq('id', item.id)
+    syncShop()
     fetchAll()
   }
 
   async function deleteListing(id) {
     if (!window.confirm('確定從商城下架並刪除此設定？')) return
     await supabase.from('storefront_products').delete().eq('id', id)
+    syncShop()
     fetchAll()
   }
 
@@ -954,6 +961,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
 
     if (isEditing) {
       await supabase.from('storefront_products').update(payload).eq('id', editingItem.id)
+      revalidateShop({ storeId, productIds: [activeProductId] })
       setSaving(false)
       onSaved()
       onClose()
@@ -966,6 +974,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
       setSaving(false)
       onSaved()
       if (error) { alert('建立失敗：' + error.message); return }
+      revalidateShop({ storeId, productIds: [Number(form.product_id)] })
       // Switch to edit mode so user can set up variants
       setCreatedItem(data)
       // Load variants for this product

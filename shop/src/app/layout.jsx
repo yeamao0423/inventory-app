@@ -40,10 +40,9 @@ export default function RootLayout({ children }) {
     getStore().then(setStore).catch(() => {})
   }, [])
 
-  // 動態更新分頁標題與 favicon（沒 logo 就維持不指定，不顯示 Daigogo）
+  // 動態更新 favicon（分頁標題改由各頁 metadata 接管，避免覆蓋商品標題）
   useEffect(() => {
     if (!store) return
-    if (store.name) document.title = store.name
     const logo = store.settings?.logo_url
     if (logo) {
       let link = document.querySelector("link[rel='icon']")
@@ -112,11 +111,6 @@ export default function RootLayout({ children }) {
 
   return (
     <html lang={lang}>
-      <head>
-        <meta charSet="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>{store?.name || '商城'}</title>
-      </head>
       <body>
         <UserContext.Provider value={{ user, loading: userLoading }}>
           <I18nContext.Provider value={{ t, lang, setLang }}>
