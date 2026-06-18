@@ -87,6 +87,7 @@ export default function App() {
 
   return (
     <div className="app">
+      <div className="main">
       {showWelcome && (
         <div style={{
           margin: '12px 16px 0', padding: '12px 14px', borderRadius: 12,
@@ -122,6 +123,7 @@ export default function App() {
         <Route path="/platform"   element={<PlatformPage />} />
         <Route path="/invite"     element={<InvitePage />} />
       </Routes>
+      </div>
 
       <nav className="tabbar">
         <div className="side-brand">
