@@ -356,12 +356,12 @@ export default function ProductList({ products, categories, tags }) {
 
           <div className="products-main">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <h1 className="section-title" style={{ marginBottom: 0 }}>
+              <div className="section-title" style={{ marginBottom: 0 }}>
                 {t('nav.products')}
                 <span style={{ fontSize: 15, fontWeight: 400, color: 'var(--text-3)', marginLeft: 8 }}>
                   ({sorted.length})
                 </span>
-              </h1>
+              </div>
               <div style={{ width: 170 }}>
                 <FilterDropdown
                   label={sortOptions.find(o => o.value === sortBy)?.label}
