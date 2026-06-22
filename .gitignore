@@ -14,3 +14,8 @@ backend-update/
 migrate_roles.sql
 migration_*.sql
 .gstack/
+
+# build 產物與本機資料
+/.next/
+*.csv
+IMG_*.png
