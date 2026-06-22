@@ -147,6 +147,14 @@ export default function RootLayout({ children }) {
               {children}
 
               <footer className="footer">
+                {store?.settings?.sender_email && (
+                  <div style={{ marginBottom: 6 }}>
+                    {lang === 'en' ? 'Contact: ' : '聯絡我們：'}
+                    <a href={`mailto:${store.settings.sender_email}`} style={{ color: 'inherit', textDecoration: 'underline' }}>
+                      {store.settings.sender_email}
+                    </a>
+                  </div>
+                )}
                 © 2026 {store?.name || ''}. All rights reserved.
               </footer>
 
