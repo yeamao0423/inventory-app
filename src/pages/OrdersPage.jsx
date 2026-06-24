@@ -883,7 +883,13 @@ function ConsumerOrderCard({ order: o, onTap }) {
       </div>
       {o.total_amount && (
         <div className="card-row row-sb" style={{ background: 'var(--bg)' }}>
-          <div><span className="muted fs12">總額 </span><span className="fw600">NT${Number(o.total_amount).toLocaleString()}</span></div>
+          <div>
+            <span className="muted fs12">總額 </span>
+            <span className="fw600">NT${(Number(o.total_amount) - Number(o.discount_amount || 0)).toLocaleString()}</span>
+            {Number(o.discount_amount) > 0 && (
+              <span className="fs12" style={{ color: 'var(--green)', marginLeft: 6 }}>已折 NT${Number(o.discount_amount).toLocaleString()}</span>
+            )}
+          </div>
         </div>
       )}
     </div>
