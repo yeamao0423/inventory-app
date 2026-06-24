@@ -1282,14 +1282,20 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
           <span className="fs13">{new Date(o.created_at).toLocaleString('zh-TW')}</span>
         </div>
         <div className="card-row row-sb">
-          <span className="muted fs13">總金額</span>
+          <span className="muted fs13">{o.coupon_id && Number(o.discount_amount) > 0 ? '折扣前金額' : '總金額'}</span>
           <span className="fw600">NT${Number(hasAnyChange ? newTotal : (o.total_amount || 0)).toLocaleString()}</span>
         </div>
-        {o.coupon_id && (
-          <div className="card-row row-sb">
-            <span className="muted fs13">優惠券折抵</span>
-            <span className="fs13" style={{ color: 'var(--green)' }}>-NT${Number(o.discount_amount || 0).toLocaleString()}</span>
-          </div>
+        {o.coupon_id && Number(o.discount_amount) > 0 && (
+          <>
+            <div className="card-row row-sb">
+              <span className="muted fs13">優惠券折抵</span>
+              <span className="fs13" style={{ color: 'var(--green)' }}>-NT${Number(o.discount_amount || 0).toLocaleString()}</span>
+            </div>
+            <div className="card-row row-sb" style={{ borderTop: '0.5px solid var(--border)', marginTop: 4, paddingTop: 8 }}>
+              <span className="fw600 fs13">實付金額</span>
+              <span className="fw600">NT${(Number(hasAnyChange ? newTotal : (o.total_amount || 0)) - Number(o.discount_amount || 0)).toLocaleString()}</span>
+            </div>
+          </>
         )}
       </div>
 
