@@ -89,6 +89,36 @@ html, body, #root {
 .tab-btn svg { width: 22px; height: 22px; }
 .tab-lbl { font-size: 10px; font-weight: 500; }
 
+/* 手機：其餘項收進「更多」→ 隱藏側欄展開項，只露「更多」鈕 */
+.tab-more-only { display: none; }
+
+/* ── 「更多」彈出選單 ─────────────────────── */
+.more-backdrop {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(0,0,0,0.18);
+}
+.more-sheet {
+  position: fixed; z-index: 201;
+  left: 12px; right: 12px;
+  bottom: calc(max(var(--safe-bot), 8px) + 60px);
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: 16px;
+  padding: 6px;
+  box-shadow: 0 10px 36px rgba(0,0,0,0.16);
+  animation: modalIn .16s ease;
+}
+.more-item {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; padding: 13px 14px;
+  background: none; border: none; border-radius: 11px;
+  cursor: pointer; color: var(--text); font-size: 15px; font-weight: 500;
+}
+.more-item svg { width: 20px; height: 20px; color: var(--text-3); }
+.more-item:hover { background: var(--bg); }
+.more-item.active { background: var(--text); color: #fff; }
+.more-item.active svg { color: #fff; }
+
 /* ── Page header ──────────────────────────── */
 .ph { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
 .ph-title { font-size: 26px; font-weight: 700; color: var(--text); }
@@ -332,6 +362,11 @@ html, body, #root {
   .tab-btn.active { background: var(--text); color: #fff; }
   .tab-btn svg { width: 20px; height: 20px; }
   .tab-lbl { font-size: 14px; }
+
+  /* 桌機：側欄空間夠，全部攤開，不需要「更多」 */
+  .tab-more-only { display: flex; }
+  .tab-toggle-only { display: none; }
+  .more-backdrop, .more-sheet { display: none; }
 
   /* 內容區置中限寬 */
   .page { padding: 36px max(40px, calc((100% - 920px) / 2)) 48px; }

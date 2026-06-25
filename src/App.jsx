@@ -14,23 +14,28 @@ import SettingsPage from './pages/SettingsPage'
 import MembersPage from './pages/MembersPage'
 import MemberLevelsPage from './pages/MemberLevelsPage'
 
+// group: 'more' 的項目收進底部「更多」彈出選單，其餘留在底部主列（核心日常項）
 const allTabs = [
   { path: '/',           label: '庫存',  icon: BoxIcon, storeOnly: true },
   { path: '/orders',     label: '訂單',  icon: ReceiptIcon, storeOnly: true },
   { path: '/storefront', label: '商城',  icon: ShopIcon, storeOnly: true },
-  { path: '/coupons',    label: '優惠券', icon: CouponIcon, storeOnly: true },
-  { path: '/members',    label: '會員',  icon: MemberIcon, adminOnly: true },
-  { path: '/levels',     label: '等級',  icon: TierIcon, adminOnly: true },
   { path: '/trips',      label: '行程',  icon: TripIcon, superOnly: true },
-  { path: '/users',      label: '成員',  icon: UsersIcon, adminOnly: true },
-  { path: '/settings',   label: '設定',  icon: GearIcon, superOnly: true },
-  { path: '/platform',   label: '平台',  icon: PlatformIcon, platformOnly: true },
+  { path: '/coupons',    label: '優惠券', icon: CouponIcon, storeOnly: true, group: 'more' },
+  { path: '/members',    label: '會員',  icon: MemberIcon, adminOnly: true, group: 'more' },
+  { path: '/levels',     label: '等級',  icon: TierIcon, adminOnly: true, group: 'more' },
+  { path: '/users',      label: '成員',  icon: UsersIcon, adminOnly: true, group: 'more' },
+  { path: '/settings',   label: '設定',  icon: GearIcon, superOnly: true, group: 'more' },
+  { path: '/platform',   label: '平台',  icon: PlatformIcon, platformOnly: true, group: 'more' },
 ]
 
 export default function App() {
   const { user, profile, loading, isBackendUser, isPlatformAdmin, store, signOut } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
+  const [moreOpen, setMoreOpen] = useState(false)
+
+  // 換頁時自動關閉「更多」選單
+  useEffect(() => { setMoreOpen(false) }, [location.pathname])
 
   // 純平台管理員（無店身分）落地到平台頁
   useEffect(() => {
@@ -82,6 +87,9 @@ export default function App() {
     if (t.adminOnly) return isBackendUser && (role === 'super_admin' || role === 'admin')
     return isBackendUser
   })
+  const coreTabs = tabs.filter(t => t.group !== 'more')
+  const moreTabs = tabs.filter(t => t.group === 'more')
+  const moreActive = moreTabs.some(t => t.path === location.pathname)
 
   const showWelcome = isFirstSetup && !welcomeDismissed && location.pathname !== '/settings'
 
@@ -134,7 +142,7 @@ export default function App() {
           )}
           {(store?.settings?.brand_display ?? 'both') !== 'logo' && (store?.name ?? '平台')}
         </div>
-        {tabs.map(({ path, label, icon: Icon }) => (
+        {coreTabs.map(({ path, label, icon: Icon }) => (
           <button
             key={path}
             className={`tab-btn ${location.pathname === path ? 'active' : ''}`}
@@ -144,9 +152,51 @@ export default function App() {
             <span className="tab-lbl">{label}</span>
           </button>
         ))}
+        {/* 桌機：其餘項直接攤在側欄；手機：隱藏，改用下方「更多」鈕 */}
+        {moreTabs.map(({ path, label, icon: Icon }) => (
+          <button
+            key={path}
+            className={`tab-btn tab-more-only ${location.pathname === path ? 'active' : ''}`}
+            onClick={() => navigate(path)}
+          >
+            <Icon />
+            <span className="tab-lbl">{label}</span>
+          </button>
+        ))}
+        {moreTabs.length > 0 && (
+          <button
+            className={`tab-btn tab-toggle-only ${moreActive || moreOpen ? 'active' : ''}`}
+            onClick={() => setMoreOpen(o => !o)}
+          >
+            <MoreIcon />
+            <span className="tab-lbl">更多</span>
+          </button>
+        )}
       </nav>
+
+      {moreOpen && (
+        <>
+          <div className="more-backdrop" onClick={() => setMoreOpen(false)} />
+          <div className="more-sheet">
+            {moreTabs.map(({ path, label, icon: Icon }) => (
+              <button
+                key={path}
+                className={`more-item ${location.pathname === path ? 'active' : ''}`}
+                onClick={() => navigate(path)}
+              >
+                <Icon />
+                <span>{label}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   )
+}
+
+function MoreIcon() {
+  return <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></svg>
 }
 
 function BoxIcon() {
