@@ -19,3 +19,7 @@ migration_*.sql
 /.next/
 *.csv
 IMG_*.png
+
+# 本機工具設定（Claude Code MCP、skills 鎖定檔）
+.mcp.json
+skills-lock.json
