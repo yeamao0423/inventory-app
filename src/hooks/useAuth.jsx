@@ -24,7 +24,7 @@ export function AuthProvider({ children }) {
     return () => subscription.unsubscribe()
   }, [])
 
-  async function fetchProfile(userId) {
+  async function fetchProfile(userId, tryClaimInvite = true) {
     const [{ data: profileData }, { data: roleRows }, { data: platformRow }] = await Promise.all([
       supabase.from('profiles').select('name, email').eq('id', userId).single(),
       // 使用者所屬店的後台角色（排除歷史遺留的 consumer rows），目前取第一間店
@@ -37,6 +37,13 @@ export function AuthProvider({ children }) {
       supabase.from('platform_admins').select('user_id').eq('user_id', userId).maybeSingle(),
     ])
     const membership = roleRows?.[0] ?? null
+
+    // 沒有任何後台角色 → 以 email 認領 pending 邀請（涵蓋驗證信導回掉 token、在無 token 分頁登入的情況）
+    if (!membership && tryClaimInvite) {
+      const { data: claim } = await supabase.rpc('accept_invitation_by_email')
+      if (claim?.accepted > 0) return fetchProfile(userId, false)  // 認領到角色 → 重抓一次（不再遞迴認領）
+    }
+
     setProfile({ ...profileData, role: membership?.role ?? null })
     setStore(membership?.stores ?? null)
     setIsPlatformAdmin(!!platformRow)

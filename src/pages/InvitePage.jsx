@@ -24,9 +24,11 @@ export default function InvitePage() {
     else setStatus('invalid')
   }, [token])
 
-  // 登入後若有待處理邀請，自動接受
+  // 登入後若有待處理邀請，自動接受。
+  // 也涵蓋「驗證完→跨分頁 session 同步進來」：此時即使停在 verify_sent，也直接往下接受，
+  // 不再丟出登入表單讓使用者誤點。
   useEffect(() => {
-    if (user && invite && status === 'valid') acceptInvite()
+    if (user && invite && (status === 'valid' || status === 'verify_sent')) acceptInvite()
   }, [user, invite, status])
 
   async function loadInvite() {
@@ -64,7 +66,14 @@ export default function InvitePage() {
     e.preventDefault()
     setError(''); setSubmitting(true)
     const { error } = await signIn(email, password)
-    if (error) setError('帳號或密碼錯誤，請重試。')
+    if (error) {
+      // email 確認開啟時，未驗證者也會被擋下；要與「密碼錯誤」分開，否則使用者會誤以為打錯密碼
+      const unconfirmed = error.code === 'email_not_confirmed'
+        || /not confirmed/i.test(error.message || '')
+      setError(unconfirmed
+        ? '此 Email 尚未驗證，請先到信箱點擊驗證連結再登入。'
+        : '帳號或密碼錯誤，請重試。')
+    }
     setSubmitting(false)
     // acceptInvite 會由 useEffect 觸發
   }
@@ -120,11 +129,12 @@ export default function InvitePage() {
       <div style={{ fontWeight:600, marginBottom:8 }}>註冊成功，請先驗證 Email</div>
       <p style={{ fontSize:13, color:'var(--text-3)', lineHeight:1.6 }}>
         驗證信已寄到 <strong>{email}</strong>。<br/>
-        請點擊信中連結完成驗證，再回來登入即可接受邀請。
+        點擊信中的連結後，會自動帶你回來完成加入，<strong>不需要再手動登入</strong>。
       </p>
-      <button className="btn" style={{ marginTop:16, maxWidth:240, margin:'16px auto 0' }}
+      {/* 次要 fallback：僅供「已完成驗證但沒被自動帶回」時使用，避免誘導使用者在驗證前就去登入 */}
+      <button className="btn btn-outline" style={{ marginTop:16, maxWidth:240, margin:'16px auto 0', fontSize:13 }}
         onClick={() => { setStatus('valid'); setAuthMode('login'); setPassword('') }}>
-        前往登入
+        已完成驗證？前往登入
       </button>
     </Wrap>
   )
