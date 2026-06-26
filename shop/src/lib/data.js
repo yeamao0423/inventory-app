@@ -54,7 +54,7 @@ function fetchStoreById(storeId) {
 // 平台主網域清單（過渡期可同時多個）。env 可覆寫，加新平台網域不用改程式。
 // 注意：店主「自訂網域」（如 daigogo.com）不放這裡，那走 custom_domain 查詢。
 const PLATFORM_DOMAINS = (process.env.NEXT_PUBLIC_PLATFORM_DOMAINS
-  || 'daigogo.com,likedaigo.com,localhost,127.0.0.1')
+  || 'daigogotw.com,likedaigo.com,localhost,127.0.0.1')
   .split(',').map(s => s.trim()).filter(Boolean)
 const DEFAULT_SLUG = 'daigogo'
 
