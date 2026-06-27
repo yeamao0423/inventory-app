@@ -217,6 +217,7 @@ export default function CheckoutPage() {
         discount: finalDiscount,
         couponName: couponPreview?.name || null,
         lang,
+        storeId: store?.id,
       }),
     }).catch(err => console.error('Email send failed:', err))
 

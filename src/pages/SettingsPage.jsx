@@ -190,6 +190,32 @@ export default function SettingsPage() {
           </div>
         </div>
 
+        <div className="sec">匯款資訊（顯示於消費者訂單確認信）</div>
+        <div className="card" style={{ padding: 16 }}>
+          {inputRow('銀行名稱', 'bank_name', 'text', '例：中華郵政')}
+          {inputRow('銀行代碼', 'bank_code', 'text', '例：700')}
+          {inputRow('匯款帳號', 'bank_account', 'text', '例：0001331 0467742')}
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">戶名（選填）</label>
+            <input className="form-input" type="text" placeholder="例：徐承豊"
+              value={form.bank_account_holder ?? ''} onChange={set('bank_account_holder')} />
+          </div>
+          <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-3)' }}>
+            未填匯款帳號時，訂單信會顯示「匯款帳號請洽客服取得」。
+          </div>
+        </div>
+
+        <div className="sec">客服聯絡（顯示於通知信 footer 與新訂單通知）</div>
+        <div className="card" style={{ padding: 16 }}>
+          {inputRow('客服 LINE 連結', 'contact_line_url', 'text', '例：https://line.me/R/ti/p/@xxxxxx')}
+          {inputRow('客服 Email', 'contact_email', 'text', '例：service@yourshop.com')}
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">新訂單通知信箱（收到客戶下單通知；留空則用客服 Email）</label>
+            <input className="form-input" type="text" placeholder="例：owner@yourshop.com"
+              value={form.order_notify_email ?? ''} onChange={set('order_notify_email')} />
+          </div>
+        </div>
+
         <div className="sec">社群分享</div>
         <div className="card" style={{ padding: 16 }}>
           <div className="form-group" style={{ marginBottom: 10 }}>

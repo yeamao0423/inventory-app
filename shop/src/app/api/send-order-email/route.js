@@ -1,20 +1,25 @@
 import { Resend } from 'resend'
 import { NextResponse } from 'next/server'
+import { getStoreEmailBranding } from '../../../lib/emailBranding'
 
 const resend = new Resend(process.env.RESEND_API_KEY)
 
 export async function POST(request) {
-  const { order, items, total, discount, couponName, lang, notifyEmail } = await request.json()
+  const { order, items, total, discount, couponName, lang, notifyEmail, storeId } = await request.json()
   const zh = lang !== 'en'
 
   if (!order?.email) {
     return NextResponse.json({ error: 'Missing email' }, { status: 400 })
   }
 
+  // 依下單店家動態帶入品牌名、匯款資訊、客服聯絡與店家通知信箱
+  const brand = await getStoreEmailBranding(storeId)
+  const storeName = brand.name
+
   const orderNo = order.id?.toString().slice(-6)
   const subject = zh
-    ? `訂單確認 #${orderNo} — 感謝您的訂購！`
-    : `Order Confirmed #${orderNo} — Thank you!`
+    ? `【${storeName}】訂單確認 #${orderNo} — 感謝您的訂購！`
+    : `${storeName} · Order Confirmed #${orderNo} — Thank you!`
 
   const itemsRows = (items || []).map(item => `
     <tr>
@@ -34,6 +39,43 @@ export async function POST(request) {
     </tr>
   `).join('')
 
+  // 匯款資訊：店家有設定才顯示帳號；未設定則提示洽客服，絕不露出其他店家帳號
+  const bankRowsHtml = brand.bank
+    ? `
+              <tr>
+                <td style="font-size:13px;color:#4a7ab5;padding:4px 0;width:80px;">${zh ? '銀行' : 'Bank'}</td>
+                <td style="font-size:14px;color:#1e4d8c;padding:4px 0;font-weight:600;">${brand.bank.name}${brand.bank.code ? ` (${brand.bank.code})` : ''}</td>
+              </tr>
+              <tr>
+                <td style="font-size:13px;color:#4a7ab5;padding:4px 0;">${zh ? '帳號' : 'Account'}</td>
+                <td style="font-size:16px;color:#1e4d8c;padding:4px 0;font-weight:700;letter-spacing:1px;">${brand.bank.account}</td>
+              </tr>
+              ${brand.bank.holder ? `
+              <tr>
+                <td style="font-size:13px;color:#4a7ab5;padding:4px 0;">${zh ? '戶名' : 'Account Name'}</td>
+                <td style="font-size:14px;color:#1e4d8c;padding:4px 0;font-weight:600;">${brand.bank.holder}</td>
+              </tr>` : ''}
+              ${order.remittance_last5 ? `
+              <tr>
+                <td style="font-size:13px;color:#4a7ab5;padding:4px 0;">${zh ? '您的末五碼' : 'Your last 5'}</td>
+                <td style="font-size:14px;color:#1e4d8c;padding:4px 0;font-weight:600;">${order.remittance_last5}</td>
+              </tr>` : ''}`
+    : `
+              <tr>
+                <td colspan="2" style="font-size:14px;color:#4a7ab5;padding:4px 0;line-height:1.6;">
+                  ${zh ? '匯款帳號請洽客服取得。' : 'Please contact us for transfer account details.'}
+                </td>
+              </tr>`
+
+  // footer 客服聯絡：店家有填才顯示對應項目
+  const contactParts = []
+  if (brand.contactLine) contactParts.push(`LINE：<a href="${brand.contactLine}" style="color:#aaa;">${brand.contactLine.replace(/^https?:\/\/line\.me\/R\/ti\/p\//, '')}</a>`)
+  if (brand.contactEmail) contactParts.push(`Email：<a href="mailto:${brand.contactEmail}" style="color:#aaa;">${brand.contactEmail}</a>`)
+  const contactLineHtml = contactParts.length
+    ? `${zh ? '如有任何問題，歡迎透過以下方式聯繫我們：' : 'If you have any questions, feel free to contact us:'}<br>${contactParts.join('&nbsp;&nbsp;|&nbsp;&nbsp;')}<br><br>`
+    : ''
+  const footerHtml = `${contactLineHtml}© 2026 ${storeName}. All rights reserved.`
+
   const html = `<!DOCTYPE html>
 <html lang="${zh ? 'zh-TW' : 'en'}">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
@@ -45,7 +87,7 @@ export async function POST(request) {
 
         <!-- Header -->
         <tr><td style="background:#1a1a1a;border-radius:16px 16px 0 0;padding:28px 32px;text-align:center;">
-          <div style="font-size:22px;font-weight:700;color:#fff;letter-spacing:-0.5px;">Daigogo</div>
+          <div style="font-size:22px;font-weight:700;color:#fff;letter-spacing:-0.5px;">${storeName}</div>
           <div style="font-size:14px;color:rgba(255,255,255,0.6);margin-top:6px;">
             ${zh ? '感謝您的訂購！' : 'Thank you for your order!'}
           </div>
@@ -129,20 +171,7 @@ export async function POST(request) {
             ${zh ? '匯款資訊' : 'Bank Transfer Info'}
           </div>
           <div style="background:#f0f7ff;border-radius:12px;padding:16px 20px;margin-bottom:16px;">
-            <table width="100%" cellpadding="0" cellspacing="0">
-              <tr>
-                <td style="font-size:13px;color:#4a7ab5;padding:4px 0;width:80px;">${zh ? '銀行' : 'Bank'}</td>
-                <td style="font-size:14px;color:#1e4d8c;padding:4px 0;font-weight:600;">${zh ? '中華郵政 (700)' : 'Chunghwa Post (700)'}</td>
-              </tr>
-              <tr>
-                <td style="font-size:13px;color:#4a7ab5;padding:4px 0;">${zh ? '帳號' : 'Account'}</td>
-                <td style="font-size:16px;color:#1e4d8c;padding:4px 0;font-weight:700;letter-spacing:1px;">0001331 0467742</td>
-              </tr>
-              ${order.remittance_last5 ? `
-              <tr>
-                <td style="font-size:13px;color:#4a7ab5;padding:4px 0;">${zh ? '您的末五碼' : 'Your last 5'}</td>
-                <td style="font-size:14px;color:#1e4d8c;padding:4px 0;font-weight:600;">${order.remittance_last5}</td>
-              </tr>` : ''}
+            <table width="100%" cellpadding="0" cellspacing="0">${bankRowsHtml}
             </table>
           </div>
 
@@ -163,9 +192,7 @@ export async function POST(request) {
         <!-- Footer -->
         <tr><td style="background:#f0f0ea;border-radius:0 0 16px 16px;padding:20px 32px;text-align:center;border:0.5px solid #e8e8e0;border-top:none;">
           <div style="font-size:12px;color:#aaa;line-height:1.7;">
-            ${zh
-              ? '如有任何問題，歡迎透過以下方式聯繫我們：<br>LINE：<a href="https://line.me/R/ti/p/@705wgspe" style="color:#aaa;">@705wgspe</a>&nbsp;&nbsp;|&nbsp;&nbsp;Email：<a href="mailto:daigogosg@gmail.com" style="color:#aaa;">daigogosg@gmail.com</a><br><br>© 2026 Daigogo. All rights reserved.'
-              : 'If you have any questions, feel free to contact us:<br>LINE: <a href="https://line.me/R/ti/p/@705wgspe" style="color:#aaa;">@705wgspe</a>&nbsp;&nbsp;|&nbsp;&nbsp;Email: <a href="mailto:daigogosg@gmail.com" style="color:#aaa;">daigogosg@gmail.com</a><br><br>© 2026 Daigogo. All rights reserved.'}
+            ${footerHtml}
           </div>
         </td></tr>
 
@@ -177,7 +204,7 @@ export async function POST(request) {
 </html>`
 
   const { error } = await resend.emails.send({
-    from: 'Daigogo <no-reply@daigogotw.com>',
+    from: `${storeName} <no-reply@daigogotw.com>`,
     to: order.email,
     subject,
     html,
@@ -257,12 +284,13 @@ export async function POST(request) {
 </body>
 </html>`
 
-  // 本機測試：略過寄給店家（daigogo）的新訂單通知；僅正式環境寄出
-  if (process.env.NODE_ENV === 'production') {
+  // 本機測試：略過寄給店家的新訂單通知；僅正式環境寄出
+  const storeNotifyTo = notifyEmail || brand.notifyEmail
+  if (process.env.NODE_ENV === 'production' && storeNotifyTo) {
     resend.emails.send({
-      from: 'Daigogo <no-reply@daigogotw.com>',
-      to: notifyEmail || 'daigogosg@gmail.com',
-      subject: `📦 新訂單 #${orderNo} — ${order.name}（NT$${total.toLocaleString()}）`,
+      from: `${storeName} <no-reply@daigogotw.com>`,
+      to: storeNotifyTo,
+      subject: `📦【${storeName}】新訂單 #${orderNo} — ${order.name}（NT$${total.toLocaleString()}）`,
       html: notifyHtml,
     }).catch(err => console.error('Store notify error:', err))
   } else {

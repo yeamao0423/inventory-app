@@ -1126,6 +1126,7 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
           fulfillment_type,
           trackingNumber,
           lang: 'zh',
+          storeId,
         }),
       })
       console.log(`[triggerStatusEmail] response status=${res.status}`, await res.json().catch(() => ''))

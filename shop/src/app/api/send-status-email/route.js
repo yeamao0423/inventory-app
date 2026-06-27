@@ -1,5 +1,6 @@
 import { Resend } from 'resend'
 import { NextResponse } from 'next/server'
+import { getStoreEmailBranding } from '../../../lib/emailBranding'
 
 const resend = new Resend(process.env.RESEND_API_KEY)
 
@@ -14,7 +15,7 @@ export async function OPTIONS() {
 }
 
 export async function POST(request) {
-  const { order, activeItems, cancelledItems, shippingFee, newTotal, fulfillment_type, trackingNumber, lang } = await request.json()
+  const { order, activeItems, cancelledItems, shippingFee, newTotal, fulfillment_type, trackingNumber, lang, storeId } = await request.json()
   const zh = lang !== 'en'
 
   console.log(`[send-status-email] type=${fulfillment_type} to=${order?.email} active=${activeItems?.length} cancelled=${cancelledItems?.length} total=${newTotal}`)
@@ -23,14 +24,19 @@ export async function POST(request) {
     return NextResponse.json({ error: 'Missing email' }, { status: 400, headers: corsHeaders })
   }
 
+  // 依訂單店家動態帶入品牌名與客服聯絡
+  const brand = await getStoreEmailBranding(storeId)
+  const storeName = brand.name
+
   const orderNo = order.id?.toString().slice(-6)
+  const tag = zh ? `【${storeName}】` : `${storeName} · `
 
   const subjectMap = {
-    full:              zh ? `【已出貨】訂單 #${orderNo} 已全數出貨` : `[Shipped] Order #${orderNo} has shipped`,
-    partial:           zh ? `【部分出貨】訂單 #${orderNo} 處理結果通知` : `[Partial Shipment] Order #${orderNo} update`,
-    cancelled:         zh ? `【訂單取消】訂單 #${orderNo} 已全數取消` : `[Cancelled] Order #${orderNo} has been cancelled`,
-    payment_received:  zh ? `【已收款】訂單 #${orderNo} 款項已確認` : `[Payment Received] Order #${orderNo} payment confirmed`,
-    order_modified:    zh ? `【訂單修改】訂單 #${orderNo} 內容已更新` : `[Order Updated] Order #${orderNo} has been modified`,
+    full:              zh ? `${tag}【已出貨】訂單 #${orderNo} 已全數出貨` : `${tag}[Shipped] Order #${orderNo} has shipped`,
+    partial:           zh ? `${tag}【部分出貨】訂單 #${orderNo} 處理結果通知` : `${tag}[Partial Shipment] Order #${orderNo} update`,
+    cancelled:         zh ? `${tag}【訂單取消】訂單 #${orderNo} 已全數取消` : `${tag}[Cancelled] Order #${orderNo} has been cancelled`,
+    payment_received:  zh ? `${tag}【已收款】訂單 #${orderNo} 款項已確認` : `${tag}[Payment Received] Order #${orderNo} payment confirmed`,
+    order_modified:    zh ? `${tag}【訂單修改】訂單 #${orderNo} 內容已更新` : `${tag}[Order Updated] Order #${orderNo} has been modified`,
   }
   const subject = subjectMap[fulfillment_type] || subjectMap.full
 
@@ -223,6 +229,15 @@ export async function POST(request) {
     `
   }
 
+  // footer 客服聯絡：店家有填才顯示對應項目
+  const contactParts = []
+  if (brand.contactLine) contactParts.push(`LINE：<a href="${brand.contactLine}" style="color:#aaa;">${brand.contactLine.replace(/^https?:\/\/line\.me\/R\/ti\/p\//, '')}</a>`)
+  if (brand.contactEmail) contactParts.push(`Email：<a href="mailto:${brand.contactEmail}" style="color:#aaa;">${brand.contactEmail}</a>`)
+  const contactLineHtml = contactParts.length
+    ? `${zh ? '如有任何問題，歡迎透過以下方式聯繫我們：' : 'If you have any questions, feel free to contact us:'}<br>${contactParts.join('&nbsp;&nbsp;|&nbsp;&nbsp;')}<br><br>`
+    : ''
+  const footerHtml = `${contactLineHtml}© 2026 ${storeName}. All rights reserved.`
+
   const html = `<!DOCTYPE html>
 <html lang="${zh ? 'zh-TW' : 'en'}">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
@@ -231,7 +246,7 @@ export async function POST(request) {
     <tr><td align="center">
       <table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;">
         <tr><td style="background:#1a1a1a;border-radius:16px 16px 0 0;padding:28px 32px;text-align:center;">
-          <div style="font-size:22px;font-weight:700;color:#fff;letter-spacing:-0.5px;">Daigogo</div>
+          <div style="font-size:22px;font-weight:700;color:#fff;letter-spacing:-0.5px;">${storeName}</div>
           <div style="font-size:13px;color:rgba(255,255,255,0.5);margin-top:4px;">${zh ? '訂單' : 'Order'} #${orderNo}</div>
         </td></tr>
         <tr><td style="background:#fff;padding:32px;border-left:0.5px solid #e8e8e0;border-right:0.5px solid #e8e8e0;">
@@ -239,9 +254,7 @@ export async function POST(request) {
         </td></tr>
         <tr><td style="background:#f0f0ea;border-radius:0 0 16px 16px;padding:20px 32px;text-align:center;border:0.5px solid #e8e8e0;border-top:none;">
           <div style="font-size:12px;color:#aaa;line-height:1.7;">
-            ${zh
-              ? '如有任何問題，歡迎透過以下方式聯繫我們：<br>LINE：<a href="https://line.me/R/ti/p/@705wgspe" style="color:#aaa;">@705wgspe</a>&nbsp;&nbsp;|&nbsp;&nbsp;Email：<a href="mailto:daigogosg@gmail.com" style="color:#aaa;">daigogosg@gmail.com</a><br><br>&copy; 2026 Daigogo. All rights reserved.'
-              : 'If you have any questions, feel free to contact us:<br>LINE: <a href="https://line.me/R/ti/p/@705wgspe" style="color:#aaa;">@705wgspe</a>&nbsp;&nbsp;|&nbsp;&nbsp;Email: <a href="mailto:daigogosg@gmail.com" style="color:#aaa;">daigogosg@gmail.com</a><br><br>&copy; 2026 Daigogo. All rights reserved.'}
+            ${footerHtml}
           </div>
         </td></tr>
       </table>
@@ -251,7 +264,7 @@ export async function POST(request) {
 </html>`
 
   const { error } = await resend.emails.send({
-    from: 'Daigogo <no-reply@daigogotw.com>',
+    from: `${storeName} <no-reply@daigogotw.com>`,
     to: order.email,
     subject,
     html,
