@@ -194,7 +194,7 @@ export default function SettingsPage() {
         <div className="card" style={{ padding: 16 }}>
           {inputRow('銀行名稱', 'bank_name', 'text', '例：中華郵政')}
           {inputRow('銀行代碼', 'bank_code', 'text', '例：700')}
-          {inputRow('匯款帳號', 'bank_account', 'text', '例：0001331 0467742')}
+          {inputRow('匯款帳號', 'bank_account', 'text', '例：0000000 0000000')}
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label">戶名（選填）</label>
             <input className="form-input" type="text" placeholder="例：徐承豊"

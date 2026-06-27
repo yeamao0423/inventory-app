@@ -3,17 +3,22 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '../../../lib/supabase'
+import { getStore } from '../../../lib/store'
 import { useI18n } from '../../layout'
 
 export default function OrderSuccessPage() {
   const { id } = useParams()
   const { t, lang } = useI18n()
   const [order, setOrder] = useState(null)
+  const [store, setStore] = useState(null)
 
   useEffect(() => {
     supabase.rpc('get_consumer_order', { p_order_id: id })
       .then(({ data }) => setOrder(data))
+    getStore().then(setStore).catch(() => {})
   }, [id])
+
+  const bank = store?.settings?.bank_account ? store.settings : null
 
   return (
     <div className="success-wrap">
@@ -55,14 +60,28 @@ export default function OrderSuccessPage() {
         <div style={{ fontWeight: 700, marginBottom: 8 }}>
           🏦 {lang === 'zh' ? '匯款資訊' : 'Bank Transfer Info'}
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span style={{ color: '#4a7ab5' }}>{lang === 'zh' ? '銀行' : 'Bank'}</span>
-          <span style={{ fontWeight: 600 }}>{lang === 'zh' ? '中華郵政 (700)' : 'Chunghwa Post (700)'}</span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span style={{ color: '#4a7ab5' }}>{lang === 'zh' ? '帳號' : 'Account'}</span>
-          <span style={{ fontWeight: 700, fontSize: 16, letterSpacing: 1 }}>0001331 0467742</span>
-        </div>
+        {bank ? (
+          <>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span style={{ color: '#4a7ab5' }}>{lang === 'zh' ? '銀行' : 'Bank'}</span>
+              <span style={{ fontWeight: 600 }}>{bank.bank_name}{bank.bank_code ? ` (${bank.bank_code})` : ''}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span style={{ color: '#4a7ab5' }}>{lang === 'zh' ? '帳號' : 'Account'}</span>
+              <span style={{ fontWeight: 700, fontSize: 16, letterSpacing: 1 }}>{bank.bank_account}</span>
+            </div>
+            {bank.bank_account_holder && (
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: '#4a7ab5' }}>{lang === 'zh' ? '戶名' : 'Account Name'}</span>
+                <span style={{ fontWeight: 600 }}>{bank.bank_account_holder}</span>
+              </div>
+            )}
+          </>
+        ) : (
+          <div style={{ color: '#4a7ab5' }}>
+            {lang === 'zh' ? '匯款帳號請洽客服取得。' : 'Please contact us for transfer account details.'}
+          </div>
+        )}
         {order?.remittance_last5 && (
           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
             <span style={{ color: '#4a7ab5' }}>{t('order.remittance_last5')}</span>
