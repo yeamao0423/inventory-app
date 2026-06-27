@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
+import { getStore } from '../../lib/store'
 import { useI18n } from '../layout'
 
 export default function AuthPage() {
@@ -33,11 +34,19 @@ export default function AuthPage() {
     if (password !== confirmPassword) { setError(zh ? '兩次密碼不一致' : 'Passwords do not match'); return }
     if (password.length < 6) { setError(zh ? '密碼至少 6 個字元' : 'Password must be at least 6 characters'); return }
     setLoading(true); setError('')
+    // 帶入註冊當下店家的品牌資訊，供驗證/重設密碼信 template 動態顯示店名與 Logo。
+    let store = null
+    try { store = await getStore() } catch { /* 取不到店家就退回平台預設 */ }
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        data: { name },
+        data: {
+          name,
+          store_name: store?.name || 'Daigogo',
+          store_slug: store?.slug || 'daigogo',
+          logo_url: store?.settings?.logo_url || '',
+        },
         emailRedirectTo: `${window.location.origin}/`,
       },
     })

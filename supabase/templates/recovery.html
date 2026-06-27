@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body style="margin:0; padding:0; background:#f4f4f5; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,'PingFang TC','Microsoft JhengHei',sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f5; padding:24px 0;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px; width:100%; background:#ffffff; border-radius:12px; overflow:hidden;">
+          <!-- header：有 Logo 顯示 Logo，否則顯示店名文字 -->
+          <tr>
+            <td style="background:#000000; padding:40px 24px; text-align:center;">
+              {{ if .Data.logo_url }}
+              <img src="{{ .Data.logo_url }}" alt="{{ .Data.store_name }}" height="64" style="max-height:64px; display:inline-block; border:0;">
+              {{ else }}
+              <span style="color:#ffffff; font-size:32px; font-weight:700; letter-spacing:2px;">{{ if .Data.store_name }}{{ .Data.store_name }}{{ else }}Daigogo{{ end }}</span>
+              {{ end }}
+            </td>
+          </tr>
+          <!-- body -->
+          <tr>
+            <td style="padding:40px 32px;">
+              <h1 style="margin:0 0 16px; font-size:24px; color:#111111;">重設您的密碼</h1>
+              <p style="margin:0 0 8px; font-size:16px; color:#333333; line-height:1.6;">我們收到了重設 {{ if .Data.store_name }}{{ .Data.store_name }}{{ else }}Daigogo{{ end }} 帳號密碼的請求。</p>
+              <p style="margin:0 0 28px; font-size:16px; color:#333333; line-height:1.6;">點擊下方按鈕即可設定新密碼，連結將於一小時後失效。</p>
+              <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto;">
+                <tr>
+                  <td style="border-radius:999px; background:#000000;">
+                    <a href="{{ .ConfirmationURL }}" style="display:inline-block; padding:16px 48px; color:#ffffff; font-size:16px; font-weight:700; text-decoration:none; border-radius:999px;">重設密碼</a>
+                  </td>
+                </tr>
+              </table>
+              <div style="margin-top:28px; padding:16px; background:#f7f7f8; border-radius:8px;">
+                <p style="margin:0 0 8px; font-size:13px; color:#888888;">如果按鈕無法點擊，請複製以下連結到瀏覽器：</p>
+                <a href="{{ .ConfirmationURL }}" style="font-size:13px; color:#2563eb; word-break:break-all;">{{ .ConfirmationURL }}</a>
+              </div>
+            </td>
+          </tr>
+          <!-- footer -->
+          <tr>
+            <td style="padding:24px 32px 40px; text-align:center; border-top:1px solid #eeeeee;">
+              <p style="margin:0; font-size:13px; color:#aaaaaa;">如果您未曾要求重設密碼，請忽略此信，您的密碼不會變更。</p>
+              <p style="margin:8px 0 0; font-size:13px; color:#aaaaaa;">© {{ if .Data.store_name }}{{ .Data.store_name }}{{ else }}Daigogo{{ end }} — 您的代購好夥伴</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

@@ -220,6 +220,16 @@ pass = "env(RESEND_API_KEY)"
 admin_email = "no-reply@daigogotw.com"
 sender_name = "Daigogo"
 
+# 品牌化驗證信／重設密碼信：用 user_metadata 的 store_name / logo_url 動態顯示店家品牌。
+# 注意：remote 專案需在 Dashboard → Authentication → Email Templates 另外手動貼上同一份 HTML。
+[auth.email.template.confirmation]
+subject = "歡迎加入！請驗證您的信箱"
+content_path = "./supabase/templates/confirmation.html"
+
+[auth.email.template.recovery]
+subject = "重設您的密碼"
+content_path = "./supabase/templates/recovery.html"
+
 # Uncomment to customize email template
 # [auth.email.template.invite]
 # subject = "You have been invited"
