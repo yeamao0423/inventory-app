@@ -197,7 +197,7 @@ export default function SettingsPage() {
           {inputRow('匯款帳號', 'bank_account', 'text', '例：0000000 0000000')}
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label">戶名（選填）</label>
-            <input className="form-input" type="text" placeholder="例：徐承豊"
+            <input className="form-input" type="text" placeholder="例：王小明"
               value={form.bank_account_holder ?? ''} onChange={set('bank_account_holder')} />
           </div>
           <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-3)' }}>
@@ -244,9 +244,9 @@ export default function SettingsPage() {
 
         <div className="sec">出貨單寄件人（交貨便匯出用，可日後要匯出時再填）</div>
         <div className="card" style={{ padding: 16 }}>
-          {inputRow('寄件人姓名', 'sender_name', 'text', '例：徐承豊', true)}
-          {inputRow('寄件人電話', 'sender_phone', 'text', '例：0955367287', true)}
-          {inputRow('寄件人 Email', 'sender_email', 'text', '例：daigogosg@gmail.com')}
+          {inputRow('寄件人姓名', 'sender_name', 'text', '例：王小明', true)}
+          {inputRow('寄件人電話', 'sender_phone', 'text', '例：0912345678', true)}
+          {inputRow('寄件人 Email', 'sender_email', 'text', '例：service@yourshop.com')}
           {inputRow('退貨門市', 'return_store_name', 'text', '例：和復門市')}
           {inputRow('退貨門市店號', 'return_store_number', 'text', '例：263115')}
           <div className="form-group" style={{ marginBottom: 0 }}>
