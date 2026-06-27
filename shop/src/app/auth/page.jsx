@@ -38,7 +38,7 @@ export default function AuthPage() {
       password,
       options: {
         data: { name },
-        emailRedirectTo: window.location.origin,
+        emailRedirectTo: `${window.location.origin}/`,
       },
     })
     if (error) {
