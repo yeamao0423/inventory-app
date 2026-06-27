@@ -244,8 +244,9 @@ html, body, #root {
 .custom-dropdown.compact .custom-dropdown-btn {
   padding: 8px 12px; font-size: 13px; border-radius: 8px;
 }
-.custom-dropdown.compact .custom-dropdown-menu { border-radius: 10px; }
-.custom-dropdown.compact .custom-dropdown-item { padding: 10px 14px; font-size: 13px; }
+/* 選單以 Portal 渲染到 body，compact 樣式改用獨立 class（不能依賴 .custom-dropdown 後代選擇器） */
+.custom-dropdown-menu.compact { border-radius: 10px; }
+.custom-dropdown-menu.compact .custom-dropdown-item { padding: 10px 14px; font-size: 13px; }
 
 .btn {
   width: 100%; padding: 14px;

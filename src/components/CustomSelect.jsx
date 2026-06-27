@@ -1,7 +1,11 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useLayoutEffect, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 
 /**
  * CustomSelect — mirrors shop's FilterDropdown style.
+ *
+ * 選單以 Portal + position:fixed 渲染到 <body>，依按鈕的位置即時計算座標，
+ * 因此不會被任何祖先的 overflow:hidden（.card）或 overflow:auto（.sheet）裁切。
  *
  * Props:
  *   label       – placeholder text when nothing selected (e.g. "— 選擇來源 —")
@@ -18,28 +22,62 @@ export default function CustomSelect({
   compact = false, style, className = '', allowClear = true,
 }) {
   const [open, setOpen] = useState(false)
-  const [dropup, setDropup] = useState(false)
-  const ref = useRef(null)
+  const [pos, setPos] = useState(null) // { left, width, top?, bottom?, maxHeight, placement }
+  const ref = useRef(null)      // wrapper（含按鈕）
+  const menuRef = useRef(null)  // portal 出去的選單
+
+  const updatePosition = useCallback(() => {
+    const el = ref.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const vh = window.innerHeight
+    const spaceBelow = vh - rect.bottom
+    const spaceAbove = rect.top
+    const GAP = 6
+    const MARGIN = 12
+    const up = spaceBelow < 240 && spaceAbove > spaceBelow
+    if (up) {
+      setPos({
+        left: rect.left, width: rect.width, placement: 'up',
+        bottom: vh - rect.top + GAP,
+        maxHeight: Math.max(120, spaceAbove - MARGIN),
+      })
+    } else {
+      setPos({
+        left: rect.left, width: rect.width, placement: 'down',
+        top: rect.bottom + GAP,
+        maxHeight: Math.max(120, spaceBelow - MARGIN),
+      })
+    }
+  }, [])
+
+  // 開啟時在 paint 前先算好位置，避免閃爍
+  useLayoutEffect(() => {
+    if (open) updatePosition()
+  }, [open, updatePosition])
 
   useEffect(() => {
     if (!open) return
     function handleClick(e) {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+      if (ref.current?.contains(e.target)) return
+      if (menuRef.current?.contains(e.target)) return
+      setOpen(false)
     }
+    function reposition() { updatePosition() }
     document.addEventListener('click', handleClick, true)
-    return () => document.removeEventListener('click', handleClick, true)
-  }, [open])
+    // capture：捕捉任何捲動容器（含 .sheet）的捲動，讓選單跟著按鈕
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('resize', reposition)
+    return () => {
+      document.removeEventListener('click', handleClick, true)
+      window.removeEventListener('scroll', reposition, true)
+      window.removeEventListener('resize', reposition)
+    }
+  }, [open, updatePosition])
 
   const selected = options.find(o => o.value === value)
 
-  const handleToggle = () => {
-    if (!open && ref.current) {
-      const rect = ref.current.getBoundingClientRect()
-      const spaceBelow = window.innerHeight - rect.bottom
-      setDropup(spaceBelow < 220)
-    }
-    setOpen(v => !v)
-  }
+  const handleToggle = () => setOpen(v => !v)
 
   return (
     <div
@@ -63,8 +101,21 @@ export default function CustomSelect({
           <path d="M6 9l6 6 6-6" />
         </svg>
       </button>
-      {open && (
-        <div className={`custom-dropdown-menu${dropup ? ' dropup' : ''}`}>
+      {open && pos && createPortal(
+        <div
+          ref={menuRef}
+          className={`custom-dropdown-menu${pos.placement === 'up' ? ' dropup' : ''}${compact ? ' compact' : ''}`}
+          style={{
+            position: 'fixed',
+            left: pos.left,
+            width: pos.width,
+            right: 'auto',
+            top: pos.top ?? 'auto',
+            bottom: pos.bottom ?? 'auto',
+            maxHeight: pos.maxHeight,
+            zIndex: 1000,
+          }}
+        >
           {allowClear && (
             <div
               className={`custom-dropdown-item ${!value && value !== 0 ? 'active' : ''}`}
@@ -82,7 +133,8 @@ export default function CustomSelect({
               {opt.label}
             </div>
           ))}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )

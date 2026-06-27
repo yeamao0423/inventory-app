@@ -151,8 +151,7 @@ export default function MembersPage() {
       {loading ? <div className="empty">載入中…</div>
         : filtered.length === 0 ? <div className="empty">無符合的會員</div>
         : (
-          // overflow:visible 讓「手動升級」下拉選單不被卡片邊界裁切（搜尋後只剩一列時尤明顯）
-          <div className="card" style={{ overflow: 'visible' }}>
+          <div className="card">
             {filtered.map(m => (
               <div key={`${m.kind}-${m.ref_id}`} className="card-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
