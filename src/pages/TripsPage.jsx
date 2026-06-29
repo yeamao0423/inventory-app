@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
+import { SUPPORTED_CURRENCIES } from '../constants/currency'
 import { useAuth } from '../hooks/useAuth'
 
 const FIXED_CATEGORIES = [
@@ -173,7 +174,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
         .order('created_at', { ascending: false }),
       supabase.from('products').select('id, name, sku, source, cost, currency').eq('store_id', storeId),
       supabase.from('storefront_products').select('product_id, shop_price').eq('store_id', storeId),
-      supabase.from('exchange_rates').select('*').eq('store_id', storeId),
+      supabase.from('exchange_rates').select('*'),
       supabase.from('consumer_orders').select('email, created_at')
         .eq('store_id', storeId)
         .lt('created_at', trip.depart_date)
@@ -757,11 +758,9 @@ function ProductRow({ p, i, costEdits, setCostEdits, saveCost, savingCost, onSel
             }))}
             style={{ padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--bg)' }}
           >
-            <option value="TWD">TWD</option>
-            <option value="JPY">JPY</option>
-            <option value="KRW">KRW</option>
-            <option value="USD">USD</option>
-            <option value="VND">VND</option>
+            {SUPPORTED_CURRENCIES.map(c => (
+              <option key={c} value={c}>{c}</option>
+            ))}
           </select>
           <input
             type="number"

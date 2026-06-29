@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import { SUPPORTED_CURRENCIES } from '../constants/currency'
 import { useAuth } from '../hooks/useAuth'
 import { uploadImages } from '../lib/imageUtils'
 import CustomSelect from './CustomSelect'
@@ -387,7 +388,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
                 <CustomSelect
                   label="TWD"
                   value={currency}
-                  options={['TWD', 'USD', 'JPY', 'EUR', 'VND'].map(c => ({ value: c, label: c }))}
+                  options={SUPPORTED_CURRENCIES.map(c => ({ value: c, label: c }))}
                   onChange={v => setCurrency(v || 'TWD')}
                   allowClear={false}
                 />

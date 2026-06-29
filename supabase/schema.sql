@@ -333,7 +333,19 @@ CREATE POLICY "users update own profile" ON public.consumers FOR UPDATE USING (a
 
 INSERT INTO public.stores (id, name) VALUES (1, 'Daigogo') ON CONFLICT DO NOTHING;
 
+-- ⚠️ 匯率為概略預估值，請依實際匯率自行調整（1 外幣 = ? 台幣）
 INSERT INTO public.exchange_rates (currency, rate) VALUES
-  ('TWD', 1.0000),
-  ('VND', 0.0013)
+  ('TWD', 1.0000),   -- 新台幣（基準）
+  ('JPY', 0.2100),   -- 日圓
+  ('KRW', 0.0240),   -- 韓元
+  ('THB', 0.9200),   -- 泰銖
+  ('VND', 0.0013),   -- 越南盾
+  ('IDR', 0.0020),   -- 印尼盾
+  ('CNY', 4.5000),   -- 人民幣
+  ('HKD', 4.1000),   -- 港幣
+  ('MYR', 7.6000),   -- 馬來西亞令吉
+  ('PHP', 0.5700),   -- 菲律賓披索
+  ('SGD', 24.0000),  -- 新加坡幣
+  ('USD', 32.0000),  -- 美元
+  ('EUR', 35.0000)   -- 歐元
 ON CONFLICT (currency) DO NOTHING;

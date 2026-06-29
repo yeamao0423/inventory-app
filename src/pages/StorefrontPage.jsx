@@ -38,7 +38,7 @@ export default function StorefrontPage() {
 
   useEffect(() => {
     if (!storeId) return
-    supabase.from('exchange_rates').select('*').eq('store_id', storeId)
+    supabase.from('exchange_rates').select('*')
       .then(({ data }) => {
         const map = {}
         ;(data || []).forEach(r => { map[r.currency] = Number(r.rate) })
@@ -1006,7 +1006,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
       .order('sort_order')
       .then(({ data }) => setOptionTypes(data || []))
     // Load exchange rates
-    supabase.from('exchange_rates').select('*').eq('store_id', storeId)
+    supabase.from('exchange_rates').select('*')
       .then(({ data }) => {
         const map = {}
         ;(data || []).forEach(r => { map[r.currency] = Number(r.rate) })

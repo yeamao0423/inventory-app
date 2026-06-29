@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import { SUPPORTED_CURRENCIES } from '../constants/currency'
 import { useAuth } from '../hooks/useAuth'
 import CustomSelect from '../components/CustomSelect'
 import { compressImage, uploadImages } from '../lib/imageUtils'
@@ -377,7 +378,7 @@ function AddProductSheet({ onClose, onSaved, existingSources = [] }) {
           <CustomSelect
             label="TWD"
             value={form.currency}
-            options={['TWD','USD','JPY','EUR','VND'].map(c => ({ value: c, label: c }))}
+            options={SUPPORTED_CURRENCIES.map(c => ({ value: c, label: c }))}
             onChange={v => set('currency', v || 'TWD')}
             allowClear={false}
           />
@@ -620,7 +621,7 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete, exi
         <EditableSelectField
           productId={product.id} field="currency" initialValue={product.currency || 'TWD'}
           canEdit={canEdit} onSaved={onSaved}
-          label="幣別" options={['TWD','USD','JPY','EUR','VND']}
+          label="幣別" options={SUPPORTED_CURRENCIES}
         />
       </div>
       <div style={{display:'grid',gridTemplateColumns:'1fr',gap:8,marginBottom:12}}>

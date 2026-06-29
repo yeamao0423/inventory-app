@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import { getCurrencySymbol } from '../constants/currency'
 import { useAuth } from '../hooks/useAuth'
 import CustomSelect from './CustomSelect'
 
@@ -45,7 +46,7 @@ export default function ProcurementBatchTab() {
     const [b, m, { data: r }] = await Promise.all([
       supabase.from('procurement_batches').select('*, procurement_items(*, products:product_id(name, sku), variants:variant_id(options))').eq('store_id', storeId).order('created_at', { ascending: false }),
       fetchStoreMembers(storeId),
-      supabase.from('exchange_rates').select('*').eq('store_id', storeId),
+      supabase.from('exchange_rates').select('*'),
     ])
     setBatches(b.data || [])
     setMembers(m)
@@ -157,7 +158,7 @@ export default function ProcurementBatchTab() {
           totalCost += (Number(item.unit_cost) || 0) * qty
         })
         const cur = items[0]?.currency || 'TWD'
-        const symbol = cur === 'JPY' ? '¥' : cur === 'USD' ? '$' : cur === 'EUR' ? '€' : cur === 'VND' ? '₫' : 'NT$'
+        const symbol = getCurrencySymbol(cur)
 
         return (
           <div key={batch.id} className="card" style={{ marginBottom: 8, cursor: 'pointer' }} onClick={() => setSheet(batch)}>
@@ -257,13 +258,7 @@ function BatchDetailSheet({ batch, members, memberMap, rates, onClose, onSaved }
     settlement[payerId].totalTWD += costTWD
   })
 
-  const currencySymbol = (cur) => {
-    if (cur === 'JPY') return '¥'
-    if (cur === 'USD') return '$'
-    if (cur === 'EUR') return '€'
-    if (cur === 'VND') return '₫'
-    return 'NT$'
-  }
+  const currencySymbol = getCurrencySymbol
 
   function updateItem(idx, updates) {
     setItems(prev => prev.map((item, i) => {

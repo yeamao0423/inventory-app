@@ -52,7 +52,7 @@ export default function OrdersPage() {
       supabase.from('consumer_orders').select('*').eq('store_id', storeId).not('status', 'in', '("已購買","已出貨","完成","已取消")'),
       supabase.from('products').select('id, name, sku, source, cost, currency').eq('store_id', storeId),
       supabase.from('storefront_products').select('product_id, shop_price').eq('store_id', storeId),
-      supabase.from('exchange_rates').select('*').eq('store_id', storeId),
+      supabase.from('exchange_rates').select('*'),
       supabase.from('product_images').select('product_id, url, sort_order').order('sort_order', { ascending: true }),
       supabase.from('product_variants').select('id, product_id, options'),
       supabase.from('procurement_items').select('product_id, variant_id, quantity, actual_qty, status, batch:batch_id(status)'),
