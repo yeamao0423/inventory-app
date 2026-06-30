@@ -445,16 +445,14 @@ export default function StorefrontPage() {
                         {item.products?.cost != null && (() => {
                           const cur = item.products.currency || 'TWD'
                           const cost = Number(item.products.cost)
-                          const isTWD = cur === 'TWD'
-                          const rate = exchangeRates[cur]
-                          const twdCost = !isTWD && rate ? Math.round(cost * rate * 10) / 10 : null
+                          const twdCost = toTwdCost(cost, cur, exchangeRates)
                           // 毛利率區間：跨所有規格的有效價（特價中→特價區間）對商品成本計算
                           const { onSale, effectives } = getEffectivePrices(item, now)
-                          const range = calcMarginRange(effectives, toTwdCost(cost, cur, exchangeRates))
+                          const range = calcMarginRange(effectives, twdCost)
                           return (
                             <>
-                              {item.products?.sku && ' · '}成本 {cost.toLocaleString()} {cur}
-                              {twdCost != null && ` ≈ ${twdCost.toLocaleString()} TWD`}
+                              {/* 成本一律顯示換算後台幣；無匯率可換算時退回原幣 */}
+                              {item.products?.sku && ' · '}成本 {twdCost != null ? `NT$${twdCost.toLocaleString()}` : `${cost.toLocaleString()} ${cur}`}
                               {range && (
                                 <span style={{ color: range.min.amount >= 0 ? 'var(--green)' : 'var(--red)' }}>
                                   {' · '}{onSale ? '特價毛利' : '毛利'} {fmtMarginRate(range)}
