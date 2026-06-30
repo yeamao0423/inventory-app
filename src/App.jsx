@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Routes, Route, useNavigate, useLocation } from 'react-router-dom'
+import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from './hooks/useAuth'
 import LoginPage from './pages/LoginPage'
 import InventoryPage from './pages/InventoryPage'
@@ -13,6 +13,10 @@ import PlatformPage from './pages/PlatformPage'
 import SettingsPage from './pages/SettingsPage'
 import MembersPage from './pages/MembersPage'
 import MemberLevelsPage from './pages/MemberLevelsPage'
+import MarketingLayout from './marketing/MarketingLayout'
+import LandingPage from './marketing/LandingPage'
+import PricingPage from './marketing/PricingPage'
+import ContactPage from './marketing/ContactPage'
 
 // group: 'more' 的項目收進底部「更多」彈出選單，其餘留在底部主列（核心日常項）
 const allTabs = [
@@ -63,7 +67,18 @@ export default function App() {
     </div>
   )
   if (location.pathname === '/invite') return <InvitePage />
-  if (!user) return <LoginPage />
+  // 未登入：官網（LikeDaigo）為登出狀態的入口，/login 走既有後台登入頁
+  if (!user) return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route element={<MarketingLayout />}>
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/pricing" element={<PricingPage />} />
+        <Route path="/contact" element={<ContactPage />} />
+        <Route path="*" element={<LandingPage />} />
+      </Route>
+    </Routes>
+  )
 
   // consumer 或無角色 → 無權限頁面（平台管理員例外，可進平台頁）
   if (!isBackendUser && !isPlatformAdmin) return (
@@ -130,6 +145,8 @@ export default function App() {
         <Route path="/settings"   element={<SettingsPage />} />
         <Route path="/platform"   element={<PlatformPage />} />
         <Route path="/invite"     element={<InvitePage />} />
+        {/* 登入後若仍停在 /login 或官網路由（/pricing、/contact…），導回根目錄 */}
+        <Route path="*"           element={<Navigate to="/" replace />} />
       </Routes>
       </div>
 
