@@ -8,6 +8,45 @@ import {
 } from '../lib/socialShare'
 import { buildCollageBlob, canShareFile, downloadBlob } from '../lib/shareImage'
 import { revalidateShop } from '../lib/revalidateShop'
+import { toTwdCost, calcMargin } from '../lib/pricing'
+import { cmpNum, cmpStr, cmpDate } from '../lib/sortUtils'
+import { Pill } from '../components/MenuPopover'
+import ListToolbar from '../components/ListToolbar'
+
+// 商城排序選項（預設＝第一項：上架 新→舊）
+const STORE_SORT = [
+  { group: '時間', items: [{ value: 'listed_desc', label: '上架 新→舊' }, { value: 'listed_asc', label: '上架 舊→新' }]},
+  { group: '庫存', items: [{ value: 'stock_asc', label: '庫存 少→多' }, { value: 'stock_desc', label: '庫存 多→少' }]},
+  { group: '獲利', items: [
+    { value: 'margin_desc', label: '毛利率 高→低' }, { value: 'margin_asc', label: '毛利率 低→高' },
+    { value: 'price_desc', label: '售價 高→低' }, { value: 'price_asc', label: '售價 低→高' },
+  ]},
+  { group: '名稱', items: [{ value: 'name_asc', label: '名稱 A→Z' }]},
+  { group: '其他', items: [{ value: 'manual', label: '手動排序' }]},
+]
+
+// listing 毛利率（沒成本/缺匯率 → null，由比較器沉底）
+function listingMarginRate(item, rates) {
+  if (item.shop_price == null) return null
+  const m = calcMargin(item.shop_price, toTwdCost(item.products?.cost, item.products?.currency, rates))
+  return m ? m.rate : null
+}
+
+function storeSortComparator(sort, rates) {
+  switch (sort) {
+    case 'listed_asc': return cmpDate(i => i.created_at, 'asc')
+    case 'stock_asc': return cmpNum(i => i.products?.quantity, 'asc')
+    case 'stock_desc': return cmpNum(i => i.products?.quantity, 'desc')
+    case 'margin_desc': return cmpNum(i => listingMarginRate(i, rates), 'desc')
+    case 'margin_asc': return cmpNum(i => listingMarginRate(i, rates), 'asc')
+    case 'price_desc': return cmpNum(i => i.shop_price, 'desc')
+    case 'price_asc': return cmpNum(i => i.shop_price, 'asc')
+    case 'name_asc': return cmpStr(i => i.products?.name, 'asc')
+    case 'manual': return cmpNum(i => i.sort_order, 'asc')
+    case 'listed_desc':
+    default: return cmpDate(i => i.created_at, 'desc')
+  }
+}
 
 export default function StorefrontPage() {
   const { can, storeId, store } = useAuth()
@@ -32,7 +71,8 @@ export default function StorefrontPage() {
   const [filterCat, setFilterCat] = useState('')
   const [filterTag, setFilterTag] = useState('')
   const [filterSource, setFilterSource] = useState('')
-  const [showFilters, setShowFilters] = useState(false)
+  const [filterNoCost, setFilterNoCost] = useState(false)
+  const [sort, setSort] = useState('listed_desc')
   const [page, setPage] = useState(1)
   const PAGE_SIZE = 15
 
@@ -238,145 +278,72 @@ export default function StorefrontPage() {
         const catsInUse = categories.filter(c => catIds.includes(c.id))
         const tagIds = [...new Set(listings.flatMap(l => (l.products?.product_tags || []).map(pt => pt.tag_id)))]
         const tagsInUse = tags.filter(t => tagIds.includes(t.id))
-        const hasActiveFilter = filter !== 'all' || filterCat || filterTag || filterSource || search
+        const hasActiveFilter = filter !== 'all' || filterCat || filterTag || filterSource || filterNoCost
         const activeLabel = statusFilters.find(f => f.key === filter)?.label || '全部'
-        // count filtered results for the button label
-        const countFiltered = listings.filter(item => {
-          if (filter === 'published' && !(item.published && !item.sold_out)) return false
-          if (filter === 'unpublished' && item.published) return false
-          if (filter === 'sold_out' && !item.sold_out) return false
-          if (filter === 'expired' && !(item.collection_end && new Date(item.collection_end) < new Date() && !item.sold_out)) return false
-          if (search) {
-            const q = search.toLowerCase()
-            const name = (item.products?.name || '').toLowerCase()
-            const sku = (item.products?.sku || '').toLowerCase()
-            if (!name.includes(q) && !sku.includes(q)) return false
-          }
-          if (filterCat && item.products?.category_id !== Number(filterCat)) return false
-          if (filterTag && !(item.products?.product_tags || []).some(pt => pt.tag_id === Number(filterTag))) return false
-          if (filterSource && item.products?.source !== filterSource) return false
-          return true
-        }).length
         return (
           <>
-            {/* 搜尋列 */}
-            <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-              <div style={{
-                flex: 1, display: 'flex', alignItems: 'center', gap: 8,
-                padding: '0 12px', borderRadius: 12, border: '1px solid var(--border)',
-                background: 'var(--card)', height: 42,
-              }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-                </svg>
-                <input
-                  value={search}
-                  onChange={e => { setSearch(e.target.value); setPage(1) }}
-                  placeholder="搜尋商品名稱或 SKU…"
-                  style={{
-                    flex: 1, border: 'none', outline: 'none', background: 'transparent',
-                    fontSize: 14, color: 'var(--text)', minWidth: 0,
-                  }}
-                />
-                {search && (
-                  <button onClick={() => { setSearch(''); setPage(1) }} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--text-3)', fontSize: 16, lineHeight: 1 }}>✕</button>
-                )}
-              </div>
-            </div>
-
-            {/* 篩選列（可收合） */}
-            <button
-              onClick={() => setShowFilters(f => !f)}
-              style={{
-                width: '100%', display: 'flex', alignItems: 'center', gap: 8,
-                padding: '10px 14px', borderRadius: 12, border: '1px solid var(--border)',
-                background: 'var(--card)', cursor: 'pointer', marginBottom: showFilters ? 0 : 12,
-                fontSize: 14, fontWeight: 600, color: 'var(--text)',
+            <ListToolbar
+              search={search}
+              onSearch={v => { setSearch(v); setPage(1) }}
+              placeholder="搜尋商品名稱或 SKU…"
+              sort={{ options: STORE_SORT, value: sort, onChange: v => { setSort(v); setPage(1) } }}
+              filter={{
+                active: hasActiveFilter,
+                label: hasActiveFilter ? activeLabel : '篩選',
+                width: 270,
+                onClear: () => { setFilter('all'); setFilterCat(''); setFilterTag(''); setFilterSource(''); setFilterNoCost(false); setPage(1) },
+                children: (
+                  <>
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-3)', marginBottom: 8 }}>狀態</div>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {statusFilters.map(f => {
+                          const count = f.key === 'all'
+                            ? listings.length
+                            : f.key === 'published' ? listings.filter(l => l.published && !l.sold_out).length
+                            : f.key === 'unpublished' ? listings.filter(l => !l.published).length
+                            : f.key === 'sold_out' ? listings.filter(l => l.sold_out).length
+                            : listings.filter(l => l.collection_end && new Date(l.collection_end) < new Date() && !l.sold_out).length
+                          return (
+                            <Pill key={f.key} active={filter === f.key} onClick={() => { setFilter(f.key); setPage(1) }}>
+                              {f.label}（{count}）
+                            </Pill>
+                          )
+                        })}
+                      </div>
+                    </div>
+                    {catsInUse.length > 0 && (
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-3)', marginBottom: 8 }}>分類</div>
+                        <CustomSelect compact label="全部分類" value={filterCat || null}
+                          options={catsInUse.map(c => ({ value: String(c.id), label: c.name }))}
+                          onChange={v => { setFilterCat(v || ''); setPage(1) }} />
+                      </div>
+                    )}
+                    {tagsInUse.length > 0 && (
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-3)', marginBottom: 8 }}>標籤</div>
+                        <CustomSelect compact label="全部標籤" value={filterTag || null}
+                          options={tagsInUse.map(t => ({ value: String(t.id), label: t.name }))}
+                          onChange={v => { setFilterTag(v || ''); setPage(1) }} />
+                      </div>
+                    )}
+                    {sources.length > 0 && (
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-3)', marginBottom: 8 }}>來源</div>
+                        <CustomSelect compact label="全部來源" value={filterSource || null}
+                          options={sources.map(s => ({ value: s, label: s }))}
+                          onChange={v => { setFilterSource(v || ''); setPage(1) }} />
+                      </div>
+                    )}
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-3)', marginBottom: 8 }}>資料</div>
+                      <Pill active={filterNoCost} onClick={() => { setFilterNoCost(v => !v); setPage(1) }}>只看未設成本</Pill>
+                    </div>
+                  </>
+                ),
               }}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="20" y2="12" /><line x1="12" y1="18" x2="20" y2="18" />
-              </svg>
-              {activeLabel}（{countFiltered}）
-              {hasActiveFilter && (
-                <span style={{
-                  width: 6, height: 6, borderRadius: '50%', background: '#3b82f6', flexShrink: 0,
-                }} />
-              )}
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ marginLeft: 'auto', transition: 'transform .2s', transform: showFilters ? 'rotate(180deg)' : '' }}>
-                <path d="M6 9l6 6 6-6" />
-              </svg>
-            </button>
-
-            {showFilters && (
-              <div style={{ padding: '12px 0 12px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {/* 狀態 pills */}
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  {statusFilters.map(f => {
-                    const count = f.key === 'all'
-                      ? listings.length
-                      : f.key === 'published' ? listings.filter(l => l.published && !l.sold_out).length
-                      : f.key === 'unpublished' ? listings.filter(l => !l.published).length
-                      : f.key === 'sold_out' ? listings.filter(l => l.sold_out).length
-                      : listings.filter(l => l.collection_end && new Date(l.collection_end) < new Date() && !l.sold_out).length
-                    const isActive = filter === f.key
-                    return (
-                      <button
-                        key={f.key}
-                        onClick={() => { setFilter(f.key); setPage(1) }}
-                        style={{
-                          padding: '6px 12px', borderRadius: 20, border: '1px solid var(--border)',
-                          background: isActive ? 'var(--text)' : 'var(--card)',
-                          color: isActive ? '#fff' : 'var(--text-2)',
-                          fontSize: 13, fontWeight: isActive ? 700 : 400, cursor: 'pointer',
-                        }}
-                      >
-                        {f.label}（{count}）
-                      </button>
-                    )
-                  })}
-                </div>
-                {/* 下拉篩選 */}
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {catsInUse.length > 0 && (
-                    <CustomSelect compact
-                      label="全部分類"
-                      value={filterCat || null}
-                      options={catsInUse.map(c => ({ value: String(c.id), label: c.name }))}
-                      onChange={v => { setFilterCat(v || ''); setPage(1) }}
-                      style={{ flex: 1, minWidth: 100 }}
-                    />
-                  )}
-                  {tagsInUse.length > 0 && (
-                    <CustomSelect compact
-                      label="全部標籤"
-                      value={filterTag || null}
-                      options={tagsInUse.map(t => ({ value: String(t.id), label: t.name }))}
-                      onChange={v => { setFilterTag(v || ''); setPage(1) }}
-                      style={{ flex: 1, minWidth: 100 }}
-                    />
-                  )}
-                  {sources.length > 0 && (
-                    <CustomSelect compact
-                      label="全部來源"
-                      value={filterSource || null}
-                      options={sources.map(s => ({ value: s, label: s }))}
-                      onChange={v => { setFilterSource(v || ''); setPage(1) }}
-                      style={{ flex: 1, minWidth: 100 }}
-                    />
-                  )}
-                </div>
-                {/* 清除全部 */}
-                {hasActiveFilter && (
-                  <button
-                    onClick={() => { setFilter('all'); setFilterCat(''); setFilterTag(''); setFilterSource(''); setSearch(''); setPage(1) }}
-                    style={{ alignSelf: 'flex-start', fontSize: 12, color: 'var(--red, #ef4444)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0' }}
-                  >
-                    清除全部篩選
-                  </button>
-                )}
-              </div>
-            )}
+            />
           </>
         )
       })()}
@@ -404,8 +371,10 @@ export default function StorefrontPage() {
           if (filterTag && !(item.products?.product_tags || []).some(pt => pt.tag_id === Number(filterTag))) return false
           // Source
           if (filterSource && item.products?.source !== filterSource) return false
+          // 只看未設成本
+          if (filterNoCost && item.products?.cost != null) return false
           return true
-        })
+        }).sort(storeSortComparator(sort, exchangeRates))
         // Pagination
         const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
         const safePage = Math.min(page, totalPages)
@@ -454,10 +423,12 @@ export default function StorefrontPage() {
                         const isTWD = cur === 'TWD'
                         const rate = exchangeRates[cur]
                         const twdCost = !isTWD && rate ? Math.round(cost * rate * 10) / 10 : null
+                        const margin = calcMargin(item.shop_price, toTwdCost(cost, cur, exchangeRates))
                         return (
                           <span style={{ color: 'var(--text-3)' }}>
                             {' · 成本 '}{cost.toLocaleString()} {cur}
                             {twdCost != null && ` ≈ ${twdCost.toLocaleString()} TWD`}
+                            {margin && ` · 毛利率 ${margin.rate}%`}
                           </span>
                         )
                       })()}
@@ -1065,8 +1036,8 @@ function ListingSheet({ item, products, onClose, onSaved }) {
       skip_stock_check: form.skip_stock_check,
     }
 
-    // 無規格商品：儲存基礎庫存到 products.quantity
-    if (variants.length === 0 && form.base_stock !== undefined) {
+    // 無規格商品：僅「新增上架」時寫入基礎庫存；編輯既有上架時庫存由庫存頁管理，不覆寫
+    if (!isEditing && variants.length === 0 && form.base_stock !== undefined) {
       await supabase.from('products').update({ quantity: Number(form.base_stock) || 0 }).eq('id', activeProductId)
     }
 
@@ -1152,10 +1123,16 @@ function ListingSheet({ item, products, onClose, onSaved }) {
               const isTWD = cur === 'TWD'
               const rate = exchangeRates[cur]
               const twdCost = !isTWD && rate ? Math.round(cost * rate * 10) / 10 : null
+              const margin = calcMargin(form.shop_price, toTwdCost(cost, cur, exchangeRates))
               return (
                 <span className="muted" style={{ fontWeight: 400, marginLeft: 8 }}>
                   成本 {cost.toLocaleString()} {cur}
                   {twdCost != null && ` ≈ ${twdCost.toLocaleString()} TWD`}
+                  {margin && (
+                    <span style={{ color: margin.amount >= 0 ? 'var(--green)' : 'var(--red)', marginLeft: 6 }}>
+                      · 毛利率 {margin.rate}%（NT${margin.amount.toLocaleString()}）
+                    </span>
+                  )}
                 </span>
               )
             })()}
@@ -1192,21 +1169,29 @@ function ListingSheet({ item, products, onClose, onSaved }) {
                 productName={isEditing ? editingItem?.products?.name : products.find(p => p.id === Number(form.product_id))?.name}
                 shopPrice={Number(form.shop_price) || 0}
                 resolveVariantLabel={resolveVariantLabel}
+                readOnlyStock={isEditing}
               />
             )}
 
-            {/* 無規格 + 需要庫存 → 顯示庫存欄位 */}
+            {/* 無規格 + 需要庫存 → 顯示庫存欄位（編輯既有上架時唯讀，請至庫存頁調整）*/}
             {variants.length === 0 && !showVariants && (sellingMode === 'stock' || !form.skip_stock_check) && (
               <div className="form-group" style={{ marginTop: 12 }}>
                 <label className="form-label">庫存數量</label>
-                <input
-                  className="form-input"
-                  type="number"
-                  placeholder="0"
-                  value={form.base_stock ?? ''}
-                  onChange={e => set('base_stock', e.target.value)}
-                  style={{ width: 140 }}
-                />
+                {isEditing ? (
+                  <>
+                    <input className="form-input" type="number" value={form.base_stock ?? ''} disabled style={{ width: 140, opacity: 0.6 }} />
+                    <div className="muted fs12" style={{ marginTop: 4 }}>庫存請至「庫存」頁調整</div>
+                  </>
+                ) : (
+                  <input
+                    className="form-input"
+                    type="number"
+                    placeholder="0"
+                    value={form.base_stock ?? ''}
+                    onChange={e => set('base_stock', e.target.value)}
+                    style={{ width: 140 }}
+                  />
+                )}
               </div>
             )}
           </>
@@ -1357,7 +1342,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
   )
 }
 
-function VariantManager({ variants, setVariants, optionTypes, productId, productName, shopPrice, resolveVariantLabel }) {
+function VariantManager({ variants, setVariants, optionTypes, productId, productName, shopPrice, resolveVariantLabel, readOnlyStock = false }) {
   // Step 1 state: which types and values are selected for this product
   const [selectedTypes, setSelectedTypes] = useState({})   // { typeId: true/false }
   const [selectedValues, setSelectedValues] = useState({})  // { typeId: Set of valueIds }
@@ -1580,17 +1565,19 @@ function VariantManager({ variants, setVariants, optionTypes, productId, product
 
               {/* Batch controls */}
               <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                  <span className="muted fs12">批次庫存:</span>
-                  <input
-                    type="number"
-                    value={batchStock}
-                    onChange={e => setBatchStock(e.target.value)}
-                    placeholder="0"
-                    style={{ width: 60, padding: '4px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center' }}
-                  />
-                  <button onClick={applyBatchStock} style={{ ...smallBtn, fontSize: 11 }}>套用</button>
-                </div>
+                {!readOnlyStock && (
+                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                    <span className="muted fs12">批次庫存:</span>
+                    <input
+                      type="number"
+                      value={batchStock}
+                      onChange={e => setBatchStock(e.target.value)}
+                      placeholder="0"
+                      style={{ width: 60, padding: '4px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center' }}
+                    />
+                    <button onClick={applyBatchStock} style={{ ...smallBtn, fontSize: 11 }}>套用</button>
+                  </div>
+                )}
                 <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                   <span className="muted fs12">批次售價:</span>
                   <input
@@ -1623,12 +1610,16 @@ function VariantManager({ variants, setVariants, optionTypes, productId, product
                           <span className="fw600">{resolveVariantLabel(v.options)}</span>
                         </td>
                         <td style={{ ...tdStyle, textAlign: 'center' }}>
-                          <input
-                            type="number"
-                            defaultValue={v.stock}
-                            onBlur={e => updateVariantField(v.id, 'stock', e.target.value)}
-                            style={cellInput}
-                          />
+                          {readOnlyStock ? (
+                            <span className="fw600" style={{ color: (v.stock || 0) === 0 ? 'var(--red)' : 'var(--text)' }} title="庫存請至庫存頁調整">{v.stock || 0}</span>
+                          ) : (
+                            <input
+                              type="number"
+                              defaultValue={v.stock}
+                              onBlur={e => updateVariantField(v.id, 'stock', e.target.value)}
+                              style={cellInput}
+                            />
+                          )}
                         </td>
                         <td style={{ ...tdStyle, textAlign: 'center' }}>
                           <input
@@ -1657,6 +1648,7 @@ function VariantManager({ variants, setVariants, optionTypes, productId, product
 
               <div className="muted fs12" style={{ marginTop: 8 }}>
                 售價留空 = 使用商城售價 NT${shopPrice.toLocaleString()}
+                {readOnlyStock && <><br/>庫存為唯讀，請至「庫存」頁調整各規格數量</>}
               </div>
             </div>
           )}

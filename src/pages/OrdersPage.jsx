@@ -4,6 +4,8 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import CustomSelect from '../components/CustomSelect'
 import ProcurementBatchTab, { CreateBatchSheet } from '../components/ProcurementBatchTab'
+import ListToolbar from '../components/ListToolbar'
+import { Pill } from '../components/MenuPopover'
 
 export default function OrdersPage() {
   const { can, profile, storeId } = useAuth()
@@ -36,7 +38,6 @@ export default function OrdersPage() {
   const [previewImgIdx, setPreviewImgIdx] = useState(0)
   const [sourceFilter, setSourceFilter] = useState('all') // 'all' | source name
   const [statusFilter, setStatusFilter] = useState('all') // 'all' | status（自建＋商城統一）
-  const [filterMenuOpen, setFilterMenuOpen] = useState(false)
   const [showExportSheet, setShowExportSheet] = useState(false)
   const [showExportMenu, setShowExportMenu] = useState(false)
   const [showRevenueSheet, setShowRevenueSheet] = useState(false)
@@ -352,8 +353,8 @@ export default function OrdersPage() {
 
         return (
           <>
-            {/* 來源 + 篩選彈出 */}
-            <div style={{ display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center' }}>
+            {/* 來源切換 */}
+            <div style={{ display: 'flex', gap: 6, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' }}>
               {sourceFilters.map(f => (
                 <button
                   key={f.key}
@@ -366,92 +367,84 @@ export default function OrdersPage() {
                   }}
                 >{f.label}</button>
               ))}
-              <div style={{ position: 'relative', marginLeft: 'auto' }}>
-                <button
-                  onClick={() => setFilterMenuOpen(v => !v)}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 6,
-                    padding: '5px 12px', borderRadius: 20, cursor: 'pointer', fontSize: 13,
-                    border: '1px solid ' + (hasActiveFilters ? 'var(--text)' : 'var(--border)'),
-                    background: hasActiveFilters ? 'var(--text)' : 'var(--card)',
-                    color: hasActiveFilters ? '#fff' : 'var(--text-2)',
-                    fontWeight: hasActiveFilters ? 700 : 400,
-                  }}
-                >
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
-                  </svg>
-                  {hasActiveFilters ? activeStatusLabel : '篩選'}
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ transition: 'transform .2s', transform: filterMenuOpen ? 'rotate(180deg)' : '' }}>
-                    <path d="M6 9l6 6 6-6" />
-                  </svg>
-                </button>
-                {filterMenuOpen && (
+            </div>
+
+            {/* 統一工具列：搜尋 + 篩選 + 匯出（訂單不顯示排序）*/}
+            <ListToolbar
+              search={consumerSearch}
+              onSearch={v => { setConsumerSearch(v); setConsumerPage(1) }}
+              placeholder="搜尋編號、姓名、電話"
+              filter={{
+                active: hasActiveFilters,
+                label: hasActiveFilters ? activeStatusLabel : '篩選',
+                onClear: () => { setStatusFilter('all'); setConsumerDateFilter('all'); setConsumerPage(1) },
+                children: (
                   <>
-                    <div onClick={() => setFilterMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 19 }} />
-                    <div style={{
-                      position: 'absolute', top: 'calc(100% + 8px)', right: 0, zIndex: 20, width: 260,
-                      background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14,
-                      boxShadow: '0 8px 24px rgba(0,0,0,.12)', padding: 14,
-                      display: 'flex', flexDirection: 'column', gap: 12,
-                    }}>
-                      <div>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-3)', marginBottom: 8 }}>訂單狀態</div>
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                          {statusFilters.map(f => {
-                            const isActive = statusFilter === f.key
-                            return (
-                              <button
-                                key={f.key}
-                                onClick={() => { setStatusFilter(f.key); setConsumerPage(1) }}
-                                style={{
-                                  padding: '6px 12px', borderRadius: 20, border: '1px solid var(--border)',
-                                  background: isActive ? 'var(--text)' : 'var(--card)',
-                                  color: isActive ? '#fff' : 'var(--text-2)',
-                                  fontSize: 13, fontWeight: isActive ? 700 : 400, cursor: 'pointer',
-                                }}
-                              >
-                                {f.label}（{statusCount(f.key)}）
-                              </button>
-                            )
-                          })}
-                        </div>
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-3)', marginBottom: 8 }}>訂單狀態</div>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {statusFilters.map(f => (
+                          <Pill key={f.key} active={statusFilter === f.key} onClick={() => { setStatusFilter(f.key); setConsumerPage(1) }}>
+                            {f.label}（{statusCount(f.key)}）
+                          </Pill>
+                        ))}
                       </div>
-                      <div>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-3)', marginBottom: 8 }}>日期</div>
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                          {dateOptions.map(d => {
-                            const isActive = consumerDateFilter === d.value
-                            return (
-                              <button
-                                key={d.value}
-                                onClick={() => { setConsumerDateFilter(d.value); setConsumerPage(1) }}
-                                style={{
-                                  padding: '6px 12px', borderRadius: 20, border: '1px solid var(--border)',
-                                  background: isActive ? 'var(--text)' : 'var(--card)',
-                                  color: isActive ? '#fff' : 'var(--text-2)',
-                                  fontSize: 13, fontWeight: isActive ? 700 : 400, cursor: 'pointer',
-                                }}
-                              >
-                                {d.label}
-                              </button>
-                            )
-                          })}
-                        </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-3)', marginBottom: 8 }}>日期</div>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {dateOptions.map(d => (
+                          <Pill key={d.value} active={consumerDateFilter === d.value} onClick={() => { setConsumerDateFilter(d.value); setConsumerPage(1) }}>
+                            {d.label}
+                          </Pill>
+                        ))}
                       </div>
-                      {hasActiveFilters && (
-                        <button
-                          onClick={() => { setStatusFilter('all'); setConsumerDateFilter('all'); setConsumerPage(1) }}
-                          style={{ alignSelf: 'flex-start', fontSize: 12, color: 'var(--red, #ef4444)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0' }}
-                        >
-                          清除全部篩選
-                        </button>
-                      )}
                     </div>
                   </>
-                )}
-              </div>
-            </div>
+                ),
+              }}
+              actions={isAdmin && (
+                <div style={{ position: 'relative' }}>
+                  <button className="lt-ctrl" onClick={() => setShowExportMenu(v => !v)}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                      <polyline points="7 10 12 15 17 10" />
+                      <line x1="12" y1="15" x2="12" y2="3" />
+                    </svg>
+                    <span className="lt-ctrl__label">匯出</span>
+                  </button>
+                  {showExportMenu && (
+                    <>
+                      <div onClick={() => setShowExportMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 19 }} />
+                      <div style={{
+                        position: 'absolute', top: 'calc(100% + 8px)', right: 0, zIndex: 20, width: 140,
+                        background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12,
+                        boxShadow: '0 4px 16px rgba(0,0,0,.10)', overflow: 'hidden',
+                      }}>
+                        {[
+                          { icon: '📦', label: '出貨單', open: () => setShowExportSheet(true) },
+                          { icon: '📊', label: '營收報表', open: () => setShowRevenueSheet(true) },
+                        ].map((m, i) => (
+                          <button
+                            key={m.label}
+                            onClick={() => { setShowExportMenu(false); m.open() }}
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: 8,
+                              width: '100%', padding: '11px 14px', textAlign: 'left',
+                              background: 'var(--surface)', border: 'none', cursor: 'pointer', outline: 'none',
+                              borderTop: i > 0 ? '1px solid var(--border)' : 'none',
+                              fontSize: 13, fontWeight: 500, color: 'var(--text)',
+                            }}
+                          >
+                            <span>{m.icon}</span>{m.label}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            />
 
             {/* Internal orders section */}
             {showInternal && internalList.length > 0 && (
@@ -496,80 +489,6 @@ export default function OrdersPage() {
             {showConsumer && (
               <>
             {orderSubFilter === 'all' && <div className="sec">商城訂單</div>}
-            {/* 搜尋列 */}
-            <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-              <div style={{
-                flex: 1, display: 'flex', alignItems: 'center', gap: 8,
-                padding: '0 12px', borderRadius: 12, border: '1px solid var(--border)',
-                background: 'var(--card)', height: 42,
-              }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-                </svg>
-                <input
-                  value={consumerSearch}
-                  onChange={e => { setConsumerSearch(e.target.value); setConsumerPage(1) }}
-                  placeholder="搜尋編號、姓名、電話"
-                  style={{
-                    flex: 1, border: 'none', outline: 'none', background: 'transparent',
-                    fontSize: 14, color: 'var(--text)', minWidth: 0,
-                  }}
-                />
-                {consumerSearch && (
-                  <button onClick={() => { setConsumerSearch(''); setConsumerPage(1) }} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--text-3)', fontSize: 16, lineHeight: 1 }}>✕</button>
-                )}
-              </div>
-              {isAdmin && (
-                <div style={{ position: 'relative' }}>
-                  <button
-                    onClick={() => setShowExportMenu(v => !v)}
-                    style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                      padding: '0 14px', borderRadius: 12, border: '1px solid var(--border)',
-                      background: 'var(--card)', color: 'var(--text)', height: 42,
-                      cursor: 'pointer', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap',
-                      outline: 'none',
-                    }}
-                  >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                      <polyline points="7 10 12 15 17 10" />
-                      <line x1="12" y1="15" x2="12" y2="3" />
-                    </svg>
-                    匯出
-                  </button>
-                  {showExportMenu && (
-                    <>
-                      <div onClick={() => setShowExportMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 19 }} />
-                      <div style={{
-                        position: 'absolute', top: 48, right: 0, zIndex: 20, width: 140,
-                        background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12,
-                        boxShadow: '0 4px 16px rgba(0,0,0,.10)', overflow: 'hidden',
-                      }}>
-                        {[
-                          { icon: '📦', label: '出貨單', open: () => setShowExportSheet(true) },
-                          { icon: '📊', label: '營收報表', open: () => setShowRevenueSheet(true) },
-                        ].map((m, i) => (
-                          <button
-                            key={m.label}
-                            onClick={() => { setShowExportMenu(false); m.open() }}
-                            style={{
-                              display: 'flex', alignItems: 'center', gap: 8,
-                              width: '100%', padding: '11px 14px', textAlign: 'left',
-                              background: 'var(--surface)', border: 'none', cursor: 'pointer', outline: 'none',
-                              borderTop: i > 0 ? '1px solid var(--border)' : 'none',
-                              fontSize: 13, fontWeight: 500, color: 'var(--text)',
-                            }}
-                          >
-                            <span>{m.icon}</span>{m.label}
-                          </button>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
 
             {/* 訂單列表 */}
             {pagedConsumer.length === 0 && <div className="empty">沒有符合的訂單</div>}

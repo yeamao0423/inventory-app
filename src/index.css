@@ -415,3 +415,28 @@ html, body, #root {
   .trip-slide { min-width: 0 !important; padding-right: 0 !important; }
   .trip-dots { display: none !important; }
 }
+
+/* ListToolbar：搜尋框拉滿，排序/篩選/匯出收成圖示放進框內右側。
+   手機只顯示圖示；桌機（≥768px）才顯示文字標籤與箭頭。 */
+.list-toolbar { margin-bottom: 12px; }
+.list-toolbar__search {
+  width: 100%; min-width: 0; display: flex; align-items: center; gap: 8px;
+  padding: 0 6px 0 12px; border-radius: 12px; border: 1px solid var(--border);
+  background: var(--card); height: 42px;
+}
+.list-toolbar__ctrls {
+  display: flex; align-items: center; gap: 2px; flex-shrink: 0;
+  padding-left: 4px; margin-left: 2px; border-left: 1px solid var(--border);
+}
+.lt-ctrl {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: none; border: none; cursor: pointer; color: var(--text-3);
+  padding: 6px 7px; border-radius: 8px; font-size: 13px; white-space: nowrap; outline: none;
+}
+.lt-ctrl.is-active { color: var(--text); font-weight: 700; }
+.lt-ctrl__label, .lt-ctrl__chev { display: none; }
+@media (min-width: 768px) {
+  .lt-ctrl__label { display: inline; }
+  .lt-ctrl__chev { display: inline-flex; }
+  .lt-ctrl { padding: 5px 8px; }
+}

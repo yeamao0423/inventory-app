@@ -4,11 +4,96 @@ import { SUPPORTED_CURRENCIES } from '../constants/currency'
 import { useAuth } from '../hooks/useAuth'
 import CustomSelect from '../components/CustomSelect'
 import { compressImage, uploadImages } from '../lib/imageUtils'
+import { toTwdCost, calcMargin } from '../lib/pricing'
+import { cmpNum, cmpStr, cmpDate } from '../lib/sortUtils'
+import { Pill } from '../components/MenuPopover'
+import ListToolbar from '../components/ListToolbar'
 import QuickListSheet from '../components/QuickListSheet'
 
-const LOW = 10
+const LOW = 5
 
 const PAGE_SIZE = 20
+
+// 排序選項（預設＝第一項：建立 新→舊）
+const SORT_OPTIONS = [
+  { group: '時間', items: [
+    { value: 'created_desc', label: '建立 新→舊' }, { value: 'created_asc', label: '建立 舊→新' },
+    { value: 'listed_desc', label: '上架 新→舊' }, { value: 'listed_asc', label: '上架 舊→新' },
+  ]},
+  { group: '庫存', items: [{ value: 'stock_asc', label: '庫存 少→多' }, { value: 'stock_desc', label: '庫存 多→少' }]},
+  { group: '獲利', items: [
+    { value: 'margin_desc', label: '毛利率 高→低' }, { value: 'margin_asc', label: '毛利率 低→高' },
+    { value: 'price_desc', label: '售價 高→低' }, { value: 'price_asc', label: '售價 低→高' },
+    { value: 'cost_desc', label: '成本 高→低' }, { value: 'cost_asc', label: '成本 低→高' },
+  ]},
+  { group: '名稱', items: [{ value: 'name_asc', label: '名稱 A→Z' }]},
+]
+
+// 毛利率（沒成本/沒上架/缺匯率 → null，由比較器沉底）
+function marginRate(p, rates) {
+  const sf = storefrontOf(p)
+  if (!sf || sf.shop_price == null) return null
+  const m = calcMargin(sf.shop_price, toTwdCost(p.cost, p.currency, rates))
+  return m ? m.rate : null
+}
+
+function sortComparator(sort, rates) {
+  switch (sort) {
+    case 'created_asc': return cmpDate(p => p.created_at, 'asc')
+    case 'listed_desc': return cmpDate(p => storefrontOf(p)?.created_at, 'desc')
+    case 'listed_asc': return cmpDate(p => storefrontOf(p)?.created_at, 'asc')
+    case 'stock_asc': return cmpNum(totalStock, 'asc')
+    case 'stock_desc': return cmpNum(totalStock, 'desc')
+    case 'margin_desc': return cmpNum(p => marginRate(p, rates), 'desc')
+    case 'margin_asc': return cmpNum(p => marginRate(p, rates), 'asc')
+    case 'price_desc': return cmpNum(p => storefrontOf(p)?.shop_price, 'desc')
+    case 'price_asc': return cmpNum(p => storefrontOf(p)?.shop_price, 'asc')
+    case 'cost_desc': return cmpNum(p => toTwdCost(p.cost, p.currency, rates), 'desc')
+    case 'cost_asc': return cmpNum(p => toTwdCost(p.cost, p.currency, rates), 'asc')
+    case 'name_asc': return cmpStr(p => p.name, 'asc')
+    case 'created_desc':
+    default: return cmpDate(p => p.created_at, 'desc')
+  }
+}
+
+// ── 庫存判定 helper（單一來源）──────────────────────────
+// 商城 listing（一個商品最多一筆）
+function storefrontOf(p) { return p.storefront_products?.[0] || null }
+// 是否追蹤庫存：限時單(collection_end)或勾選略過(skip_stock_check)不列入低庫存
+function isStockTracked(p) {
+  const sf = storefrontOf(p)
+  if (!sf) return true
+  if (sf.skip_stock_check) return false
+  if (sf.collection_end) return false
+  return true
+}
+// 各庫存單位：有規格→每個規格 stock；無規格→總量
+function stockUnits(p) {
+  const vs = p.product_variants || []
+  return vs.length > 0 ? vs.map(v => v.stock || 0) : [p.quantity || 0]
+}
+function totalStock(p) {
+  const vs = p.product_variants || []
+  return vs.length > 0 ? vs.reduce((s, v) => s + (v.stock || 0), 0) : (p.quantity || 0)
+}
+// 低庫存：任一庫存單位 < LOW（含 0=缺貨）；不追蹤者永不低庫存
+function isLowStock(p) {
+  if (!isStockTracked(p)) return false
+  return stockUnits(p).some(s => s < LOW)
+}
+function isOutOfStock(p) {
+  if (!isStockTracked(p)) return false
+  return stockUnits(p).some(s => s === 0)
+}
+// 把 variant.options 解析成可讀字串，需要 optionTypes（含 values）
+function resolveVariantLabel(options, optionTypes) {
+  if (!options || Object.keys(options).length === 0) return '無規格'
+  return Object.entries(options).map(([typeId, valueId]) => {
+    const type = optionTypes.find(t => t.id === Number(typeId))
+    const val = type?.variant_option_values?.find(v => v.id === valueId)
+    return val ? `${type.name}: ${val.value}` : ''
+  }).filter(Boolean).join(' / ')
+}
 
 export default function InventoryPage() {
   const { profile, signOut, can, storeId } = useAuth()
@@ -16,18 +101,22 @@ export default function InventoryPage() {
   const [search, setSearch] = useState('')
   const [filterSource, setFilterSource] = useState('')
   const [filterCategory, setFilterCategory] = useState('')
+  const [filterNoCost, setFilterNoCost] = useState(false)
+  const [sort, setSort] = useState('created_desc')
   const [categories, setCategories] = useState([])
+  const [optionTypes, setOptionTypes] = useState([])
+  const [exchangeRates, setExchangeRates] = useState({})
   const [sheet, setSheet] = useState(null)   // null | 'add' | product obj
   const [quickList, setQuickList] = useState(false)
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(1)
 
-  useEffect(() => { if (!storeId) return; fetchProducts(); fetchCategories() }, [storeId])
+  useEffect(() => { if (!storeId) return; fetchProducts(); fetchCategories(); fetchOptionTypes(); fetchRates() }, [storeId])
 
   async function fetchProducts() {
     const { data } = await supabase
       .from('products')
-      .select('*, product_images(id, url, sort_order), categories(id, name), product_tags(tag_id)')
+      .select('*, product_images(id, url, sort_order), categories(id, name), product_tags(tag_id), product_variants(id, options, stock, variant_price), storefront_products(id, shop_price, published, sold_out, collection_end, skip_stock_check, created_at)')
       .eq('store_id', storeId)
       .order('name')
     setProducts(data || [])
@@ -39,21 +128,37 @@ export default function InventoryPage() {
     setCategories(data || [])
   }
 
+  async function fetchOptionTypes() {
+    const { data } = await supabase.from('variant_option_types')
+      .select('*, variant_option_values(id, value, sort_order)')
+      .eq('store_id', storeId).order('sort_order')
+    setOptionTypes(data || [])
+  }
+
+  async function fetchRates() {
+    const { data } = await supabase.from('exchange_rates').select('*')
+    const map = {}
+    ;(data || []).forEach(r => { map[r.currency] = Number(r.rate) })
+    setExchangeRates(map)
+  }
+
   const filtered = products.filter(p => {
     const matchSearch = p.name.toLowerCase().includes(search.toLowerCase()) ||
       (p.sku && p.sku.toLowerCase().includes(search.toLowerCase()))
     const matchSource = !filterSource || (p.source || '') === filterSource
     const matchCategory = !filterCategory || String(p.category_id || '') === filterCategory
-    return matchSearch && matchSource && matchCategory
+    const matchNoCost = !filterNoCost || p.cost == null
+    return matchSearch && matchSource && matchCategory && matchNoCost
   })
-  const low = filtered.filter(p => p.quantity <= LOW)
-  const normal = filtered.filter(p => p.quantity > LOW)
+  // 低庫存警示永遠釘最上、依庫存少→多（最急的在前）；其餘依使用者選的排序
+  const low = filtered.filter(isLowStock).sort(cmpNum(totalStock, 'asc'))
+  const normal = filtered.filter(p => !isLowStock(p)).sort(sortComparator(sort, exchangeRates))
   const allFiltered = [...low, ...normal]
   const totalPages = Math.max(1, Math.ceil(allFiltered.length / PAGE_SIZE))
   const safePage = Math.min(page, totalPages)
   const pagedProducts = allFiltered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
-  const pagedLow = pagedProducts.filter(p => p.quantity <= LOW)
-  const pagedNormal = pagedProducts.filter(p => p.quantity > LOW)
+  const pagedLow = pagedProducts.filter(isLowStock)
+  const pagedNormal = pagedProducts.filter(p => !isLowStock(p))
   const existingSources = [...new Set(products.map(p => p.source).filter(Boolean))].sort()
 
   return (
@@ -92,42 +197,45 @@ export default function InventoryPage() {
           <div className="stat-lbl">商品種類</div>
         </div>
         <div className="stat">
-          <div className="stat-val text-red">{products.filter(p => p.quantity <= LOW).length}</div>
+          <div className="stat-val text-red">{products.filter(isLowStock).length}</div>
           <div className="stat-lbl"><span className="dot" style={{background:'var(--red)'}} />低庫存</div>
         </div>
       </div>
 
-      <div className="search">
-        <span style={{fontSize:16}}>🔍</span>
-        <input
-          placeholder="搜尋商品名稱或 SKU…"
-          value={search}
-          onChange={e => { setSearch(e.target.value); setPage(1) }}
-        />
-      </div>
-
-      {(existingSources.length > 0 || categories.length > 0) && (
-        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-          {categories.length > 0 && (
-            <CustomSelect compact
-              label="全部分類"
-              value={filterCategory || null}
-              options={categories.map(c => ({ value: String(c.id), label: c.name }))}
-              onChange={v => { setFilterCategory(v || ''); setPage(1) }}
-              style={{ flex: 1, minWidth: 100 }}
-            />
-          )}
-          {existingSources.length > 0 && (
-            <CustomSelect compact
-              label="全部來源"
-              value={filterSource || null}
-              options={existingSources.map(s => ({ value: s, label: s }))}
-              onChange={v => { setFilterSource(v || ''); setPage(1) }}
-              style={{ flex: 1, minWidth: 100 }}
-            />
-          )}
-        </div>
-      )}
+      <ListToolbar
+        search={search}
+        onSearch={v => { setSearch(v); setPage(1) }}
+        placeholder="搜尋商品名稱或 SKU…"
+        sort={{ options: SORT_OPTIONS, value: sort, onChange: v => { setSort(v); setPage(1) } }}
+        filter={{
+          active: !!(filterCategory || filterSource || filterNoCost),
+          onClear: () => { setFilterCategory(''); setFilterSource(''); setFilterNoCost(false); setPage(1) },
+          children: (
+            <>
+              {categories.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-3)', marginBottom: 8 }}>分類</div>
+                  <CustomSelect compact label="全部分類" value={filterCategory || null}
+                    options={categories.map(c => ({ value: String(c.id), label: c.name }))}
+                    onChange={v => { setFilterCategory(v || ''); setPage(1) }} />
+                </div>
+              )}
+              {existingSources.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-3)', marginBottom: 8 }}>採購來源</div>
+                  <CustomSelect compact label="全部來源" value={filterSource || null}
+                    options={existingSources.map(s => ({ value: s, label: s }))}
+                    onChange={v => { setFilterSource(v || ''); setPage(1) }} />
+                </div>
+              )}
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-3)', marginBottom: 8 }}>資料</div>
+                <Pill active={filterNoCost} onClick={() => { setFilterNoCost(v => !v); setPage(1) }}>只看未設成本</Pill>
+              </div>
+            </>
+          ),
+        }}
+      />
 
       {loading && <div className="empty">載入中…</div>}
 
@@ -135,7 +243,7 @@ export default function InventoryPage() {
         <>
           <div className="sec">⚠ 低庫存警示</div>
           <div className="card-grid">
-            {pagedLow.map(p => <ProductRow key={p.id} product={p} onTap={() => setSheet(p)} low />)}
+            {pagedLow.map(p => <ProductRow key={p.id} product={p} onTap={() => setSheet(p)} exchangeRates={exchangeRates} />)}
           </div>
         </>
       )}
@@ -144,7 +252,7 @@ export default function InventoryPage() {
         <>
           <div className="sec">所有商品</div>
           <div className="card-grid">
-            {pagedNormal.map(p => <ProductRow key={p.id} product={p} onTap={() => setSheet(p)} />)}
+            {pagedNormal.map(p => <ProductRow key={p.id} product={p} onTap={() => setSheet(p)} exchangeRates={exchangeRates} />)}
           </div>
         </>
       )}
@@ -192,6 +300,8 @@ export default function InventoryPage() {
           canEdit={can('edit')}
           canDelete={can('delete')}
           existingSources={existingSources}
+          optionTypes={optionTypes}
+          exchangeRates={exchangeRates}
         />
       )}
       {quickList && (
@@ -205,8 +315,34 @@ export default function InventoryPage() {
   )
 }
 
-function ProductRow({ product: p, onTap, low }) {
+function ProductRow({ product: p, onTap, exchangeRates = {} }) {
   const thumb = p.product_images?.sort((a, b) => a.sort_order - b.sort_order)[0]?.url
+  const vs = p.product_variants || []
+  const hasVar = vs.length > 0
+  const total = totalStock(p)
+  const tracked = isStockTracked(p)
+  const low = isLowStock(p)
+  const out = isOutOfStock(p)
+  const sf = storefrontOf(p)
+
+  // 毛利率（成本換 TWD 後與售價比）
+  const twdCost = toTwdCost(p.cost, p.currency, exchangeRates)
+  const margin = sf?.shop_price != null ? calcMargin(sf.shop_price, twdCost) : null
+
+  // 左側資訊：SKU · 成本 · 售價 · 毛利率
+  const infoParts = []
+  if (p.sku) infoParts.push(p.sku)
+  if (p.cost != null) infoParts.push(`成本 ${Number(p.cost).toLocaleString()} ${p.currency || 'TWD'}`)
+  if (sf?.shop_price != null) infoParts.push(`售價 NT$${Number(sf.shop_price).toLocaleString()}`)
+  if (margin) infoParts.push(`毛利率 ${margin.rate}%`)
+
+  // 右側徽章
+  let badge
+  if (!tracked) badge = <span className="badge badge-warn">{sf?.collection_end ? '限時單' : '不追蹤'}</span>
+  else if (out) badge = <span className="badge badge-low">缺貨</span>
+  else if (low) badge = <span className="badge badge-low">低庫存</span>
+  else badge = <span className="badge badge-ok">正常</span>
+
   return (
     <div className="card" onClick={onTap} style={{cursor:'pointer'}}>
       <div className="card-row">
@@ -217,13 +353,12 @@ function ProductRow({ product: p, onTap, low }) {
         </div>
         <div style={{flex:1,minWidth:0}}>
           <div className="fw600 fs15" style={{whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{p.name}</div>
-          <div className="muted fs12 mt8">{[p.sku, `${p.cost} ${p.currency}`].filter(Boolean).join(' · ')}</div>
+          <div className="muted fs12 mt8" style={{whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{infoParts.join(' · ')}</div>
         </div>
         <div style={{textAlign:'right',flexShrink:0}}>
-          <div className="fw600 fs15" style={{color: low ? 'var(--red)' : 'var(--text)'}}>{p.quantity}</div>
-          <div className="fs12 mt8">
-            <span className={`badge ${low ? 'badge-low' : 'badge-ok'}`}>{low ? '低庫存' : '正常'}</span>
-          </div>
+          <div className="fw600 fs15" style={{color: (low || out) ? 'var(--red)' : 'var(--text)'}}>{total}</div>
+          {hasVar && <div className="muted fs11">{vs.length} 規格</div>}
+          <div className="fs12 mt8">{badge}</div>
         </div>
       </div>
     </div>
@@ -461,8 +596,75 @@ function EditableSelectField({ productId, field, initialValue, canEdit, onSaved,
   )
 }
 
+// ── 規格庫存編輯器（庫存頁是 stock 的唯一編輯入口）─────────
+function VariantStockEditor({ variants, optionTypes, canEdit, onSaved }) {
+  const [rows, setRows] = useState(variants || [])
+  const total = rows.reduce((s, v) => s + (v.stock || 0), 0)
+
+  async function saveStock(id, value) {
+    const v = Math.max(0, Math.round(Number(value) || 0))
+    await supabase.from('product_variants').update({ stock: v }).eq('id', id)
+    setRows(prev => prev.map(r => r.id === id ? { ...r, stock: v } : r))
+    if (onSaved) onSaved()
+  }
+
+  const sorted = [...rows].sort((a, b) =>
+    resolveVariantLabel(a.options, optionTypes).localeCompare(resolveVariantLabel(b.options, optionTypes)))
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div className="muted fs12" style={{ marginBottom: 8 }}>
+        合計 {total} 件 · {rows.length} 規格（總量由各規格自動加總）
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {sorted.map(v => {
+          const s = v.stock || 0
+          const out = s === 0
+          const low = s > 0 && s < LOW
+          return (
+            <div key={v.id} style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 10, padding: '8px 12px' }}>
+              <span className="fs13 fw600" style={{ flex: 1, minWidth: 0 }}>{resolveVariantLabel(v.options, optionTypes)}</span>
+              {(out || low) && <span className="badge badge-low" style={{ fontSize: 11 }}>{out ? '缺貨' : '低'}</span>}
+              {canEdit ? (
+                <input
+                  type="number"
+                  defaultValue={s}
+                  onBlur={e => saveStock(v.id, e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && e.currentTarget.blur()}
+                  style={{ width: 64, textAlign: 'center', border: '0.5px solid var(--border)', borderRadius: 8, padding: '6px 8px', fontSize: 14, fontWeight: 600, background: 'var(--bg)', color: 'var(--text)' }}
+                />
+              ) : (
+                <span className="fs14 fw600">{s}</span>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ── 商城上架資訊（唯讀；售價/毛利於商城頁調整）────────────
+function StorefrontInfo({ product, exchangeRates }) {
+  const sf = product.storefront_products?.[0]
+  if (!sf) return <div className="muted fs12" style={{ marginBottom: 12 }}>尚未上架商城</div>
+  const twdCost = toTwdCost(product.cost, product.currency, exchangeRates)
+  const margin = sf.shop_price != null ? calcMargin(sf.shop_price, twdCost) : null
+  const parts = []
+  if (sf.shop_price != null) parts.push(`售價 NT$${Number(sf.shop_price).toLocaleString()}`)
+  if (margin) parts.push(`毛利 NT$${margin.amount.toLocaleString()}（${margin.rate}%）`)
+  parts.push(sf.collection_end ? '限時收單' : (sf.skip_stock_check ? '不追蹤庫存' : '現貨'))
+  parts.push(sf.published ? '上架中' : '已下架')
+  return (
+    <div style={{ background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 10, padding: '8px 12px', marginBottom: 12 }}>
+      <div className="fs13" style={{ color: 'var(--text)' }}>{parts.join(' · ')}</div>
+      <div className="muted fs11" style={{ marginTop: 4 }}>售價／毛利請於「商城」頁調整</div>
+    </div>
+  )
+}
+
 // ── 商品詳情 ────────────────────────────────────────────
-function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete, existingSources = [] }) {
+function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete, existingSources = [], optionTypes = [], exchangeRates = {} }) {
   const { storeId } = useAuth()
   const [saving, setSaving] = useState(false)
   const [productName, setProductName] = useState(product.name)
@@ -611,6 +813,29 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete, exi
           </label>
         )}
       </div>
+
+      {/* 庫存 */}
+      <div className="sec" style={{ marginTop: 12 }}>庫存</div>
+      {(product.product_variants || []).length > 0 ? (
+        <VariantStockEditor
+          variants={product.product_variants}
+          optionTypes={optionTypes}
+          canEdit={canEdit}
+          onSaved={onSaved}
+        />
+      ) : (
+        <div style={{ marginBottom: 12 }}>
+          <EditableField
+            productId={product.id} field="quantity" initialValue={product.quantity}
+            canEdit={canEdit} onSaved={onSaved}
+            label="庫存數量" placeholder="0" type="number"
+          />
+        </div>
+      )}
+
+      {/* 商城（唯讀，售價/毛利於商城頁調整）*/}
+      <div className="sec">商城</div>
+      <StorefrontInfo product={product} exchangeRates={exchangeRates} />
 
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:12,marginTop:12}}>
         <EditableField
