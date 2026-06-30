@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS public.product_images (
     product_id bigint NOT NULL REFERENCES public.products(id) ON DELETE CASCADE,
     url text NOT NULL,
     sort_order integer DEFAULT 0,
+    tag_filter jsonb DEFAULT NULL,  -- 規格對應：{"<type_id>": [value_id,...]}；null=共用圖
     created_at timestamptz DEFAULT now()
 );
 

@@ -34,6 +34,10 @@ export default function ProductDetail({ sp, variants, customOptions, optTypes, p
   const sortedImages = [...(p.product_images || [])].sort((a, b) => a.sort_order - b.sort_order)
   const zh = lang === 'zh'
 
+  // 依目前選到的規格過濾 gallery；若過濾後為空（該規格無專屬圖且無共用圖）則退回全部，避免開天窗
+  const matched = sortedImages.filter(img => imageMatches(img, selectedOptions))
+  const visibleImages = matched.length ? matched : sortedImages
+
   // Collection / sold_out status
   const isCollection = !!sp.collection_end
   const collectionExpired = isCollection && new Date(sp.collection_end) < new Date()
@@ -110,9 +114,9 @@ export default function ProductDetail({ sp, variants, customOptions, optTypes, p
       </div>
 
       <div className="detail-wrap">
-        {/* Image gallery */}
+        {/* Image gallery（規格切換時 remount，current 歸 0，不會停在已消失的圖）*/}
         <div>
-          <ImageGallery images={sortedImages} name={name} />
+          <ImageGallery key={visibleImages.map(i => i.id).join('-')} images={visibleImages} name={name} />
         </div>
 
         {/* Info */}
@@ -157,10 +161,35 @@ export default function ProductDetail({ sp, variants, customOptions, optTypes, p
                   {values.map(val => {
                     const isSelected = selectedOptions[String(type.id)] === val.id
                     const soldOut = isValueSoldOut(type.id, val.id)
+                    const rep = repImageFor(sortedImages, type.id, val.id)
+                    const onPick = () => !soldOut && setSelectedOptions(s => ({ ...s, [String(type.id)]: val.id }))
+                    // 有代表圖 → 圖片 chip（點了選此值，與 gallery 過濾互補）；沒有 → 文字 chip
+                    if (rep) {
+                      return (
+                        <button
+                          key={val.id}
+                          onClick={onPick}
+                          title={val.value}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 6,
+                            padding: '3px 12px 3px 3px', borderRadius: 22, fontSize: 13,
+                            background: isSelected ? 'var(--text)' : 'transparent',
+                            color: isSelected ? '#fff' : soldOut ? 'var(--text-3)' : 'var(--text-2)',
+                            border: isSelected ? '0.5px solid var(--text)' : '0.5px solid var(--border)',
+                            cursor: soldOut ? 'default' : 'pointer',
+                            textDecoration: soldOut ? 'line-through' : 'none',
+                            transition: 'all .15s', opacity: soldOut ? 0.5 : 1,
+                          }}
+                        >
+                          <img src={rep.url} alt="" style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />
+                          {val.value}
+                        </button>
+                      )
+                    }
                     return (
                       <button
                         key={val.id}
-                        onClick={() => !soldOut && setSelectedOptions(s => ({ ...s, [String(type.id)]: val.id }))}
+                        onClick={onPick}
                         style={{
                           fontSize: 13, padding: '4px 12px', borderRadius: 20,
                           background: isSelected ? 'var(--text)' : 'transparent',
@@ -271,6 +300,26 @@ export default function ProductDetail({ sp, variants, customOptions, optTypes, p
       </div>
     </div>
   )
+}
+
+// 規格對應圖片：tag_filter={"<typeId>":[valueId,...]}；null=共用圖。
+// 規則：每個有設限的維度，目前選到的值要落在允許清單內才顯示。
+function imageMatches(img, selectedOptions) {
+  const tf = img.tag_filter
+  if (!tf) return true
+  return Object.entries(tf).every(([typeId, vals]) => {
+    if (!Array.isArray(vals) || vals.length === 0) return true
+    const sel = selectedOptions[typeId]
+    return sel == null || vals.map(Number).includes(Number(sel))
+  })
+}
+
+// 某規格值的代表圖：images 已依 sort_order 排序，取第一張綁到該值的圖
+function repImageFor(images, typeId, valueId) {
+  return images.find(img => {
+    const allowed = img.tag_filter?.[String(typeId)]
+    return Array.isArray(allowed) && allowed.map(Number).includes(Number(valueId))
+  }) || null
 }
 
 function ImageGallery({ images, name }) {

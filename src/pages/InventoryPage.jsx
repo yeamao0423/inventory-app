@@ -116,7 +116,7 @@ export default function InventoryPage() {
   async function fetchProducts() {
     const { data } = await supabase
       .from('products')
-      .select('*, product_images(id, url, sort_order), categories(id, name), product_tags(tag_id), product_variants(id, options, stock, variant_price), storefront_products(id, shop_price, published, sold_out, collection_end, skip_stock_check, created_at)')
+      .select('*, product_images(id, url, sort_order, tag_filter), categories(id, name), product_tags(tag_id), product_variants(id, options, stock, variant_price), storefront_products(id, shop_price, published, sold_out, collection_end, skip_stock_check, created_at)')
       .eq('store_id', storeId)
       .order('name')
     setProducts(data || [])
@@ -672,12 +672,93 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete, exi
     [...(product.product_images || [])].sort((a, b) => a.sort_order - b.sort_order)
   )
   const [uploading, setUploading] = useState(false)
+  const [tagPanelFor, setTagPanelFor] = useState(null)
   const [categories, setCategories] = useState([])
   const [allTags, setAllTags] = useState([])
   const [selectedCategory, setSelectedCategory] = useState(product.category_id ? String(product.category_id) : '')
   const [selectedTags, setSelectedTags] = useState(
     (product.product_tags || []).map(pt => pt.tag_id)
   )
+
+  // ── 規格對應圖片 ──
+  // 此商品有用到的規格類型與值（由 variants 推導，依 sort_order 排序）
+  const usedTypeValues = (() => {
+    const map = new Map() // typeId -> Set(valueId)
+    ;(product.product_variants || []).forEach(v =>
+      Object.entries(v.options || {}).forEach(([tid, vid]) => {
+        const t = Number(tid)
+        if (!map.has(t)) map.set(t, new Set())
+        map.get(t).add(Number(vid))
+      })
+    )
+    return optionTypes
+      .filter(t => map.has(t.id))
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .map(t => ({
+        id: t.id, name: t.name,
+        values: (t.variant_option_values || [])
+          .filter(v => map.get(t.id).has(v.id))
+          .sort((a, b) => a.sort_order - b.sort_order),
+      }))
+  })()
+  const hasVariants = usedTypeValues.length > 0
+
+  // 某張圖在某維度某值是否允許：tag_filter 為 null 或該維度未設限 → 全允許
+  function isValAllowed(img, typeId, valueId) {
+    const arr = img.tag_filter?.[String(typeId)]
+    if (!Array.isArray(arr)) return true
+    return arr.map(Number).includes(Number(valueId))
+  }
+
+  // 勾選變動後重建 tag_filter：某維度全勾→省略；整體皆不設限→null
+  function buildTagFilter(img, typeId, valueId, checked) {
+    const next = {}
+    usedTypeValues.forEach(t => {
+      const allIds = t.values.map(v => v.id)
+      let allowed = allIds.filter(vid => isValAllowed(img, t.id, vid))
+      if (t.id === typeId) {
+        allowed = checked
+          ? [...new Set([...allowed, valueId])]
+          : allowed.filter(v => v !== valueId)
+      }
+      if (allowed.length > 0 && allowed.length < allIds.length) next[String(t.id)] = allowed
+    })
+    return Object.keys(next).length ? next : null
+  }
+
+  async function toggleImageTag(img, typeId, valueId, checked) {
+    // 防呆：不允許把某維度取消到一個都不剩（會變成「不分」反而全顯示，違反直覺）
+    if (!checked) {
+      const remaining = usedTypeValues.find(t => t.id === typeId).values
+        .filter(v => v.id !== valueId && isValAllowed(img, typeId, v.id))
+      if (remaining.length === 0) return
+    }
+    const tag_filter = buildTagFilter(img, typeId, valueId, checked)
+    await supabase.from('product_images').update({ tag_filter }).eq('id', img.id)
+    setImages(prev => prev.map(x => x.id === img.id ? { ...x, tag_filter } : x))
+    if (onSaved) onSaved()
+  }
+
+  // 縮圖下方摘要
+  function tagSummary(img) {
+    if (!img.tag_filter || !Object.keys(img.tag_filter).length) return '共用'
+    const parts = []
+    usedTypeValues.forEach(t => {
+      const arr = img.tag_filter[String(t.id)]
+      if (Array.isArray(arr) && arr.length)
+        parts.push(t.values.filter(v => arr.map(Number).includes(v.id)).map(v => v.value).join('/'))
+    })
+    return parts.join('·') || '共用'
+  }
+
+  // 軟提示：哪些規格值沒有任何專屬圖（將沿用共用圖）
+  const valuesWithoutImage = hasVariants
+    ? usedTypeValues.flatMap(t =>
+        t.values.filter(v => !images.some(img => {
+          const arr = img.tag_filter?.[String(t.id)]
+          return Array.isArray(arr) && arr.map(Number).includes(v.id)
+        })).map(v => v.value))
+    : []
 
   useEffect(() => {
     if (!storeId) return
@@ -729,7 +810,7 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete, exi
     if (newUrls.length > 0) {
       const { data: inserted } = await supabase.from('product_images')
         .insert(newUrls.map(r => ({ ...r, product_id: product.id })))
-        .select('id, url, sort_order')
+        .select('id, url, sort_order, tag_filter')
       setImages(prev => [...prev, ...(inserted || [])])
     }
     setUploading(false)
@@ -779,31 +860,78 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete, exi
         {images.length > 0 && (
           <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:10}}>
             {images.map((img, idx) => (
-              <div key={img.id ?? idx} style={{position:'relative'}}>
-                <img src={img.url} style={{width:72,height:72,objectFit:'cover',borderRadius:8,display:'block'}} />
-                {idx === 0 && (
-                  <span style={{position:'absolute',top:4,left:4,background:'rgba(0,0,0,0.65)',color:'#fff',fontSize:10,fontWeight:600,padding:'1px 6px',borderRadius:6}}>封面</span>
-                )}
-                {canEdit && (
-                  <>
-                    <button
-                      onClick={() => deleteImage(img.id, idx)}
-                      style={{position:'absolute',top:-6,right:-6,width:20,height:20,borderRadius:'50%',background:'var(--red)',color:'#fff',border:'none',cursor:'pointer',fontSize:12,lineHeight:'20px',textAlign:'center',padding:0}}
-                    >×</button>
-                    {images.length > 1 && (
-                      <div style={{position:'absolute',bottom:0,left:0,right:0,display:'flex',borderBottomLeftRadius:8,borderBottomRightRadius:8,overflow:'hidden'}}>
-                        <button onClick={() => moveImage(idx, -1)} disabled={idx === 0}
-                          style={{flex:1,border:'none',background:'rgba(0,0,0,0.55)',color:'#fff',cursor:idx===0?'default':'pointer',opacity:idx===0?0.35:1,fontSize:13,padding:'2px 0'}}
-                          aria-label="往前移">◀</button>
-                        <button onClick={() => moveImage(idx, 1)} disabled={idx === images.length - 1}
-                          style={{flex:1,border:'none',borderLeft:'1px solid rgba(255,255,255,0.25)',background:'rgba(0,0,0,0.55)',color:'#fff',cursor:idx===images.length-1?'default':'pointer',opacity:idx===images.length-1?0.35:1,fontSize:13,padding:'2px 0'}}
-                          aria-label="往後移">▶</button>
-                      </div>
-                    )}
-                  </>
+              <div key={img.id ?? idx} style={{display:'flex',flexDirection:'column',gap:4,alignItems:'center'}}>
+                <div style={{position:'relative'}}>
+                  <img src={img.url} style={{width:72,height:72,objectFit:'cover',borderRadius:8,display:'block'}} />
+                  {idx === 0 && (
+                    <span style={{position:'absolute',top:4,left:4,background:'rgba(0,0,0,0.65)',color:'#fff',fontSize:10,fontWeight:600,padding:'1px 6px',borderRadius:6}}>封面</span>
+                  )}
+                  {canEdit && (
+                    <>
+                      <button
+                        onClick={() => deleteImage(img.id, idx)}
+                        style={{position:'absolute',top:-6,right:-6,width:20,height:20,borderRadius:'50%',background:'var(--red)',color:'#fff',border:'none',cursor:'pointer',fontSize:12,lineHeight:'20px',textAlign:'center',padding:0}}
+                      >×</button>
+                      {images.length > 1 && (
+                        <div style={{position:'absolute',bottom:0,left:0,right:0,display:'flex',borderBottomLeftRadius:8,borderBottomRightRadius:8,overflow:'hidden'}}>
+                          <button onClick={() => moveImage(idx, -1)} disabled={idx === 0}
+                            style={{flex:1,border:'none',background:'rgba(0,0,0,0.55)',color:'#fff',cursor:idx===0?'default':'pointer',opacity:idx===0?0.35:1,fontSize:13,padding:'2px 0'}}
+                            aria-label="往前移">◀</button>
+                          <button onClick={() => moveImage(idx, 1)} disabled={idx === images.length - 1}
+                            style={{flex:1,border:'none',borderLeft:'1px solid rgba(255,255,255,0.25)',background:'rgba(0,0,0,0.55)',color:'#fff',cursor:idx===images.length-1?'default':'pointer',opacity:idx===images.length-1?0.35:1,fontSize:13,padding:'2px 0'}}
+                            aria-label="往後移">▶</button>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+                {canEdit && hasVariants && (
+                  <button
+                    onClick={() => setTagPanelFor(tagPanelFor === img.id ? null : img.id)}
+                    title="設定適用規格"
+                    style={{maxWidth:72,fontSize:10,lineHeight:1.2,padding:'2px 6px',borderRadius:6,border:'0.5px solid var(--border)',background:tagPanelFor===img.id?'var(--text)':'transparent',color:tagPanelFor===img.id?'#fff':'var(--text-2)',cursor:'pointer',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}
+                  >🏷 {tagSummary(img)}</button>
                 )}
               </div>
             ))}
+          </div>
+        )}
+
+        {/* 規格對應圖片：單張圖的適用規格面板 */}
+        {canEdit && hasVariants && tagPanelFor != null && (() => {
+          const img = images.find(x => x.id === tagPanelFor)
+          if (!img) return null
+          const idx = images.findIndex(x => x.id === tagPanelFor)
+          return (
+            <div style={{border:'0.5px solid var(--border)',borderRadius:10,padding:12,marginBottom:10,background:'rgba(0,0,0,0.02)'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                <span style={{fontSize:12,fontWeight:600}}>第 {idx + 1} 張圖 · 適用規格</span>
+                <button onClick={() => setTagPanelFor(null)} style={{border:'none',background:'transparent',cursor:'pointer',fontSize:12,color:'var(--text-3)'}}>收合</button>
+              </div>
+              {usedTypeValues.map(t => (
+                <div key={t.id} style={{marginBottom:8}}>
+                  <div style={{fontSize:11,color:'var(--text-3)',marginBottom:4}}>{t.name}</div>
+                  <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                    {t.values.map(v => {
+                      const on = isValAllowed(img, t.id, v.id)
+                      return (
+                        <button key={v.id}
+                          onClick={() => toggleImageTag(img, t.id, v.id, !on)}
+                          style={{fontSize:12,padding:'3px 10px',borderRadius:14,cursor:'pointer',border:'0.5px solid var(--border)',background:on?'var(--text)':'transparent',color:on?'#fff':'var(--text-3)'}}
+                        >{on ? '✓ ' : ''}{v.value}</button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+              <div style={{fontSize:11,color:'var(--text-3)',marginTop:4}}>全選＝此維度不分；取消不適用的值即可。整張都全選＝共用圖（所有規格都顯示）。</div>
+            </div>
+          )
+        })()}
+
+        {hasVariants && valuesWithoutImage.length > 0 && (
+          <div style={{fontSize:11,color:'var(--text-3)',marginBottom:10}}>
+            ⓘ 尚無專屬圖的規格：{valuesWithoutImage.join('、')}（將沿用共用圖）
           </div>
         )}
         {canEdit && (

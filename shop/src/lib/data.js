@@ -140,7 +140,7 @@ export const getProductDetail = cache(async (productId) => {
     async () => {
       const { data: sp } = await supabase
         .from('storefront_products')
-        .select('*, products:shop_products!inner(*, product_images(id, url, sort_order))')
+        .select('*, products:shop_products!inner(*, product_images(id, url, sort_order, tag_filter))')
         .eq('product_id', productId)
         .eq('published', true)
         .maybeSingle()
