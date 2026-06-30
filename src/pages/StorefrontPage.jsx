@@ -8,7 +8,7 @@ import {
 } from '../lib/socialShare'
 import { buildCollageBlob, canShareFile, downloadBlob } from '../lib/shareImage'
 import { revalidateShop } from '../lib/revalidateShop'
-import { toTwdCost, calcMargin } from '../lib/pricing'
+import { toTwdCost, calcMargin, getEffectivePrices, calcMarginRange } from '../lib/pricing'
 import { cmpNum, cmpStr, cmpDate } from '../lib/sortUtils'
 import { Pill } from '../components/MenuPopover'
 import ListToolbar from '../components/ListToolbar'
@@ -18,27 +18,33 @@ const STORE_SORT = [
   { group: '時間', items: [{ value: 'listed_desc', label: '上架 新→舊' }, { value: 'listed_asc', label: '上架 舊→新' }]},
   { group: '庫存', items: [{ value: 'stock_asc', label: '庫存 少→多' }, { value: 'stock_desc', label: '庫存 多→少' }]},
   { group: '獲利', items: [
-    { value: 'margin_desc', label: '毛利率 高→低' }, { value: 'margin_asc', label: '毛利率 低→高' },
     { value: 'price_desc', label: '售價 高→低' }, { value: 'price_asc', label: '售價 低→高' },
   ]},
   { group: '名稱', items: [{ value: 'name_asc', label: '名稱 A→Z' }]},
   { group: '其他', items: [{ value: 'manual', label: '手動排序' }]},
 ]
 
-// listing 毛利率（沒成本/缺匯率 → null，由比較器沉底）
-function listingMarginRate(item, rates) {
-  if (item.shop_price == null) return null
-  const m = calcMargin(item.shop_price, toTwdCost(item.products?.cost, item.products?.currency, rates))
-  return m ? m.rate : null
+// 毛利率區間 → 顯示字串（單一值不顯示成區間）
+function fmtMarginRate(range) {
+  if (!range) return null
+  const { min, max } = range
+  return min.rate === max.rate ? `${min.rate}%` : `${min.rate}%~${max.rate}%`
 }
 
-function storeSortComparator(sort, rates) {
+// 毛利金額區間 → 顯示字串（NT$；單一值不顯示成區間）
+function fmtMarginAmount(range) {
+  if (!range) return null
+  const { min, max } = range
+  return min.amount === max.amount
+    ? `NT$${min.amount.toLocaleString()}`
+    : `NT$${min.amount.toLocaleString()}~${max.amount.toLocaleString()}`
+}
+
+function storeSortComparator(sort) {
   switch (sort) {
     case 'listed_asc': return cmpDate(i => i.created_at, 'asc')
     case 'stock_asc': return cmpNum(i => i.products?.quantity, 'asc')
     case 'stock_desc': return cmpNum(i => i.products?.quantity, 'desc')
-    case 'margin_desc': return cmpNum(i => listingMarginRate(i, rates), 'desc')
-    case 'margin_asc': return cmpNum(i => listingMarginRate(i, rates), 'asc')
     case 'price_desc': return cmpNum(i => i.shop_price, 'desc')
     case 'price_asc': return cmpNum(i => i.shop_price, 'asc')
     case 'name_asc': return cmpStr(i => i.products?.name, 'asc')
@@ -94,7 +100,7 @@ export default function StorefrontPage() {
     setLoading(true)
     if (tab === 'listings') {
       const [{ data: sp }, { data: pr }, { data: cats }, { data: tgs }] = await Promise.all([
-        supabase.from('storefront_products').select('*, products(*, product_images(id, url, sort_order), categories(id, name), product_tags(tag_id))').eq('store_id', storeId).order('sort_order'),
+        supabase.from('storefront_products').select('*, products(*, product_images(id, url, sort_order), categories(id, name), product_tags(tag_id), product_variants(variant_price, sale_price, stock))').eq('store_id', storeId).order('sort_order'),
         supabase.from('products').select('id, name, sku, cost, currency').eq('store_id', storeId).order('name'),
         supabase.from('categories').select('id, name').eq('store_id', storeId).order('sort_order').order('name'),
         supabase.from('tags').select('id, name').eq('store_id', storeId).order('sort_order').order('name'),
@@ -374,7 +380,7 @@ export default function StorefrontPage() {
           // 只看未設成本
           if (filterNoCost && item.products?.cost != null) return false
           return true
-        }).sort(storeSortComparator(sort, exchangeRates))
+        }).sort(storeSortComparator(sort))
         // Pagination
         const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
         const safePage = Math.min(page, totalPages)
@@ -423,28 +429,43 @@ export default function StorefrontPage() {
                       {saleNow && <span className="badge" style={{ fontSize: 11, background: 'var(--red)', color: '#fff' }}>特價中</span>}
                       {saleScheduled && <span className="badge badge-warn" style={{ fontSize: 11 }}>特價已排程</span>}
                     </div>
-                    <div className="muted fs12">
-                      {item.products?.sku && <span>{item.products.sku} · </span>}
+                    {/* 售價 / 特價 */}
+                    <div className="fs13" style={{ color: 'var(--text-2)' }}>
                       {saleNow
-                        ? <>售價 <span style={{ textDecoration: 'line-through' }}>NT${Number(item.shop_price).toLocaleString()}</span> <span style={{ color: 'var(--red)', fontWeight: 600 }}>特價 NT${Number(item.sale_price).toLocaleString()}</span></>
-                        : <>售價 NT${Number(item.shop_price).toLocaleString()}</>}
-                      {item.products?.cost != null && (() => {
-                        const cur = item.products.currency || 'TWD'
-                        const cost = Number(item.products.cost)
-                        const isTWD = cur === 'TWD'
-                        const rate = exchangeRates[cur]
-                        const twdCost = !isTWD && rate ? Math.round(cost * rate * 10) / 10 : null
-                        const margin = calcMargin(item.shop_price, toTwdCost(cost, cur, exchangeRates))
-                        return (
-                          <span style={{ color: 'var(--text-3)' }}>
-                            {' · 成本 '}{cost.toLocaleString()} {cur}
-                            {twdCost != null && ` ≈ ${twdCost.toLocaleString()} TWD`}
-                            {margin && ` · 毛利率 ${margin.rate}%`}
-                          </span>
-                        )
-                      })()}
+                        ? <>
+                            <span style={{ textDecoration: 'line-through', color: 'var(--text-3)' }}>NT${Number(item.shop_price).toLocaleString()}</span>
+                            {' '}<span style={{ color: 'var(--red)', fontWeight: 700 }}>NT${Number(item.sale_price).toLocaleString()}</span>
+                          </>
+                        : <span style={{ fontWeight: 700 }}>NT${Number(item.shop_price).toLocaleString()}</span>}
                     </div>
-                    {item.name_en && <div className="muted fs12">{item.name_en}</div>}
+                    {/* SKU · 成本 · 毛利區間 */}
+                    {(item.products?.sku || item.products?.cost != null) && (
+                      <div className="muted fs11">
+                        {item.products?.sku && <span>{item.products.sku}</span>}
+                        {item.products?.cost != null && (() => {
+                          const cur = item.products.currency || 'TWD'
+                          const cost = Number(item.products.cost)
+                          const isTWD = cur === 'TWD'
+                          const rate = exchangeRates[cur]
+                          const twdCost = !isTWD && rate ? Math.round(cost * rate * 10) / 10 : null
+                          // 毛利率區間：跨所有規格的有效價（特價中→特價區間）對商品成本計算
+                          const { onSale, effectives } = getEffectivePrices(item, now)
+                          const range = calcMarginRange(effectives, toTwdCost(cost, cur, exchangeRates))
+                          return (
+                            <>
+                              {item.products?.sku && ' · '}成本 {cost.toLocaleString()} {cur}
+                              {twdCost != null && ` ≈ ${twdCost.toLocaleString()} TWD`}
+                              {range && (
+                                <span style={{ color: range.min.amount >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                                  {' · '}{onSale ? '特價毛利' : '毛利'} {fmtMarginRate(range)}
+                                </span>
+                              )}
+                            </>
+                          )
+                        })()}
+                      </div>
+                    )}
+                    {item.name_en && <div className="muted fs11">{item.name_en}</div>}
                   </div>
                 </div>
                 {/* 底部操作按鈕 */}
@@ -1142,14 +1163,18 @@ function ListingSheet({ item, products, onClose, onSaved }) {
               const isTWD = cur === 'TWD'
               const rate = exchangeRates[cur]
               const twdCost = !isTWD && rate ? Math.round(cost * rate * 10) / 10 : null
-              const margin = calcMargin(form.shop_price, toTwdCost(cost, cur, exchangeRates))
+              // 原價毛利區間：各規格原價（variant_price ?? 商城售價）對成本計算
+              const base = Number(form.shop_price) || 0
+              const regs = (variants.length ? variants : [null]).map(v =>
+                v && v.variant_price != null ? Number(v.variant_price) : base)
+              const range = calcMarginRange(regs, toTwdCost(cost, cur, exchangeRates))
               return (
                 <span className="muted" style={{ fontWeight: 400, marginLeft: 8 }}>
                   成本 {cost.toLocaleString()} {cur}
                   {twdCost != null && ` ≈ ${twdCost.toLocaleString()} TWD`}
-                  {margin && (
-                    <span style={{ color: margin.amount >= 0 ? 'var(--green)' : 'var(--red)', marginLeft: 6 }}>
-                      · 毛利率 {margin.rate}%（NT${margin.amount.toLocaleString()}）
+                  {range && (
+                    <span style={{ color: range.min.amount >= 0 ? 'var(--green)' : 'var(--red)', marginLeft: 6 }}>
+                      · 毛利率 {fmtMarginRate(range)}（{fmtMarginAmount(range)}）
                     </span>
                   )}
                 </span>
@@ -1184,17 +1209,24 @@ function ListingSheet({ item, products, onClose, onSaved }) {
                   if (!form.sale_price || !reg) return null
                   const pct = reg > 0 ? Math.round((sale / reg) * 100) / 10 : null // 幾折
                   const prod = editingItem?.products || products.find(p => p.id === Number(form.product_id))
-                  const margin = prod?.cost != null
-                    ? calcMargin(sale, toTwdCost(Number(prod.cost), prod.currency || 'TWD', exchangeRates))
+                  const costTwd = prod?.cost != null
+                    ? toTwdCost(Number(prod.cost), prod.currency || 'TWD', exchangeRates)
                     : null
+                  // 特價毛利區間：各規格有效特價（規格特價 ?? 全品特價，需低於該規格原價）
+                  const saleEffectives = (variants.length ? variants : [null]).map(v => {
+                    const vReg = v && v.variant_price != null ? Number(v.variant_price) : reg
+                    const cand = v && v.sale_price != null ? Number(v.sale_price) : sale
+                    return cand != null && cand < vReg ? cand : vReg
+                  })
+                  const range = calcMarginRange(saleEffectives, costTwd)
                   return (
                     <span className="muted" style={{ fontWeight: 400, marginLeft: 8 }}>
                       {sale >= reg
                         ? <span style={{ color: 'var(--red)' }}>需低於原價 {reg.toLocaleString()}</span>
                         : <>約 {pct} 折
-                            {margin && (
-                              <span style={{ color: margin.amount >= 0 ? 'var(--green)' : 'var(--red)', marginLeft: 6 }}>
-                                · 特價毛利率 {margin.rate}%（NT${margin.amount.toLocaleString()}）
+                            {range && (
+                              <span style={{ color: range.min.amount >= 0 ? 'var(--green)' : 'var(--red)', marginLeft: 6 }}>
+                                · 特價毛利率 {fmtMarginRate(range)}（{fmtMarginAmount(range)}）
                               </span>
                             )}
                           </>}
@@ -1254,6 +1286,10 @@ function ListingSheet({ item, products, onClose, onSaved }) {
                 readOnlyStock={isEditing}
                 onSale={form.on_sale}
                 salePrice={form.sale_price}
+                costTwd={(() => {
+                  const prod = editingItem?.products || products.find(p => p.id === Number(form.product_id))
+                  return prod?.cost != null ? toTwdCost(Number(prod.cost), prod.currency || 'TWD', exchangeRates) : null
+                })()}
               />
             )}
 
@@ -1426,7 +1462,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
   )
 }
 
-function VariantManager({ variants, setVariants, optionTypes, productId, productName, shopPrice, resolveVariantLabel, readOnlyStock = false, onSale = false, salePrice = '' }) {
+function VariantManager({ variants, setVariants, optionTypes, productId, productName, shopPrice, resolveVariantLabel, readOnlyStock = false, onSale = false, salePrice = '', costTwd = null }) {
   // Step 1 state: which types and values are selected for this product
   const [selectedTypes, setSelectedTypes] = useState({})   // { typeId: true/false }
   const [selectedValues, setSelectedValues] = useState({})  // { typeId: Set of valueIds }
@@ -1718,6 +1754,19 @@ function VariantManager({ variants, setVariants, optionTypes, productId, product
                       <tr key={`${v.id}-${v.stock}-${v.variant_price}-${v.sale_price}`} style={{ borderBottom: '1px solid var(--border-light, #f0f0f0)' }}>
                         <td style={tdStyle}>
                           <span className="fw600">{resolveVariantLabel(v.options)}</span>
+                          {costTwd != null && (() => {
+                            const reg = v.variant_price != null ? Number(v.variant_price) : shopPrice
+                            const rm = calcMargin(reg, costTwd)
+                            const cand = v.sale_price != null ? Number(v.sale_price) : productSale
+                            const sm = onSale && cand != null && cand < reg ? calcMargin(cand, costTwd) : null
+                            if (!rm && !sm) return null
+                            return (
+                              <div className="fs11" style={{ marginTop: 2 }}>
+                                {rm && <span style={{ color: rm.amount >= 0 ? 'var(--green)' : 'var(--red)' }}>毛利 {rm.rate}%</span>}
+                                {sm && <span style={{ color: sm.amount >= 0 ? 'var(--green)' : 'var(--red)', marginLeft: 6 }}>特價 {sm.rate}%</span>}
+                              </div>
+                            )
+                          })()}
                         </td>
                         <td style={{ ...tdStyle, textAlign: 'center' }}>
                           {readOnlyStock ? (

@@ -22,20 +22,11 @@ const SORT_OPTIONS = [
   ]},
   { group: '庫存', items: [{ value: 'stock_asc', label: '庫存 少→多' }, { value: 'stock_desc', label: '庫存 多→少' }]},
   { group: '獲利', items: [
-    { value: 'margin_desc', label: '毛利率 高→低' }, { value: 'margin_asc', label: '毛利率 低→高' },
     { value: 'price_desc', label: '售價 高→低' }, { value: 'price_asc', label: '售價 低→高' },
     { value: 'cost_desc', label: '成本 高→低' }, { value: 'cost_asc', label: '成本 低→高' },
   ]},
   { group: '名稱', items: [{ value: 'name_asc', label: '名稱 A→Z' }]},
 ]
-
-// 毛利率（沒成本/沒上架/缺匯率 → null，由比較器沉底）
-function marginRate(p, rates) {
-  const sf = storefrontOf(p)
-  if (!sf || sf.shop_price == null) return null
-  const m = calcMargin(sf.shop_price, toTwdCost(p.cost, p.currency, rates))
-  return m ? m.rate : null
-}
 
 function sortComparator(sort, rates) {
   switch (sort) {
@@ -44,8 +35,6 @@ function sortComparator(sort, rates) {
     case 'listed_asc': return cmpDate(p => storefrontOf(p)?.created_at, 'asc')
     case 'stock_asc': return cmpNum(totalStock, 'asc')
     case 'stock_desc': return cmpNum(totalStock, 'desc')
-    case 'margin_desc': return cmpNum(p => marginRate(p, rates), 'desc')
-    case 'margin_asc': return cmpNum(p => marginRate(p, rates), 'asc')
     case 'price_desc': return cmpNum(p => storefrontOf(p)?.shop_price, 'desc')
     case 'price_asc': return cmpNum(p => storefrontOf(p)?.shop_price, 'asc')
     case 'cost_desc': return cmpNum(p => toTwdCost(p.cost, p.currency, rates), 'desc')
