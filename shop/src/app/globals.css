@@ -82,6 +82,7 @@ input, textarea, select { font-family: inherit; }
 .product-price { font-size: 17px; font-weight: 700; }
 @media (max-width: 600px) { .product-price { font-size: 14px; } }
 .product-price-old { font-size: 13px; color: var(--text-3); text-decoration: line-through; margin-left: 6px; font-weight: 400; }
+.product-price-sale { color: var(--red); }
 .product-variants-hint { font-size: 12px; color: var(--text-3); margin-top: 4px; }
 @media (max-width: 600px) { .product-variants-hint { font-size: 11px; } }
 .product-badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 20px; line-height: 1.4; }
@@ -89,6 +90,7 @@ input, textarea, select { font-family: inherit; }
 .product-badge-soldout { background: var(--red-bg); color: var(--red); }
 .product-badge-expired { background: var(--border-light); color: var(--text-3); }
 .product-badge-collection { background: var(--amber-bg); color: var(--amber); }
+.product-badge-sale { background: var(--red); color: #fff; }
 .product-tag { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 12px; background: #f0f6ff; color: #2563eb; border: 1px solid #c5d9f7; line-height: 1.4; }
 @media (max-width: 600px) { .product-tag { font-size: 10px; padding: 1px 6px; } }
 
@@ -170,6 +172,7 @@ input, textarea, select { font-family: inherit; }
 }
 .filter-tag:hover { border-color: #2563eb; }
 .filter-tag-active { background: #2563eb !important; color: #fff !important; border-color: #2563eb !important; }
+.filter-tag-sale-active { background: var(--red) !important; color: #fff !important; border-color: var(--red) !important; }
 .filter-chip {
   display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px;
   border-radius: 16px; font-size: 12px; font-weight: 600; cursor: pointer;
@@ -239,6 +242,9 @@ input, textarea, select { font-family: inherit; }
 @media (max-width: 600px) { .detail-name { font-size: 20px; } }
 .detail-price { font-size: 24px; font-weight: 700; margin-bottom: 24px; }
 @media (max-width: 600px) { .detail-price { font-size: 20px; margin-bottom: 16px; } }
+.detail-price-sale { color: var(--red); }
+.detail-price-old { font-size: 16px; font-weight: 400; color: var(--text-3); text-decoration: line-through; }
+@media (max-width: 600px) { .detail-price-old { font-size: 14px; } }
 .detail-desc { font-size: 15px; color: var(--text-2); line-height: 1.7; margin-bottom: 28px; }
 .spec-label { font-size: 13px; font-weight: 600; margin-bottom: 10px; color: var(--text-2); text-transform: uppercase; letter-spacing: .05em; }
 .spec-group { margin-bottom: 20px; }

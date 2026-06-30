@@ -3,6 +3,7 @@ import { useEffect, useState, useRef } from 'react'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useI18n } from '../layout'
+import { getCardPricing } from '../../lib/salePrice'
 
 // 資料由 server component（page.jsx）以 props 帶入。分頁狀態走 URL ?page=N。
 export default function ProductList({ products, categories, tags }) {
@@ -19,6 +20,7 @@ export default function ProductList({ products, categories, tags }) {
   const [sidebarOpen, setSidebarOpen] = useState({ tags: true, category: true, brand: true })
   const [sortBy, setSortBy] = useState('newest') // newest | oldest | price_asc | price_desc
   const [inStockOnly, setInStockOnly] = useState(true)
+  const [saleOnly, setSaleOnly] = useState(false)
   const PAGE_SIZE = 20
 
   // Distinct sources from published products
@@ -41,20 +43,30 @@ export default function ProductList({ products, categories, tags }) {
     const skipStock = sp.skip_stock_check
     const stockUnavailable = !isCollection && !skipStock && allVariantsSoldOut
     const matchStock = !inStockOnly || (!sp.sold_out && !collectionExpired && !stockUnavailable)
-    return matchSearch && matchCat && matchTag && matchSource && matchStock
+    const matchSale = !saleOnly || getCardPricing(sp).onSale
+    return matchSearch && matchCat && matchTag && matchSource && matchStock && matchSale
   })
 
   // Sort
   const sortOptions = [
     { value: 'newest', label: lang === 'zh' ? '最新上架' : 'Newest' },
     { value: 'oldest', label: lang === 'zh' ? '最早上架' : 'Oldest' },
+    { value: 'sale_first', label: lang === 'zh' ? '特價優先' : 'On Sale First' },
     { value: 'price_asc', label: lang === 'zh' ? '價格低到高' : 'Price: Low to High' },
     { value: 'price_desc', label: lang === 'zh' ? '價格高到低' : 'Price: High to Low' },
   ]
+  // 有效價最低值（特價中則為特價，否則原價）— 排序用
+  const effPrice = sp => getCardPricing(sp).saleMin
   const sorted = [...filtered].sort((a, b) => {
     if (sortBy === 'oldest') return new Date(a.created_at) - new Date(b.created_at)
-    if (sortBy === 'price_asc') return (a.shop_price || 0) - (b.shop_price || 0)
-    if (sortBy === 'price_desc') return (b.shop_price || 0) - (a.shop_price || 0)
+    if (sortBy === 'sale_first') {
+      const sa = getCardPricing(a).onSale ? 0 : 1
+      const sb = getCardPricing(b).onSale ? 0 : 1
+      if (sa !== sb) return sa - sb
+      return new Date(b.created_at) - new Date(a.created_at)
+    }
+    if (sortBy === 'price_asc') return effPrice(a) - effPrice(b)
+    if (sortBy === 'price_desc') return effPrice(b) - effPrice(a)
     return new Date(b.created_at) - new Date(a.created_at) // newest
   })
 
@@ -83,13 +95,13 @@ export default function ProductList({ products, categories, tags }) {
     const qs = params.toString()
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, activeCat, activeTags, activeSource, sortBy, inStockOnly])
+  }, [search, activeCat, activeTags, activeSource, sortBy, inStockOnly, saleOnly])
 
   function toggleTag(id) {
     setActiveTags(prev => prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id])
   }
 
-  const hasActiveFilter = activeCat || activeSource || activeTags.length > 0 || inStockOnly
+  const hasActiveFilter = activeCat || activeSource || activeTags.length > 0 || inStockOnly || saleOnly
   const zh = lang === 'zh'
 
   // Shared filter summary chips
@@ -99,6 +111,11 @@ export default function ProductList({ products, categories, tags }) {
       {inStockOnly && (
         <span className="filter-chip" onClick={() => setInStockOnly(false)}>
           {zh ? '有貨' : 'In Stock'} ×
+        </span>
+      )}
+      {saleOnly && (
+        <span className="filter-chip" onClick={() => setSaleOnly(false)}>
+          {zh ? '特價中' : 'On Sale'} ×
         </span>
       )}
       {activeCat && (
@@ -120,7 +137,7 @@ export default function ProductList({ products, categories, tags }) {
         ) : null
       })}
       <button
-        onClick={() => { setActiveCat(null); setActiveSource(null); setActiveTags([]); setInStockOnly(false) }}
+        onClick={() => { setActiveCat(null); setActiveSource(null); setActiveTags([]); setInStockOnly(false); setSaleOnly(false) }}
         style={{ fontSize: 12, color: 'var(--red)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 6px' }}
       >
         {zh ? '清除全部' : 'Clear all'}
@@ -238,6 +255,10 @@ export default function ProductList({ products, categories, tags }) {
                   className={inStockOnly ? 'filter-tag filter-tag-active' : 'filter-tag'}>
                   {zh ? '有貨' : 'In Stock'}
                 </button>
+                <button onClick={() => setSaleOnly(v => !v)}
+                  className={saleOnly ? 'filter-tag filter-tag-sale-active' : 'filter-tag'}>
+                  {zh ? '特價中' : 'On Sale'}
+                </button>
                 {tags.map(tg => (
                   <button key={tg.id} onClick={() => toggleTag(tg.id)}
                     className={activeTags.includes(tg.id) ? 'filter-tag filter-tag-active' : 'filter-tag'}>
@@ -282,6 +303,10 @@ export default function ProductList({ products, categories, tags }) {
                     <button onClick={() => setInStockOnly(v => !v)}
                       className={inStockOnly ? 'filter-tag filter-tag-active' : 'filter-tag'}>
                       {zh ? '有貨' : 'In Stock'}
+                    </button>
+                    <button onClick={() => setSaleOnly(v => !v)}
+                      className={saleOnly ? 'filter-tag filter-tag-sale-active' : 'filter-tag'}>
+                      {zh ? '特價中' : 'On Sale'}
                     </button>
                     {tags.map(tg => (
                       <button key={tg.id} onClick={() => toggleTag(tg.id)}
@@ -388,6 +413,10 @@ function ProductCard({ sp, t, lang, allTags }) {
   const desc = lang === 'en' ? sp.desc_en : sp.desc_zh
   const thumb = [...(p.product_images || [])].sort((a, b) => a.sort_order - b.sort_order)[0]?.url
   const zh = lang === 'zh'
+  const card = getCardPricing(sp)
+  const fmtRange = (min, max) => min === max
+    ? `NT$${min.toLocaleString()}`
+    : `NT$${min.toLocaleString()}~${max.toLocaleString()}`
 
   // Resolve tag names
   const productTagIds = (p.product_tags || []).map(pt => pt.tag_id)
@@ -416,8 +445,13 @@ function ProductCard({ sp, t, lang, allTags }) {
         {thumb
           ? <img src={thumb} alt={name} className="product-img-placeholder" style={{objectFit:'cover'}} loading="lazy" />
           : <div className="product-img-placeholder">📦</div>}
-        {statusBadge && (
-          <div style={{ position: 'absolute', top: 8, left: 8 }}>{statusBadge}</div>
+        {(statusBadge || (card.onSale && !unavailable)) && (
+          <div style={{ position: 'absolute', top: 8, left: 8, display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
+            {statusBadge}
+            {card.onSale && !unavailable && (
+              <span className="product-badge product-badge-sale">{zh ? '特價' : 'Sale'}</span>
+            )}
+          </div>
         )}
       </div>
       <div className="product-info">
@@ -433,7 +467,14 @@ function ProductCard({ sp, t, lang, allTags }) {
         )}
         {desc && <div className="product-desc">{desc}</div>}
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-          <span className="product-price">NT${Number(sp.shop_price || 0).toLocaleString()}</span>
+          {card.onSale ? (
+            <>
+              <span className="product-price product-price-sale">{fmtRange(card.saleMin, card.saleMax)}</span>
+              <span className="product-price-old">{fmtRange(card.regularMin, card.regularMax)}</span>
+            </>
+          ) : (
+            <span className="product-price">{fmtRange(card.regularMin, card.regularMax)}</span>
+          )}
         </div>
         <div className="product-variants-hint">
           {unavailable

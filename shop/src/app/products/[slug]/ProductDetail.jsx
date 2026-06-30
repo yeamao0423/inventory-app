@@ -3,6 +3,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { useI18n } from '../../layout'
 import { useCart } from '../../layout'
+import { getActivePrice } from '../../../lib/salePrice'
 
 // 資料由 server component（page.jsx）以 props 帶入，這裡只負責互動。
 export default function ProductDetail({ sp, variants, customOptions, optTypes, productTags }) {
@@ -47,7 +48,9 @@ export default function ProductDetail({ sp, variants, customOptions, optTypes, p
   const stockSoldOut = stock <= 0 && !skipStock
   const isSoldOut = markedSoldOut || stockSoldOut
   const isUnavailable = isSoldOut || collectionExpired
-  const price = currentVariant?.variant_price != null ? Number(currentVariant.variant_price) : sp.shop_price + (currentVariant?.price_adjustment || 0)
+  const regularPrice = currentVariant?.variant_price != null ? Number(currentVariant.variant_price) : sp.shop_price + (currentVariant?.price_adjustment || 0)
+  const sale = getActivePrice(sp, regularPrice, currentVariant?.sale_price)
+  const price = sale.price
 
   // Human-readable label for cart
   const variantLabel = activeTypes.map(type => {
@@ -124,7 +127,15 @@ export default function ProductDetail({ sp, variants, customOptions, optTypes, p
               ))}
             </div>
           )}
-          <div className="detail-price">NT${Number(price).toLocaleString()}</div>
+          {sale.onSale ? (
+            <div className="detail-price" style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+              <span className="detail-price-sale">NT${Number(sale.price).toLocaleString()}</span>
+              <span className="detail-price-old">NT${Number(sale.original).toLocaleString()}</span>
+              <span className="product-badge product-badge-sale">{zh ? '特價' : 'Sale'}</span>
+            </div>
+          ) : (
+            <div className="detail-price">NT${Number(price).toLocaleString()}</div>
+          )}
           {desc && <p className="detail-desc">{desc}</p>}
 
           {/* Dynamic option selectors */}

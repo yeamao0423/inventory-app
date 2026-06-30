@@ -146,6 +146,7 @@ CREATE TABLE IF NOT EXISTS public.product_variants (
     stock integer DEFAULT 0 NOT NULL,
     price_adjustment numeric(10,2) DEFAULT 0,
     variant_price numeric(10,2) DEFAULT NULL,
+    sale_price numeric(10,2) DEFAULT NULL,
     created_at timestamptz DEFAULT now()
 );
 
@@ -172,6 +173,10 @@ CREATE TABLE IF NOT EXISTS public.storefront_products (
     sort_order integer DEFAULT 0,
     collection_end timestamptz,
     sold_out boolean DEFAULT false,
+    sale_price numeric(10,2) DEFAULT NULL,
+    sale_start timestamptz,
+    sale_end timestamptz,
+    on_sale boolean DEFAULT false NOT NULL,
     created_at timestamptz DEFAULT now(),
     updated_at timestamptz DEFAULT now()
 );

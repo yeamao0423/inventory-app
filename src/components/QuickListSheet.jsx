@@ -23,6 +23,10 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
   const [cost, setCost] = useState('')
   const [currency, setCurrency] = useState('TWD')
   const [shopPrice, setShopPrice] = useState('')
+  const [onSale, setOnSale] = useState(false)
+  const [salePrice, setSalePrice] = useState('')
+  const [saleStart, setSaleStart] = useState('')
+  const [saleEnd, setSaleEnd] = useState('')
 
   // Step 2: Selling settings
   const [sellingMode, setSellingMode] = useState('stock') // stock | collection
@@ -45,6 +49,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
   const [localVariants, setLocalVariants] = useState([])
   const [batchStock, setBatchStock] = useState('')
   const [batchPrice, setBatchPrice] = useState('')
+  const [batchSale, setBatchSale] = useState('')
   const [recentEnds, setRecentEnds] = useState([])
 
   useEffect(() => {
@@ -134,7 +139,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
     setLocalVariants(combos.map(combo => {
       const options = {}
       combo.forEach(({ tid, vid }) => { options[tid] = vid })
-      return { options, stock: 0, variant_price: null }
+      return { options, stock: 0, variant_price: null, sale_price: null }
     }))
   }
 
@@ -142,6 +147,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
     setLocalVariants(prev => prev.map((v, i) => {
       if (i !== idx) return v
       if (field === 'stock') return { ...v, stock: value === '' ? 0 : Number(value) }
+      if (field === 'sale_price') return { ...v, sale_price: value === '' ? null : Number(value) }
       return { ...v, variant_price: value === '' ? null : Number(value) }
     }))
   }
@@ -151,13 +157,11 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
   }
 
   function applyBatch(field) {
-    const val = field === 'stock' ? batchStock : batchPrice
+    const val = field === 'stock' ? batchStock : field === 'sale_price' ? batchSale : batchPrice
     if (val === '') return
-    setLocalVariants(prev => prev.map(v => ({
-      ...v,
-      [field]: field === 'stock' ? Number(val) : Number(val),
-    })))
+    setLocalVariants(prev => prev.map(v => ({ ...v, [field]: Number(val) })))
     if (field === 'stock') setBatchStock('')
+    else if (field === 'sale_price') setBatchSale('')
     else setBatchPrice('')
   }
 
@@ -249,6 +253,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
             options: v.options,
             stock: v.stock || 0,
             variant_price: v.variant_price,
+            sale_price: onSale ? v.sale_price : null,
           }))
         )
       }
@@ -262,6 +267,10 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
         collection_end: sellingMode === 'collection' ? new Date(collectionEnd).toISOString() : null,
         sold_out: false,
         skip_stock_check: skipStockCheck,
+        on_sale: onSale,
+        sale_price: onSale && salePrice !== '' ? Number(salePrice) : null,
+        sale_start: onSale && saleStart ? new Date(saleStart).toISOString() : null,
+        sale_end: onSale && saleEnd ? new Date(saleEnd).toISOString() : null,
         store_id: storeId,
       })
 
@@ -397,6 +406,48 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
             <div className="form-group">
               <label className="form-label">商城售價（NT$） *</label>
               <input className="form-input" type="number" placeholder="0" value={shopPrice} onChange={e => setShopPrice(e.target.value)} />
+            </div>
+
+            {/* 特價（可選）*/}
+            <div className="form-group" style={{ background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 12, padding: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span className="form-label fs13 fw600" style={{ margin: 0, flex: 1 }}>🏷️ 特價</span>
+                <div
+                  onClick={() => setOnSale(v => !v)}
+                  style={{ width: 44, height: 26, borderRadius: 13, cursor: 'pointer', transition: 'background .2s', background: onSale ? 'var(--red)' : 'var(--border)', position: 'relative' }}
+                >
+                  <div style={{ width: 20, height: 20, borderRadius: '50%', background: '#fff', position: 'absolute', top: 3, transition: 'left .2s', left: onSale ? 21 : 3 }} />
+                </div>
+              </div>
+              {onSale && (
+                <div style={{ marginTop: 14 }}>
+                  <label className="form-label">
+                    特價金額（NT$）
+                    {(() => {
+                      const reg = Number(shopPrice) || 0
+                      const sale = Number(salePrice)
+                      if (!salePrice || !reg) return null
+                      if (sale >= reg) return <span className="muted" style={{ fontWeight: 400, marginLeft: 8, color: 'var(--red)' }}>需低於原價 {reg.toLocaleString()}</span>
+                      const pct = Math.round((sale / reg) * 100) / 10
+                      return <span className="muted" style={{ fontWeight: 400, marginLeft: 8 }}>約 {pct} 折</span>
+                    })()}
+                  </label>
+                  <input className="form-input" type="number" placeholder="0" value={salePrice} onChange={e => setSalePrice(e.target.value)} />
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
+                    <div>
+                      <label className="form-label fs13">開始時間</label>
+                      <input className="form-input" type="datetime-local" value={saleStart} onChange={e => setSaleStart(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="form-label fs13">結束時間</label>
+                      <input className="form-input" type="datetime-local" value={saleEnd} onChange={e => setSaleEnd(e.target.value)} />
+                    </div>
+                  </div>
+                  <div className="muted fs12" style={{ marginTop: 8, lineHeight: 1.6 }}>
+                    兩個皆留空＝常駐特價；只填開始＝該日起；只填結束＝到該日止；都填＝期間內。
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -623,6 +674,19 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
                               />
                               <button onClick={() => applyBatch('variant_price')} style={{ padding: '4px 10px', borderRadius: 6, border: '0.5px solid var(--border)', background: 'var(--bg)', fontSize: 11, cursor: 'pointer' }}>套用</button>
                             </div>
+                            {onSale && (
+                              <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                                <span className="muted fs12" style={{ color: 'var(--red)' }}>批次特價:</span>
+                                <input
+                                  type="number"
+                                  value={batchSale}
+                                  onChange={e => setBatchSale(e.target.value)}
+                                  placeholder={salePrice !== '' ? String(salePrice) : '特價'}
+                                  style={{ width: 80, padding: '4px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center' }}
+                                />
+                                <button onClick={() => applyBatch('sale_price')} style={{ padding: '4px 10px', borderRadius: 6, border: '0.5px solid var(--border)', background: 'var(--bg)', fontSize: 11, cursor: 'pointer' }}>套用</button>
+                              </div>
+                            )}
                           </div>
                         )}
 
@@ -636,6 +700,9 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
                                   <th style={{ padding: '8px 6px', width: 70, textAlign: 'center', fontSize: 12, color: 'var(--text-3)', fontWeight: 600 }}>庫存</th>
                                 )}
                                 <th style={{ padding: '8px 6px', width: 90, textAlign: 'center', fontSize: 12, color: 'var(--text-3)', fontWeight: 600 }}>售價(NT$)</th>
+                                {onSale && (
+                                  <th style={{ padding: '8px 6px', width: 90, textAlign: 'center', fontSize: 12, color: 'var(--red)', fontWeight: 600 }}>特價(NT$)</th>
+                                )}
                                 <th style={{ padding: '8px 6px', width: 36 }}></th>
                               </tr>
                             </thead>
@@ -665,6 +732,17 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
                                       style={{ width: '100%', padding: '5px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center', background: 'var(--bg)' }}
                                     />
                                   </td>
+                                  {onSale && (
+                                    <td style={{ padding: '8px 6px', textAlign: 'center' }}>
+                                      <input
+                                        type="number"
+                                        value={v.sale_price ?? ''}
+                                        onChange={e => updateLocalVariant(idx, 'sale_price', e.target.value)}
+                                        placeholder={salePrice !== '' ? String(salePrice) : '特價'}
+                                        style={{ width: '100%', padding: '5px 8px', borderRadius: 6, border: '0.5px solid var(--red)', fontSize: 13, textAlign: 'center', background: 'var(--bg)' }}
+                                      />
+                                    </td>
+                                  )}
                                   <td style={{ padding: '8px 6px', textAlign: 'center' }}>
                                     <button
                                       onClick={() => removeLocalVariant(idx)}
@@ -678,6 +756,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
                         </div>
                         <div className="muted fs12" style={{ marginTop: 8 }}>
                           售價留空 = 使用商城售價 NT${Number(shopPrice || 0).toLocaleString()}
+                          {onSale && <><br/>特價留空 = 使用全品特價{salePrice !== '' ? ` NT$${Number(salePrice).toLocaleString()}` : '（未設定則該規格不特價）'}</>}
                         </div>
                       </div>
                     )}
@@ -781,6 +860,12 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
             <ConfirmRow label="採購來源" value={source || '未設定'} muted={!source} />
             <ConfirmRow label="進貨成本" value={cost ? `${cost} ${currency}` : '未設定'} muted={!cost} />
             <ConfirmRow label="商城售價" value={`NT$ ${Number(shopPrice).toLocaleString()}`} />
+            {onSale && salePrice !== '' && (
+              <ConfirmRow label="特價" value={`NT$ ${Number(salePrice).toLocaleString()}${
+                !saleStart && !saleEnd ? '（常駐）'
+                  : `（${saleStart ? formatDateTime(saleStart) : ''}${saleStart && saleEnd ? ' ~ ' : ''}${saleEnd ? formatDateTime(saleEnd) : ''}）`
+              }`} highlight />
+            )}
             <ConfirmRow label="販售模式" value={
               sellingMode === 'stock'
                 ? hasVariants && localVariants.length > 0
@@ -808,6 +893,11 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
                       {!skipStockCheck && `庫存 ${v.stock}`}
                       {!skipStockCheck && v.variant_price != null && ' · '}
                       {v.variant_price != null ? `NT$${v.variant_price.toLocaleString()}` : ''}
+                      {onSale && v.sale_price != null && (
+                        <span style={{ color: 'var(--red)' }}>
+                          {(!skipStockCheck || v.variant_price != null) ? ' · ' : ''}特價 NT${v.sale_price.toLocaleString()}
+                        </span>
+                      )}
                     </span>
                   </div>
                 ))}

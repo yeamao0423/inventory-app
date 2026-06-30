@@ -397,6 +397,13 @@ export default function StorefrontPage() {
               ? 'badge-low'
               : (isCollection && collectionExpired) ? 'badge-warn' : 'badge-blue'
 
+            const now = new Date()
+            const saleNow = item.on_sale && item.sale_price != null
+              && Number(item.sale_price) < Number(item.shop_price)
+              && (!item.sale_start || new Date(item.sale_start) <= now)
+              && (!item.sale_end || new Date(item.sale_end) >= now)
+            const saleScheduled = item.on_sale && item.sale_price != null && !saleNow
+
             const thumb = item.products?.product_images?.sort((a, b) => a.sort_order - b.sort_order)[0]?.url
             return (
               <div className="card" key={item.id} style={{ padding: 0, overflow: 'hidden' }}>
@@ -413,10 +420,14 @@ export default function StorefrontPage() {
                         {item.published ? '上架中' : '已下架'}
                       </span>
                       <span className={`badge ${modeBadge}`} style={{ fontSize: 11 }}>{modeLabel}</span>
+                      {saleNow && <span className="badge" style={{ fontSize: 11, background: 'var(--red)', color: '#fff' }}>特價中</span>}
+                      {saleScheduled && <span className="badge badge-warn" style={{ fontSize: 11 }}>特價已排程</span>}
                     </div>
                     <div className="muted fs12">
                       {item.products?.sku && <span>{item.products.sku} · </span>}
-                      售價 NT${Number(item.shop_price).toLocaleString()}
+                      {saleNow
+                        ? <>售價 <span style={{ textDecoration: 'line-through' }}>NT${Number(item.shop_price).toLocaleString()}</span> <span style={{ color: 'var(--red)', fontWeight: 600 }}>特價 NT${Number(item.sale_price).toLocaleString()}</span></>
+                        : <>售價 NT${Number(item.shop_price).toLocaleString()}</>}
                       {item.products?.cost != null && (() => {
                         const cur = item.products.currency || 'TWD'
                         const cost = Number(item.products.cost)
@@ -952,6 +963,10 @@ function ListingSheet({ item, products, onClose, onSaved }) {
     collection_end: utcToLocal(item?.collection_end),
     sold_out: item?.sold_out ?? false,
     skip_stock_check: item?.skip_stock_check ?? false,
+    on_sale: item?.on_sale ?? false,
+    sale_price: item?.sale_price ?? '',
+    sale_start: utcToLocal(item?.sale_start),
+    sale_end: utcToLocal(item?.sale_end),
   })
   const [variants, setVariants] = useState([])
   const [optionTypes, setOptionTypes] = useState([])
@@ -1034,6 +1049,10 @@ function ListingSheet({ item, products, onClose, onSaved }) {
       collection_end: localToISO(form.collection_end),
       sold_out: form.sold_out,
       skip_stock_check: form.skip_stock_check,
+      on_sale: form.on_sale,
+      sale_price: form.on_sale && form.sale_price !== '' ? Number(form.sale_price) : null,
+      sale_start: form.on_sale ? localToISO(form.sale_start) : null,
+      sale_end: form.on_sale ? localToISO(form.sale_end) : null,
     }
 
     // 無規格商品：僅「新增上架」時寫入基礎庫存；編輯既有上架時庫存由庫存頁管理，不覆寫
@@ -1140,6 +1159,69 @@ function ListingSheet({ item, products, onClose, onSaved }) {
           <input className="form-input" type="number" placeholder="0" value={form.shop_price} onChange={e => set('shop_price', e.target.value)} />
         </div>
 
+        {/* ── 2.5 特價設定（可選）── */}
+        <div className="form-group" style={{ background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 12, padding: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span className="form-label fs13 fw600" style={{ margin: 0, flex: 1 }}>🏷️ 特價</span>
+            <div
+              onClick={() => set('on_sale', !form.on_sale)}
+              style={{
+                width: 44, height: 26, borderRadius: 13, cursor: 'pointer', transition: 'background .2s',
+                background: form.on_sale ? 'var(--red)' : 'var(--border)', position: 'relative',
+              }}
+            >
+              <div style={{ width: 20, height: 20, borderRadius: '50%', background: '#fff', position: 'absolute', top: 3, transition: 'left .2s', left: form.on_sale ? 21 : 3 }} />
+            </div>
+          </div>
+
+          {form.on_sale && (
+            <div style={{ marginTop: 14 }}>
+              <label className="form-label">
+                特價金額（NT$）
+                {(() => {
+                  const reg = Number(form.shop_price) || 0
+                  const sale = Number(form.sale_price)
+                  if (!form.sale_price || !reg) return null
+                  const pct = reg > 0 ? Math.round((sale / reg) * 100) / 10 : null // 幾折
+                  const prod = editingItem?.products || products.find(p => p.id === Number(form.product_id))
+                  const margin = prod?.cost != null
+                    ? calcMargin(sale, toTwdCost(Number(prod.cost), prod.currency || 'TWD', exchangeRates))
+                    : null
+                  return (
+                    <span className="muted" style={{ fontWeight: 400, marginLeft: 8 }}>
+                      {sale >= reg
+                        ? <span style={{ color: 'var(--red)' }}>需低於原價 {reg.toLocaleString()}</span>
+                        : <>約 {pct} 折
+                            {margin && (
+                              <span style={{ color: margin.amount >= 0 ? 'var(--green)' : 'var(--red)', marginLeft: 6 }}>
+                                · 特價毛利率 {margin.rate}%（NT${margin.amount.toLocaleString()}）
+                              </span>
+                            )}
+                          </>}
+                    </span>
+                  )
+                })()}
+              </label>
+              <input className="form-input" type="number" placeholder="0" value={form.sale_price} onChange={e => set('sale_price', e.target.value)} />
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
+                <div>
+                  <label className="form-label fs13">開始時間</label>
+                  <input className="form-input" type="datetime-local" value={form.sale_start} onChange={e => set('sale_start', e.target.value)} />
+                </div>
+                <div>
+                  <label className="form-label fs13">結束時間</label>
+                  <input className="form-input" type="datetime-local" value={form.sale_end} onChange={e => set('sale_end', e.target.value)} />
+                </div>
+              </div>
+              <div className="muted fs12" style={{ marginTop: 8, lineHeight: 1.6 }}>
+                兩個時間皆留空＝常駐特價；只填開始＝該日起特價；只填結束＝到該日止；都填＝期間內特價。
+                <br/>未在下方規格表單獨設定特價的規格，都套用此「全品特價」金額。
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* ── 3. 商品規格（可選）── */}
         {activeProductId && (
           <>
@@ -1170,6 +1252,8 @@ function ListingSheet({ item, products, onClose, onSaved }) {
                 shopPrice={Number(form.shop_price) || 0}
                 resolveVariantLabel={resolveVariantLabel}
                 readOnlyStock={isEditing}
+                onSale={form.on_sale}
+                salePrice={form.sale_price}
               />
             )}
 
@@ -1342,13 +1426,16 @@ function ListingSheet({ item, products, onClose, onSaved }) {
   )
 }
 
-function VariantManager({ variants, setVariants, optionTypes, productId, productName, shopPrice, resolveVariantLabel, readOnlyStock = false }) {
+function VariantManager({ variants, setVariants, optionTypes, productId, productName, shopPrice, resolveVariantLabel, readOnlyStock = false, onSale = false, salePrice = '' }) {
   // Step 1 state: which types and values are selected for this product
   const [selectedTypes, setSelectedTypes] = useState({})   // { typeId: true/false }
   const [selectedValues, setSelectedValues] = useState({})  // { typeId: Set of valueIds }
   const [generating, setGenerating] = useState(false)
   const [batchStock, setBatchStock] = useState('')
   const [batchPrice, setBatchPrice] = useState('')
+  const [batchSale, setBatchSale] = useState('')
+  // 全品特價（字串）→ 數字，給特價欄 placeholder 用
+  const productSale = salePrice !== '' && salePrice != null ? Number(salePrice) : null
 
   // Initialize selections from existing variants
   useEffect(() => {
@@ -1471,6 +1558,15 @@ function VariantManager({ variants, setVariants, optionTypes, productId, product
     setBatchPrice('')
   }
 
+  async function applyBatchSale() {
+    if (batchSale === '') return
+    const val = Number(batchSale)
+    const ids = variants.map(v => v.id)
+    await supabase.from('product_variants').update({ sale_price: val }).in('id', ids)
+    setVariants(prev => prev.map(v => ({ ...v, sale_price: val })))
+    setBatchSale('')
+  }
+
   async function deleteAllVariants() {
     if (!window.confirm('確定刪除此商品的所有規格組合？')) return
     await supabase.from('product_variants').delete().eq('product_id', productId)
@@ -1589,6 +1685,19 @@ function VariantManager({ variants, setVariants, optionTypes, productId, product
                   />
                   <button onClick={applyBatchPrice} style={{ ...smallBtn, fontSize: 11 }}>套用</button>
                 </div>
+                {onSale && (
+                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                    <span className="muted fs12" style={{ color: 'var(--red)' }}>批次特價:</span>
+                    <input
+                      type="number"
+                      value={batchSale}
+                      onChange={e => setBatchSale(e.target.value)}
+                      placeholder={productSale != null ? String(productSale) : '特價'}
+                      style={{ width: 80, padding: '4px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center' }}
+                    />
+                    <button onClick={applyBatchSale} style={{ ...smallBtn, fontSize: 11 }}>套用</button>
+                  </div>
+                )}
               </div>
 
               {/* Table */}
@@ -1599,13 +1708,14 @@ function VariantManager({ variants, setVariants, optionTypes, productId, product
                       <th style={thStyle}>規格</th>
                       <th style={{ ...thStyle, width: 70, textAlign: 'center' }}>庫存</th>
                       <th style={{ ...thStyle, width: 90, textAlign: 'center' }}>售價(NT$)</th>
+                      {onSale && <th style={{ ...thStyle, width: 90, textAlign: 'center', color: 'var(--red)' }}>特價(NT$)</th>}
                       <th style={{ ...thStyle, width: 40 }}></th>
                       <th style={{ ...thStyle, width: 40 }}></th>
                     </tr>
                   </thead>
                   <tbody>
                     {variants.map(v => (
-                      <tr key={`${v.id}-${v.stock}-${v.variant_price}`} style={{ borderBottom: '1px solid var(--border-light, #f0f0f0)' }}>
+                      <tr key={`${v.id}-${v.stock}-${v.variant_price}-${v.sale_price}`} style={{ borderBottom: '1px solid var(--border-light, #f0f0f0)' }}>
                         <td style={tdStyle}>
                           <span className="fw600">{resolveVariantLabel(v.options)}</span>
                         </td>
@@ -1630,6 +1740,17 @@ function VariantManager({ variants, setVariants, optionTypes, productId, product
                             style={cellInput}
                           />
                         </td>
+                        {onSale && (
+                          <td style={{ ...tdStyle, textAlign: 'center' }}>
+                            <input
+                              type="number"
+                              defaultValue={v.sale_price ?? ''}
+                              placeholder={productSale != null ? String(productSale) : '特價'}
+                              onBlur={e => updateVariantField(v.id, 'sale_price', e.target.value)}
+                              style={{ ...cellInput, borderColor: 'var(--red)' }}
+                            />
+                          </td>
+                        )}
                         <td style={{ ...tdStyle, textAlign: 'center' }}>
                           <button
                             onClick={() => deleteVariant(v.id)}
@@ -1648,6 +1769,7 @@ function VariantManager({ variants, setVariants, optionTypes, productId, product
 
               <div className="muted fs12" style={{ marginTop: 8 }}>
                 售價留空 = 使用商城售價 NT${shopPrice.toLocaleString()}
+                {onSale && <><br/>特價留空 = 使用全品特價{productSale != null ? ` NT$${productSale.toLocaleString()}` : '（未設定則該規格不特價）'}</>}
                 {readOnlyStock && <><br/>庫存為唯讀，請至「庫存」頁調整各規格數量</>}
               </div>
             </div>

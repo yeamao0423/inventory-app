@@ -100,7 +100,7 @@ export const getProductList = cache(async (storeId) => {
       const [{ data: sp }, { data: cats }, { data: tgs }] = await Promise.all([
         supabase
           .from('storefront_products')
-          .select('*, products:shop_products(*, product_images(url, sort_order), categories(id, name, name_en), product_tags(tag_id), product_variants(stock))')
+          .select('*, products:shop_products(*, product_images(url, sort_order), categories(id, name, name_en), product_tags(tag_id), product_variants(stock, variant_price, sale_price))')
           .eq('store_id', storeId)
           .eq('published', true)
           .order('created_at', { ascending: false }),
