@@ -718,7 +718,7 @@ export default function StorefrontPage() {
 // ── 社群分享面板 ────────────────────────────────────────
 function ShareSheet({ item, store, onClose }) {
   const baseUrl = resolveShopBaseUrl(store)
-  const link = buildProductUrl(baseUrl, item.product_id)
+  const link = buildProductUrl(baseUrl, item.product_id, item.products?.name)
   const template = store?.settings?.share_template?.trim() || DEFAULT_SHARE_TEMPLATE
   const initial = renderTemplate(template, {
     name: item.products?.name,

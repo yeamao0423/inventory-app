@@ -4,9 +4,11 @@ import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useI18n } from '../layout'
 import { getCardPricing } from '../../lib/salePrice'
+import { slugifyName } from '../../lib/slug'
 
 // 資料由 server component（page.jsx）以 props 帶入。分頁狀態走 URL ?page=N。
-export default function ProductList({ products, categories, tags }) {
+// initialSource：品牌頁 /products/brand/[source] 帶入，預選該品牌（採購來源）。
+export default function ProductList({ products, categories, tags, initialSource = null }) {
   const { t, lang } = useI18n()
   const router = useRouter()
   const pathname = usePathname()
@@ -15,7 +17,8 @@ export default function ProductList({ products, categories, tags }) {
   const [search, setSearch] = useState('')
   const [activeCat, setActiveCat] = useState(null)   // null = 全部
   const [activeTags, setActiveTags] = useState([])   // multi-select, OR logic
-  const [activeSource, setActiveSource] = useState(null) // null = 全部
+  // 品牌（採購來源）改由網址驅動：/products/brand/[source]。null = 全部。
+  const activeSource = initialSource ?? null
   const [filterOpen, setFilterOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState({ tags: true, category: true, brand: true })
   const [sortBy, setSortBy] = useState('newest') // newest | oldest | price_asc | price_desc
@@ -85,6 +88,11 @@ export default function ProductList({ products, categories, tags }) {
     if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
+  // 品牌選取 → 導向可分享的品牌網址（null = 回全部商品）。
+  function goToBrand(src) {
+    router.push(src ? `/products/brand/${encodeURIComponent(src)}` : '/products', { scroll: false })
+  }
+
   // 篩選/排序改變 → 回到第 1 頁（移除 page 參數）。略過首次渲染。
   const firstRender = useRef(true)
   useEffect(() => {
@@ -124,7 +132,7 @@ export default function ProductList({ products, categories, tags }) {
         </span>
       )}
       {activeSource && (
-        <span className="filter-chip" onClick={() => setActiveSource(null)}>
+        <span className="filter-chip" onClick={() => goToBrand(null)}>
           {activeSource} ×
         </span>
       )}
@@ -137,7 +145,7 @@ export default function ProductList({ products, categories, tags }) {
         ) : null
       })}
       <button
-        onClick={() => { setActiveCat(null); setActiveSource(null); setActiveTags([]); setInStockOnly(false); setSaleOnly(false) }}
+        onClick={() => { setActiveCat(null); setActiveTags([]); setInStockOnly(false); setSaleOnly(false); if (initialSource) goToBrand(null) }}
         style={{ fontSize: 12, color: 'var(--red)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 6px' }}
       >
         {zh ? '清除全部' : 'Clear all'}
@@ -246,7 +254,7 @@ export default function ProductList({ products, categories, tags }) {
                     label={zh ? '所有品牌' : 'All Brands'}
                     value={activeSource}
                     options={sources.map(src => ({ value: src, label: src }))}
-                    onChange={setActiveSource}
+                    onChange={goToBrand}
                   />
                 )}
               </div>
@@ -359,7 +367,7 @@ export default function ProductList({ products, categories, tags }) {
                   <>
                     <button
                       className={`sidebar-option${activeSource === null ? ' active' : ''}`}
-                      onClick={() => setActiveSource(null)}
+                      onClick={() => goToBrand(null)}
                     >
                       {zh ? '全部品牌' : 'All'}
                     </button>
@@ -367,7 +375,7 @@ export default function ProductList({ products, categories, tags }) {
                       <button
                         key={src}
                         className={`sidebar-option${activeSource === src ? ' active' : ''}`}
-                        onClick={() => setActiveSource(activeSource === src ? null : src)}
+                        onClick={() => goToBrand(activeSource === src ? null : src)}
                       >
                         {src}
                       </button>
@@ -440,7 +448,7 @@ function ProductCard({ sp, t, lang, allTags }) {
   }
 
   return (
-    <Link href={`/products/${sp.product_id}`} className="product-card" style={unavailable ? { opacity: 0.6 } : {}}>
+    <Link href={`/products/${sp.product_id}/${slugifyName(name)}`} className="product-card" style={unavailable ? { opacity: 0.6 } : {}}>
       <div style={{ position: 'relative' }}>
         {thumb
           ? <img src={thumb} alt={name} className="product-img-placeholder" style={{objectFit:'cover'}} loading="lazy" />

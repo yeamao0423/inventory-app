@@ -171,17 +171,21 @@ export const getProductDetail = cache(async (productId) => {
   )()
 })
 
-// ── sitemap 用：該店已上架商品 ID（快取，tag=store-{id}）──
-export const getPublishedProductIds = cache(async (storeId) => {
-  if (!supabase || storeId == null) return []
+// ── sitemap 用：該店已上架商品（id+name）與品牌清單（快取，tag=store-{id}）──
+export const getSitemapData = cache(async (storeId) => {
+  if (!supabase || storeId == null) return { products: [], brands: [] }
   return unstable_cache(
     async () => {
       const { data } = await supabase
-        .from('storefront_products').select('product_id')
+        .from('storefront_products')
+        .select('product_id, products:shop_products!inner(name, source)')
         .eq('store_id', storeId).eq('published', true)
-      return (data || []).map(r => r.product_id)
+      const rows = data || []
+      const products = rows.map(r => ({ id: r.product_id, name: r.products?.name || '' }))
+      const brands = [...new Set(rows.map(r => r.products?.source).filter(Boolean))]
+      return { products, brands }
     },
-    ['sitemap-product-ids', String(storeId)],
+    ['sitemap-data', String(storeId)],
     { tags: [`store-${storeId}`], revalidate: TTL },
   )()
 })

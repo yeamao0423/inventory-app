@@ -30,10 +30,21 @@ export function resolveShopBaseUrl(store) {
   return ''
 }
 
-// 商品公開連結
-export function buildProductUrl(baseUrl, productId) {
+// 商品名稱 → 網址 slug。與商城 shop/src/lib/slug.js 同邏輯（兩個獨立套件無法共用 import，需同步維護）。
+export function slugifyProductName(name) {
+  return String(name ?? '')
+    .trim()
+    .replace(/[\s/\\?#%]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+// 商品公開連結。帶 name 時產生漂亮網址 /products/{id}/{slug}；不帶 name 仍相容舊格式 /products/{id}。
+export function buildProductUrl(baseUrl, productId, name) {
   if (!baseUrl) return ''
-  return `${baseUrl.replace(/\/+$/, '')}/products/${productId}`
+  const base = `${baseUrl.replace(/\/+$/, '')}/products/${productId}`
+  const slug = slugifyProductName(name)
+  return slug ? `${base}/${encodeURIComponent(slug)}` : base
 }
 
 // 模板代入：未知變數原樣保留。售價為數字時加千分位。
