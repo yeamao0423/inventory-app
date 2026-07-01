@@ -23,6 +23,34 @@ export function calcMargin(priceTwd, costTwd) {
   return { amount, rate }
 }
 
+// 數字陣列 → 區間字串（min≠max 顯示 A~B，相等顯示單值）。
+// opts: { prefix 例 'NT$'、suffix 例 ' VND' }。全空回傳 null。
+export function fmtRange(nums, { prefix = '', suffix = '' } = {}) {
+  const vals = (nums || []).filter(n => n != null && n !== '' && !Number.isNaN(Number(n))).map(Number)
+  if (!vals.length) return null
+  const min = Math.min(...vals)
+  const max = Math.max(...vals)
+  return min === max
+    ? `${prefix}${min.toLocaleString()}${suffix}`
+    : `${prefix}${min.toLocaleString()}~${max.toLocaleString()}${suffix}`
+}
+
+// 毛利率區間 → 顯示字串（單一值不顯示成區間）
+export function fmtMarginRate(range) {
+  if (!range) return null
+  const { min, max } = range
+  return min.rate === max.rate ? `${min.rate}%` : `${min.rate}%~${max.rate}%`
+}
+
+// 毛利金額區間 → 顯示字串（NT$；單一值不顯示成區間）
+export function fmtMarginAmount(range) {
+  if (!range) return null
+  const { min, max } = range
+  return min.amount === max.amount
+    ? `NT$${min.amount.toLocaleString()}`
+    : `NT$${min.amount.toLocaleString()}~${max.amount.toLocaleString()}`
+}
+
 // 特價是否在檔期內（開關＋起訖時間，render 時跟現在時間比對）
 function inSaleWindow(sp, now) {
   if (!sp?.on_sale) return false
@@ -60,11 +88,32 @@ export function getEffectivePrices(listing, now = new Date()) {
   return { onSale: anySale, regulars, effectives }
 }
 
+// 逐規格原幣成本（variant_cost ?? products.cost），未換算。順序與 getEffectivePrices 對齊。
+// 無規格時視為單一虛擬規格＝商品層成本。回傳陣列（某格缺值為 null）。
+export function getRawCosts(listing) {
+  const baseCost = listing?.products?.cost
+  const variants = listing?.products?.product_variants || []
+  const rows = variants.length ? variants : [null]
+  return rows.map(v => {
+    const c = v && v.variant_cost != null ? v.variant_cost : baseCost
+    return c == null || c === '' ? null : Number(c)
+  })
+}
+
+// 逐規格 TWD 成本（variant_cost ?? products.cost，依 products.currency 換算）。
+// 順序與 getEffectivePrices 對齊；某格缺匯率無法換算 → 該格為 null。回傳陣列。
+export function getEffectiveCosts(listing, rates = {}) {
+  const cur = listing?.products?.currency || 'TWD'
+  return getRawCosts(listing).map(c => toTwdCost(c, cur, rates))
+}
+
 // 對一組售價算毛利區間。逐價算 calcMargin 後依毛利率取 min/max。
+// costTwd 可為單一值（所有規格共用）或陣列（逐規格，與 pricesTwd 對齊）。
 // 回傳 { min, max }（各為 { amount, rate }）或 null（無有效價/缺成本）。
 export function calcMarginRange(pricesTwd, costTwd) {
-  if (!Array.isArray(pricesTwd) || costTwd == null) return null
-  const margins = pricesTwd.map(p => calcMargin(p, costTwd)).filter(Boolean)
+  if (!Array.isArray(pricesTwd)) return null
+  const costs = Array.isArray(costTwd) ? costTwd : null
+  const margins = pricesTwd.map((p, i) => calcMargin(p, costs ? costs[i] : costTwd)).filter(Boolean)
   if (margins.length === 0) return null
   let min = margins[0]
   let max = margins[0]

@@ -50,6 +50,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
   const [batchStock, setBatchStock] = useState('')
   const [batchPrice, setBatchPrice] = useState('')
   const [batchSale, setBatchSale] = useState('')
+  const [batchCost, setBatchCost] = useState('')
   const [recentEnds, setRecentEnds] = useState([])
 
   useEffect(() => {
@@ -139,7 +140,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
     setLocalVariants(combos.map(combo => {
       const options = {}
       combo.forEach(({ tid, vid }) => { options[tid] = vid })
-      return { options, stock: 0, variant_price: null, sale_price: null }
+      return { options, stock: 0, variant_price: null, sale_price: null, variant_cost: null }
     }))
   }
 
@@ -148,6 +149,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
       if (i !== idx) return v
       if (field === 'stock') return { ...v, stock: value === '' ? 0 : Number(value) }
       if (field === 'sale_price') return { ...v, sale_price: value === '' ? null : Number(value) }
+      if (field === 'variant_cost') return { ...v, variant_cost: value === '' ? null : Number(value) }
       return { ...v, variant_price: value === '' ? null : Number(value) }
     }))
   }
@@ -157,11 +159,12 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
   }
 
   function applyBatch(field) {
-    const val = field === 'stock' ? batchStock : field === 'sale_price' ? batchSale : batchPrice
+    const val = field === 'stock' ? batchStock : field === 'sale_price' ? batchSale : field === 'variant_cost' ? batchCost : batchPrice
     if (val === '') return
     setLocalVariants(prev => prev.map(v => ({ ...v, [field]: Number(val) })))
     if (field === 'stock') setBatchStock('')
     else if (field === 'sale_price') setBatchSale('')
+    else if (field === 'variant_cost') setBatchCost('')
     else setBatchPrice('')
   }
 
@@ -254,6 +257,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
             stock: v.stock || 0,
             variant_price: v.variant_price,
             sale_price: onSale ? v.sale_price : null,
+            variant_cost: v.variant_cost ?? null,
           }))
         )
       }
@@ -674,6 +678,17 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
                               />
                               <button onClick={() => applyBatch('variant_price')} style={{ padding: '4px 10px', borderRadius: 6, border: '0.5px solid var(--border)', background: 'var(--bg)', fontSize: 11, cursor: 'pointer' }}>套用</button>
                             </div>
+                            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                              <span className="muted fs12">批次成本:</span>
+                              <input
+                                type="number"
+                                value={batchCost}
+                                onChange={e => setBatchCost(e.target.value)}
+                                placeholder={cost !== '' ? String(cost) : '成本'}
+                                style={{ width: 80, padding: '4px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center' }}
+                              />
+                              <button onClick={() => applyBatch('variant_cost')} style={{ padding: '4px 10px', borderRadius: 6, border: '0.5px solid var(--border)', background: 'var(--bg)', fontSize: 11, cursor: 'pointer' }}>套用</button>
+                            </div>
                             {onSale && (
                               <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                                 <span className="muted fs12" style={{ color: 'var(--red)' }}>批次特價:</span>
@@ -700,6 +715,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
                                   <th style={{ padding: '8px 6px', width: 70, textAlign: 'center', fontSize: 12, color: 'var(--text-3)', fontWeight: 600 }}>庫存</th>
                                 )}
                                 <th style={{ padding: '8px 6px', width: 90, textAlign: 'center', fontSize: 12, color: 'var(--text-3)', fontWeight: 600 }}>售價(NT$)</th>
+                                <th style={{ padding: '8px 6px', width: 90, textAlign: 'center', fontSize: 12, color: 'var(--text-3)', fontWeight: 600 }}>成本({currency})</th>
                                 {onSale && (
                                   <th style={{ padding: '8px 6px', width: 90, textAlign: 'center', fontSize: 12, color: 'var(--red)', fontWeight: 600 }}>特價(NT$)</th>
                                 )}
@@ -732,6 +748,15 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
                                       style={{ width: '100%', padding: '5px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center', background: 'var(--bg)' }}
                                     />
                                   </td>
+                                  <td style={{ padding: '8px 6px', textAlign: 'center' }}>
+                                    <input
+                                      type="number"
+                                      value={v.variant_cost ?? ''}
+                                      onChange={e => updateLocalVariant(idx, 'variant_cost', e.target.value)}
+                                      placeholder={cost !== '' ? String(cost) : '成本'}
+                                      style={{ width: '100%', padding: '5px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center', background: 'var(--bg)' }}
+                                    />
+                                  </td>
                                   {onSale && (
                                     <td style={{ padding: '8px 6px', textAlign: 'center' }}>
                                       <input
@@ -756,6 +781,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
                         </div>
                         <div className="muted fs12" style={{ marginTop: 8 }}>
                           售價留空 = 使用商城售價 NT${Number(shopPrice || 0).toLocaleString()}
+                          <br/>成本留空 = 使用進貨成本{cost !== '' ? ` ${Number(cost).toLocaleString()} ${currency}` : ''}
                           {onSale && <><br/>特價留空 = 使用全品特價{salePrice !== '' ? ` NT$${Number(salePrice).toLocaleString()}` : '（未設定則該規格不特價）'}</>}
                         </div>
                       </div>

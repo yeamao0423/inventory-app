@@ -4,7 +4,7 @@ import { SUPPORTED_CURRENCIES } from '../constants/currency'
 import { useAuth } from '../hooks/useAuth'
 import CustomSelect from '../components/CustomSelect'
 import { compressImage, uploadImages } from '../lib/imageUtils'
-import { toTwdCost, calcMargin } from '../lib/pricing'
+import { toTwdCost, getEffectivePrices, getEffectiveCosts, getRawCosts, calcMarginRange, fmtRange, fmtMarginRate, fmtMarginAmount } from '../lib/pricing'
 import { cmpNum, cmpStr, cmpDate } from '../lib/sortUtils'
 import { Pill } from '../components/MenuPopover'
 import ListToolbar from '../components/ListToolbar'
@@ -105,7 +105,7 @@ export default function InventoryPage() {
   async function fetchProducts() {
     const { data } = await supabase
       .from('products')
-      .select('*, product_images(id, url, sort_order, tag_filter), categories(id, name), product_tags(tag_id), product_variants(id, options, stock, variant_price), storefront_products(id, shop_price, published, sold_out, collection_end, skip_stock_check, created_at)')
+      .select('*, product_images(id, url, sort_order, tag_filter), categories(id, name), product_tags(tag_id), product_variants(id, options, stock, variant_price, variant_cost), storefront_products(id, shop_price, published, sold_out, collection_end, skip_stock_check, created_at)')
       .eq('store_id', storeId)
       .order('name')
     setProducts(data || [])
@@ -314,16 +314,19 @@ function ProductRow({ product: p, onTap, exchangeRates = {} }) {
   const out = isOutOfStock(p)
   const sf = storefrontOf(p)
 
-  // 毛利率（成本換 TWD 後與售價比）
-  const twdCost = toTwdCost(p.cost, p.currency, exchangeRates)
-  const margin = sf?.shop_price != null ? calcMargin(sf.shop_price, twdCost) : null
+  // 售價/成本/毛利同源：逐規格原價 + 逐規格成本（variant_* ?? 商品層）。庫存頁不套特價，只算原價。
+  const listing = { shop_price: sf?.shop_price, on_sale: false, products: { cost: p.cost, currency: p.currency, product_variants: p.product_variants } }
+  const priceRange = getEffectivePrices(listing).regulars
+  const rawCosts = getRawCosts(listing)
+  const twdCosts = getEffectiveCosts(listing, exchangeRates)
+  const marginRange = sf?.shop_price != null ? calcMarginRange(priceRange, twdCosts) : null
 
-  // 左側資訊：SKU · 成本 · 售價 · 毛利率
+  // 左側資訊：SKU · 成本 · 售價 · 毛利率（皆為區間，單一值不顯示成區間）
   const infoParts = []
   if (p.sku) infoParts.push(p.sku)
-  if (p.cost != null) infoParts.push(`成本 ${Number(p.cost).toLocaleString()} ${p.currency || 'TWD'}`)
-  if (sf?.shop_price != null) infoParts.push(`售價 NT$${Number(sf.shop_price).toLocaleString()}`)
-  if (margin) infoParts.push(`毛利率 ${margin.rate}%`)
+  if (p.cost != null) infoParts.push(`成本 ${fmtRange(rawCosts, { suffix: ` ${p.currency || 'TWD'}` })}`)
+  if (sf?.shop_price != null) infoParts.push(`售價 ${fmtRange(priceRange, { prefix: 'NT$' })}`)
+  if (marginRange) infoParts.push(`毛利率 ${fmtMarginRate(marginRange)}`)
 
   // 右側徽章
   let badge
@@ -585,8 +588,8 @@ function EditableSelectField({ productId, field, initialValue, canEdit, onSaved,
   )
 }
 
-// ── 規格庫存編輯器（庫存頁是 stock 的唯一編輯入口）─────────
-function VariantStockEditor({ variants, optionTypes, canEdit, onSaved }) {
+// ── 規格庫存/成本編輯器（庫存頁是 stock 的唯一編輯入口；成本＝進貨資料亦在此設）─────────
+function VariantStockEditor({ variants, optionTypes, canEdit, onSaved, productCost = null, costCurrency = 'TWD' }) {
   const [rows, setRows] = useState(variants || [])
   const total = rows.reduce((s, v) => s + (v.stock || 0), 0)
 
@@ -594,6 +597,13 @@ function VariantStockEditor({ variants, optionTypes, canEdit, onSaved }) {
     const v = Math.max(0, Math.round(Number(value) || 0))
     await supabase.from('product_variants').update({ stock: v }).eq('id', id)
     setRows(prev => prev.map(r => r.id === id ? { ...r, stock: v } : r))
+    if (onSaved) onSaved()
+  }
+
+  async function saveCost(id, value) {
+    const c = value === '' ? null : Number(value)
+    await supabase.from('product_variants').update({ variant_cost: c }).eq('id', id)
+    setRows(prev => prev.map(r => r.id === id ? { ...r, variant_cost: c } : r))
     if (onSaved) onSaved()
   }
 
@@ -611,17 +621,30 @@ function VariantStockEditor({ variants, optionTypes, canEdit, onSaved }) {
           const out = s === 0
           const low = s > 0 && s < LOW
           return (
-            <div key={v.id} style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 10, padding: '8px 12px' }}>
-              <span className="fs13 fw600" style={{ flex: 1, minWidth: 0 }}>{resolveVariantLabel(v.options, optionTypes)}</span>
+            <div key={v.id} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 10, padding: '8px 12px' }}>
+              <span className="fs13 fw600" style={{ flex: 1, minWidth: 120 }}>{resolveVariantLabel(v.options, optionTypes)}</span>
               {(out || low) && <span className="badge badge-low" style={{ fontSize: 11 }}>{out ? '缺貨' : '低'}</span>}
               {canEdit ? (
-                <input
-                  type="number"
-                  defaultValue={s}
-                  onBlur={e => saveStock(v.id, e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && e.currentTarget.blur()}
-                  style={{ width: 64, textAlign: 'center', border: '0.5px solid var(--border)', borderRadius: 8, padding: '6px 8px', fontSize: 14, fontWeight: 600, background: 'var(--bg)', color: 'var(--text)' }}
-                />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span className="muted fs11">成本</span>
+                  <input
+                    type="number"
+                    defaultValue={v.variant_cost ?? ''}
+                    onBlur={e => saveCost(v.id, e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && e.currentTarget.blur()}
+                    placeholder={productCost != null ? String(productCost) : costCurrency}
+                    title={`留空＝用商品成本（${costCurrency}）`}
+                    style={{ width: 76, textAlign: 'center', border: '0.5px solid var(--border)', borderRadius: 8, padding: '6px 8px', fontSize: 14, background: 'var(--bg)', color: 'var(--text)' }}
+                  />
+                  <span className="muted fs11">庫存</span>
+                  <input
+                    type="number"
+                    defaultValue={s}
+                    onBlur={e => saveStock(v.id, e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && e.currentTarget.blur()}
+                    style={{ width: 64, textAlign: 'center', border: '0.5px solid var(--border)', borderRadius: 8, padding: '6px 8px', fontSize: 14, fontWeight: 600, background: 'var(--bg)', color: 'var(--text)' }}
+                  />
+                </div>
               ) : (
                 <span className="fs14 fw600">{s}</span>
               )}
@@ -629,6 +652,7 @@ function VariantStockEditor({ variants, optionTypes, canEdit, onSaved }) {
           )
         })}
       </div>
+      {canEdit && <div className="muted fs11" style={{ marginTop: 6 }}>成本留空＝用商品進貨成本；幣別依商品（{costCurrency}）</div>}
     </div>
   )
 }
@@ -637,11 +661,14 @@ function VariantStockEditor({ variants, optionTypes, canEdit, onSaved }) {
 function StorefrontInfo({ product, exchangeRates }) {
   const sf = product.storefront_products?.[0]
   if (!sf) return <div className="muted fs12" style={{ marginBottom: 12 }}>尚未上架商城</div>
-  const twdCost = toTwdCost(product.cost, product.currency, exchangeRates)
-  const margin = sf.shop_price != null ? calcMargin(sf.shop_price, twdCost) : null
+  // 逐規格原價 + 逐規格成本（variant_* ?? 商品層）
+  const listing = { shop_price: sf.shop_price, on_sale: false, products: { cost: product.cost, currency: product.currency, product_variants: product.product_variants } }
+  const priceRange = getEffectivePrices(listing).regulars
+  const twdCosts = getEffectiveCosts(listing, exchangeRates)
+  const marginRange = sf.shop_price != null ? calcMarginRange(priceRange, twdCosts) : null
   const parts = []
-  if (sf.shop_price != null) parts.push(`售價 NT$${Number(sf.shop_price).toLocaleString()}`)
-  if (margin) parts.push(`毛利 NT$${margin.amount.toLocaleString()}（${margin.rate}%）`)
+  if (sf.shop_price != null) parts.push(`售價 ${fmtRange(priceRange, { prefix: 'NT$' })}`)
+  if (marginRange) parts.push(`毛利 ${fmtMarginAmount(marginRange)}（${fmtMarginRate(marginRange)}）`)
   parts.push(sf.collection_end ? '限時收單' : (sf.skip_stock_check ? '不追蹤庫存' : '現貨'))
   parts.push(sf.published ? '上架中' : '已下架')
   return (
@@ -939,6 +966,8 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete, exi
           optionTypes={optionTypes}
           canEdit={canEdit}
           onSaved={onSaved}
+          productCost={product.cost ?? null}
+          costCurrency={product.currency || 'TWD'}
         />
       ) : (
         <div style={{ marginBottom: 12 }}>
