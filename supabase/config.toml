@@ -358,6 +358,10 @@ authorization_url_path = "/oauth/consent"
 # Allow dynamic client registration
 allow_dynamic_registration = false
 
+# LINE webhook：LINE 伺服器不會帶 Supabase JWT，改用 X-Line-Signature 驗簽，故關閉 verify_jwt
+[functions.line-webhook]
+verify_jwt = false
+
 [edge_runtime]
 enabled = true
 # Supported request policies: `oneshot`, `per_worker`.
