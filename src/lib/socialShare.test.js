@@ -65,7 +65,7 @@ describe('resolveShopBaseUrl', () => {
   })
 
   it('無自訂網域用 slug 子網域', () => {
-    expect(resolveShopBaseUrl({ slug: 'daigoking' })).toBe('https://daigoking.daigogo.com')
+    expect(resolveShopBaseUrl({ slug: 'daigoking' })).toBe('https://daigoking.daigogotw.com')
   })
 
   it('無資料回空字串', () => {
@@ -75,8 +75,8 @@ describe('resolveShopBaseUrl', () => {
 
 describe('buildProductUrl', () => {
   it('組商品連結', () => {
-    expect(buildProductUrl('https://daigoking.daigogo.com', 42))
-      .toBe('https://daigoking.daigogo.com/products/42')
+    expect(buildProductUrl('https://daigoking.daigogotw.com', 42))
+      .toBe('https://daigoking.daigogotw.com/products/42')
   })
 
   it('base 去尾斜線', () => {
