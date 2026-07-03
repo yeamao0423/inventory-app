@@ -1,9 +1,11 @@
 'use client'
 import './globals.css'
-import { createContext, useContext, useState, useEffect } from 'react'
+import { createContext, useContext, useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
+import { usePathname } from 'next/navigation'
 import { supabase } from '../lib/supabase'
 import { getStore } from '../lib/store'
+import { initMetaPixel, trackPageView, trackPixel } from '../lib/metaPixel'
 import zhMessages from '../messages/zh.json'
 import enMessages from '../messages/en.json'
 
@@ -39,6 +41,20 @@ export default function RootLayout({ children }) {
   useEffect(() => {
     getStore().then(setStore).catch(() => {})
   }, [])
+
+  // Meta Pixel：店家有在後台設定 Pixel ID 才載入（含首次 PageView）
+  useEffect(() => {
+    const pid = store?.settings?.meta_pixel_id
+    if (pid) initMetaPixel(pid)
+  }, [store])
+
+  // SPA 換頁不會重新載入頁面，路由變化時補發 PageView（首次由 init 發）
+  const pathname = usePathname()
+  const isFirstPath = useRef(true)
+  useEffect(() => {
+    if (isFirstPath.current) { isFirstPath.current = false; return }
+    trackPageView()
+  }, [pathname])
 
   // 動態更新 favicon（分頁標題改由各頁 metadata 接管，避免覆蓋商品標題）
   useEffect(() => {
@@ -92,6 +108,13 @@ export default function RootLayout({ children }) {
       const existing = prev.find(i => `${i.id}-${i.variantLabel || ''}` === key)
       if (existing) return prev.map(i => `${i.id}-${i.variantLabel || ''}` === key ? { ...i, qty: i.qty + item.qty } : i)
       return [...prev, item]
+    })
+    trackPixel('AddToCart', {
+      content_ids: [String(item.id)],
+      content_name: item.name,
+      content_type: 'product',
+      value: item.price * item.qty,
+      currency: 'TWD',
     })
     showToast(lang === 'zh' ? '已加入購物車 ✓' : 'Added to cart ✓')
   }

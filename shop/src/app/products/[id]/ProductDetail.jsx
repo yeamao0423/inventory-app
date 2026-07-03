@@ -1,9 +1,10 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useI18n } from '../../layout'
 import { useCart } from '../../layout'
 import { getActivePrice } from '../../../lib/salePrice'
+import { trackPixel } from '../../../lib/metaPixel'
 
 // 資料由 server component（page.jsx）以 props 帶入，這裡只負責互動。
 export default function ProductDetail({ sp, variants, customOptions, optTypes, productTags }) {
@@ -37,6 +38,17 @@ export default function ProductDetail({ sp, variants, customOptions, optTypes, p
   // 依目前選到的規格過濾 gallery；若過濾後為空（該規格無專屬圖且無共用圖）則退回全部，避免開天窗
   const matched = sortedImages.filter(img => imageMatches(img, selectedOptions))
   const visibleImages = matched.length ? matched : sortedImages
+
+  // Meta Pixel：瀏覽商品事件（每次進入詳情頁發一次）
+  useEffect(() => {
+    trackPixel('ViewContent', {
+      content_ids: [String(p.id)],
+      content_name: p.name,
+      content_type: 'product',
+      value: sp.shop_price,
+      currency: 'TWD',
+    })
+  }, [p.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Collection / sold_out status
   const isCollection = !!sp.collection_end

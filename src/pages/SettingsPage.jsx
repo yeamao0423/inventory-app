@@ -242,6 +242,24 @@ export default function SettingsPage() {
           </div>
         </div>
 
+        <div className="sec">行銷追蹤</div>
+        <div className="card" style={{ padding: 16 }}>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">Meta Pixel ID（Facebook / Instagram 廣告追蹤）</label>
+            <input className="form-input" type="text" inputMode="numeric" placeholder="例：1234567890123456"
+              value={form.meta_pixel_id ?? ''}
+              onChange={e => { setForm(prev => ({ ...prev, meta_pixel_id: e.target.value.replace(/\D/g, '') })); setSaved(false) }} />
+            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-3)', lineHeight: 1.7 }}>
+              填入後商城會自動向 Meta 回報瀏覽商品、加入購物車、結帳與購買事件，
+              下廣告時即可追蹤成效、優化受眾與再行銷；留空則不啟用、不載入任何追蹤程式。<br />
+              Pixel ID 為一串純數字，可在{' '}
+              <a href="https://business.facebook.com/events_manager" target="_blank" rel="noreferrer"
+                style={{ color: 'var(--blue)' }}>Meta 事件管理工具</a>
+              {' '}建立像素後取得。
+            </div>
+          </div>
+        </div>
+
         <div className="sec">出貨單寄件人（交貨便匯出用，可日後要匯出時再填）</div>
         <div className="card" style={{ padding: 16 }}>
           {inputRow('寄件人姓名', 'sender_name', 'text', '例：王小明', true)}

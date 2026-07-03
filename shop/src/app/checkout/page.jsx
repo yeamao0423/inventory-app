@@ -1,8 +1,9 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
 import { getStore, getStoreId } from '../../lib/store'
+import { trackPixel } from '../../lib/metaPixel'
 import { useI18n, useCart, useUser } from '../layout'
 
 export default function CheckoutPage() {
@@ -19,6 +20,19 @@ export default function CheckoutPage() {
   useEffect(() => {
     getStore().then(setStore).catch(() => {})
   }, [])
+
+  // Meta Pixel：進入結帳事件（購物車就緒後發一次）
+  const checkoutTracked = useRef(false)
+  useEffect(() => {
+    if (checkoutTracked.current || cart.length === 0) return
+    checkoutTracked.current = true
+    trackPixel('InitiateCheckout', {
+      content_ids: cart.map(i => String(i.id)),
+      num_items: cart.reduce((s, i) => s + i.qty, 0),
+      value: cart.reduce((s, i) => s + i.price * i.qty, 0),
+      currency: 'TWD',
+    })
+  }, [cart])
 
   // 登入用戶自動帶入個人資料
   useEffect(() => {
@@ -195,6 +209,14 @@ export default function CheckoutPage() {
     }
 
     const orderToken = placeResult.public_token  // 不可猜連結：完成頁以此查詢，取代可枚舉的流水號
+
+    // Meta Pixel：購買完成事件。eventID 帶訂單 token，之後接 Conversions API 可據此去重
+    trackPixel('Purchase', {
+      content_ids: cart.map(i => String(i.id)),
+      num_items: cart.reduce((s, i) => s + i.qty, 0),
+      value: total,
+      currency: 'TWD',
+    }, { eventID: orderToken })
 
     // 寄訂單確認信（不阻斷成功流程，失敗靜默處理）。
     // 只送不可猜的 token，收件人與內容由 server 依 token 從 DB 重建（見 send-order-email）。
