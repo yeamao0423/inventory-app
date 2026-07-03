@@ -1,15 +1,65 @@
 import { Resend } from 'resend'
 import { NextResponse } from 'next/server'
+import { createClient } from '@supabase/supabase-js'
 import { getStoreEmailBranding } from '../../../lib/emailBranding'
+import { escapeHtml as esc } from '../../../lib/escapeHtml'
 
 const resend = new Resend(process.env.RESEND_API_KEY)
 
+const SUPA_URL = process.env.NEXT_PUBLIC_SUPABASE_URL
+const SERVICE_KEY = process.env.SUPABASE_SECRET_KEY
+
+// P0-1：本端點原本收件人與內容全由前端傳入 → 開放中繼＋HTML 注入。
+// 改為只收「不可猜的訂單 public_token」，由 server 端以 service key 從 DB 重建信件內容，
+// 收件人一律用 DB 的 email。攻擊者無有效 token 無法觸發，也無法指定收件人或注入內容。
+// P0-2：所有帶入 HTML 的 DB/使用者文字一律經 esc() 跳脫。
 export async function POST(request) {
-  const { order, items, total, discount, couponName, lang, notifyEmail, storeId } = await request.json()
+  const { token, lang } = await request.json().catch(() => ({}))
   const zh = lang !== 'en'
 
-  if (!order?.email) {
-    return NextResponse.json({ error: 'Missing email' }, { status: 400 })
+  if (!token) {
+    return NextResponse.json({ error: 'Missing token' }, { status: 400 })
+  }
+  if (!SUPA_URL || !SERVICE_KEY) {
+    console.error('[send-order-email] 未設定 SUPABASE_SECRET_KEY，無法寄送')
+    return NextResponse.json({ error: 'server not configured' }, { status: 500 })
+  }
+
+  // service key：繞過 RLS 於 server 端讀訂單。收件人與內容一律以 DB 為準。
+  const admin = createClient(SUPA_URL, SERVICE_KEY, { auth: { persistSession: false } })
+  const { data: row, error: fetchErr } = await admin
+    .from('consumer_orders')
+    .select('id, store_id, customer_name, email, phone, address, store_name, store_number, line_id, remittance_last5, note, items_json, total_amount, discount_amount, coupon_id')
+    .eq('public_token', token)
+    .maybeSingle()
+
+  if (fetchErr || !row) {
+    return NextResponse.json({ error: 'order not found' }, { status: 404 })
+  }
+
+  // 映射成模板變數（來源改為 DB；total_amount 已是折扣後金額）
+  const order = {
+    id: row.id,
+    email: row.email,
+    name: row.customer_name,
+    phone: row.phone,
+    address: row.address,
+    store_name: row.store_name,
+    store_number: row.store_number,
+    line_id: row.line_id,
+    remittance_last5: row.remittance_last5,
+    note: row.note,
+  }
+  const items = Array.isArray(row.items_json) ? row.items_json : []
+  const discount = Number(row.discount_amount) || 0
+  const total = Number(row.total_amount) || 0
+  const storeId = row.store_id
+
+  // 優惠券名稱（顯示用）：有 coupon_id 才查，查不到就退回通用字樣
+  let couponName = null
+  if (row.coupon_id != null) {
+    const { data: c } = await admin.from('coupons').select('name').eq('id', row.coupon_id).maybeSingle()
+    couponName = c?.name || null
   }
 
   // 依下單店家動態帶入品牌名、匯款資訊、客服聯絡與店家通知信箱
@@ -24,12 +74,12 @@ export async function POST(request) {
   const itemsRows = (items || []).map(item => `
     <tr>
       <td style="padding:12px 0;border-bottom:1px solid #f0f0ea;vertical-align:top;">
-        <div style="font-size:15px;font-weight:600;color:#1a1a1a;margin-bottom:3px;">${item.name}</div>
+        <div style="font-size:15px;font-weight:600;color:#1a1a1a;margin-bottom:3px;">${esc(item.name)}</div>
         ${item.color || item.size
-          ? `<div style="font-size:13px;color:#888;margin-bottom:2px;">${[item.color, item.size].filter(Boolean).join(' / ')}</div>`
+          ? `<div style="font-size:13px;color:#888;margin-bottom:2px;">${esc([item.color, item.size].filter(Boolean).join(' / '))}</div>`
           : ''}
         ${item.customNote
-          ? `<div style="font-size:12px;color:#aaa;">${zh ? '備註：' : 'Note: '}${item.customNote}</div>`
+          ? `<div style="font-size:12px;color:#aaa;">${zh ? '備註：' : 'Note: '}${esc(item.customNote)}</div>`
           : ''}
       </td>
       <td style="padding:12px 0;border-bottom:1px solid #f0f0ea;text-align:right;vertical-align:top;white-space:nowrap;padding-left:16px;">
@@ -44,21 +94,21 @@ export async function POST(request) {
     ? `
               <tr>
                 <td style="font-size:13px;color:#4a7ab5;padding:4px 0;width:80px;">${zh ? '銀行' : 'Bank'}</td>
-                <td style="font-size:14px;color:#1e4d8c;padding:4px 0;font-weight:600;">${brand.bank.name}${brand.bank.code ? ` (${brand.bank.code})` : ''}</td>
+                <td style="font-size:14px;color:#1e4d8c;padding:4px 0;font-weight:600;">${esc(brand.bank.name)}${brand.bank.code ? ` (${esc(brand.bank.code)})` : ''}</td>
               </tr>
               <tr>
                 <td style="font-size:13px;color:#4a7ab5;padding:4px 0;">${zh ? '帳號' : 'Account'}</td>
-                <td style="font-size:16px;color:#1e4d8c;padding:4px 0;font-weight:700;letter-spacing:1px;">${brand.bank.account}</td>
+                <td style="font-size:16px;color:#1e4d8c;padding:4px 0;font-weight:700;letter-spacing:1px;">${esc(brand.bank.account)}</td>
               </tr>
               ${brand.bank.holder ? `
               <tr>
                 <td style="font-size:13px;color:#4a7ab5;padding:4px 0;">${zh ? '戶名' : 'Account Name'}</td>
-                <td style="font-size:14px;color:#1e4d8c;padding:4px 0;font-weight:600;">${brand.bank.holder}</td>
+                <td style="font-size:14px;color:#1e4d8c;padding:4px 0;font-weight:600;">${esc(brand.bank.holder)}</td>
               </tr>` : ''}
               ${order.remittance_last5 ? `
               <tr>
                 <td style="font-size:13px;color:#4a7ab5;padding:4px 0;">${zh ? '您的末五碼' : 'Your last 5'}</td>
-                <td style="font-size:14px;color:#1e4d8c;padding:4px 0;font-weight:600;">${order.remittance_last5}</td>
+                <td style="font-size:14px;color:#1e4d8c;padding:4px 0;font-weight:600;">${esc(order.remittance_last5)}</td>
               </tr>` : ''}`
     : `
               <tr>
@@ -67,14 +117,14 @@ export async function POST(request) {
                 </td>
               </tr>`
 
-  // footer 客服聯絡：店家有填才顯示對應項目
+  // footer 客服聯絡：店家有填才顯示對應項目（連結為店家設定值，非消費者輸入）
   const contactParts = []
   if (brand.contactLine) contactParts.push(`LINE：<a href="${brand.contactLine}" style="color:#aaa;">${brand.contactLine.replace(/^https?:\/\/line\.me\/R\/ti\/p\//, '')}</a>`)
   if (brand.contactEmail) contactParts.push(`Email：<a href="mailto:${brand.contactEmail}" style="color:#aaa;">${brand.contactEmail}</a>`)
   const contactLineHtml = contactParts.length
     ? `${zh ? '如有任何問題，歡迎透過以下方式聯繫我們：' : 'If you have any questions, feel free to contact us:'}<br>${contactParts.join('&nbsp;&nbsp;|&nbsp;&nbsp;')}<br><br>`
     : ''
-  const footerHtml = `${contactLineHtml}© 2026 ${storeName}. All rights reserved.`
+  const footerHtml = `${contactLineHtml}© 2026 ${esc(storeName)}. All rights reserved.`
 
   const html = `<!DOCTYPE html>
 <html lang="${zh ? 'zh-TW' : 'en'}">
@@ -87,7 +137,7 @@ export async function POST(request) {
 
         <!-- Header -->
         <tr><td style="background:#1a1a1a;border-radius:16px 16px 0 0;padding:28px 32px;text-align:center;">
-          <div style="font-size:22px;font-weight:700;color:#fff;letter-spacing:-0.5px;">${storeName}</div>
+          <div style="font-size:22px;font-weight:700;color:#fff;letter-spacing:-0.5px;">${esc(storeName)}</div>
           <div style="font-size:14px;color:rgba(255,255,255,0.6);margin-top:6px;">
             ${zh ? '感謝您的訂購！' : 'Thank you for your order!'}
           </div>
@@ -125,7 +175,7 @@ export async function POST(request) {
             </tr>
             <tr>
               <td style="padding:8px 0;">
-                <span style="font-size:14px;color:#1a7a3a;">${couponName || (zh ? '優惠折扣' : 'Discount')}</span>
+                <span style="font-size:14px;color:#1a7a3a;">${esc(couponName) || (zh ? '優惠折扣' : 'Discount')}</span>
               </td>
               <td style="padding:8px 0;text-align:right;">
                 <span style="font-size:14px;font-weight:600;color:#1a7a3a;">-NT$${discount.toLocaleString()}</span>
@@ -149,20 +199,20 @@ export async function POST(request) {
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#fafaf8;border-radius:12px;padding:16px 20px;margin-bottom:24px;">
             <tr>
               <td style="font-size:13px;color:#999;padding:4px 0;width:80px;">${zh ? '姓名' : 'Name'}</td>
-              <td style="font-size:14px;color:#1a1a1a;padding:4px 0;font-weight:500;">${order.name}</td>
+              <td style="font-size:14px;color:#1a1a1a;padding:4px 0;font-weight:500;">${esc(order.name)}</td>
             </tr>
             <tr>
               <td style="font-size:13px;color:#999;padding:4px 0;">${zh ? '電話' : 'Phone'}</td>
-              <td style="font-size:14px;color:#1a1a1a;padding:4px 0;">${order.phone}</td>
+              <td style="font-size:14px;color:#1a1a1a;padding:4px 0;">${esc(order.phone)}</td>
             </tr>
             <tr>
               <td style="font-size:13px;color:#999;padding:4px 0;">${zh ? '取貨門市' : 'Store'}</td>
-              <td style="font-size:14px;color:#1a1a1a;padding:4px 0;">${order.store_name || ''} (${order.store_number || ''})</td>
+              <td style="font-size:14px;color:#1a1a1a;padding:4px 0;">${esc(order.store_name || '')} (${esc(order.store_number || '')})</td>
             </tr>
             ${order.note ? `
             <tr>
               <td style="font-size:13px;color:#999;padding:4px 0;">${zh ? '備註' : 'Note'}</td>
-              <td style="font-size:14px;color:#1a1a1a;padding:4px 0;">${order.note}</td>
+              <td style="font-size:14px;color:#1a1a1a;padding:4px 0;">${esc(order.note)}</td>
             </tr>` : ''}
           </table>
 
@@ -219,8 +269,8 @@ export async function POST(request) {
   const notifyItemsRows = (items || []).map(item => `
     <tr>
       <td style="padding:8px 0;border-bottom:1px solid #f0f0ea;font-size:14px;color:#1a1a1a;">
-        ${item.name}
-        ${item.color || item.size ? `<span style="color:#888;"> (${[item.color, item.size].filter(Boolean).join(' / ')})</span>` : ''}
+        ${esc(item.name)}
+        ${item.color || item.size ? `<span style="color:#888;"> (${esc([item.color, item.size].filter(Boolean).join(' / '))})</span>` : ''}
       </td>
       <td style="padding:8px 0;border-bottom:1px solid #f0f0ea;text-align:center;font-size:14px;color:#1a1a1a;">× ${item.qty}</td>
       <td style="padding:8px 0;border-bottom:1px solid #f0f0ea;text-align:right;font-size:14px;font-weight:600;color:#1a1a1a;">NT$${(item.price * item.qty).toLocaleString()}</td>
@@ -242,14 +292,14 @@ export async function POST(request) {
 
           <div style="font-size:13px;font-weight:600;color:#999;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">客戶資訊</div>
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#fafaf8;border-radius:10px;padding:14px 18px;margin-bottom:20px;">
-            <tr><td style="font-size:13px;color:#999;padding:3px 0;width:80px;">姓名</td><td style="font-size:14px;color:#1a1a1a;font-weight:500;">${order.name}</td></tr>
-            <tr><td style="font-size:13px;color:#999;padding:3px 0;">電話</td><td style="font-size:14px;color:#1a1a1a;">${order.phone || '—'}</td></tr>
-            <tr><td style="font-size:13px;color:#999;padding:3px 0;">Email</td><td style="font-size:14px;color:#1a1a1a;">${order.email || '—'}</td></tr>
-            <tr><td style="font-size:13px;color:#999;padding:3px 0;">LINE</td><td style="font-size:14px;color:#1a1a1a;">${order.line_id || '—'}</td></tr>
-            ${order.store_name ? `<tr><td style="font-size:13px;color:#999;padding:3px 0;">取貨門市</td><td style="font-size:14px;color:#1a1a1a;">${order.store_name} (${order.store_number || ''})</td></tr>` : ''}
-            ${order.address ? `<tr><td style="font-size:13px;color:#999;padding:3px 0;">地址</td><td style="font-size:14px;color:#1a1a1a;">${order.address}</td></tr>` : ''}
-            ${order.remittance_last5 ? `<tr><td style="font-size:13px;color:#999;padding:3px 0;">匯款末五碼</td><td style="font-size:14px;color:#1a1a1a;font-weight:600;">${order.remittance_last5}</td></tr>` : ''}
-            ${order.note ? `<tr><td style="font-size:13px;color:#999;padding:3px 0;">備註</td><td style="font-size:14px;color:#1a1a1a;">${order.note}</td></tr>` : ''}
+            <tr><td style="font-size:13px;color:#999;padding:3px 0;width:80px;">姓名</td><td style="font-size:14px;color:#1a1a1a;font-weight:500;">${esc(order.name)}</td></tr>
+            <tr><td style="font-size:13px;color:#999;padding:3px 0;">電話</td><td style="font-size:14px;color:#1a1a1a;">${esc(order.phone || '—')}</td></tr>
+            <tr><td style="font-size:13px;color:#999;padding:3px 0;">Email</td><td style="font-size:14px;color:#1a1a1a;">${esc(order.email || '—')}</td></tr>
+            <tr><td style="font-size:13px;color:#999;padding:3px 0;">LINE</td><td style="font-size:14px;color:#1a1a1a;">${esc(order.line_id || '—')}</td></tr>
+            ${order.store_name ? `<tr><td style="font-size:13px;color:#999;padding:3px 0;">取貨門市</td><td style="font-size:14px;color:#1a1a1a;">${esc(order.store_name)} (${esc(order.store_number || '')})</td></tr>` : ''}
+            ${order.address ? `<tr><td style="font-size:13px;color:#999;padding:3px 0;">地址</td><td style="font-size:14px;color:#1a1a1a;">${esc(order.address)}</td></tr>` : ''}
+            ${order.remittance_last5 ? `<tr><td style="font-size:13px;color:#999;padding:3px 0;">匯款末五碼</td><td style="font-size:14px;color:#1a1a1a;font-weight:600;">${esc(order.remittance_last5)}</td></tr>` : ''}
+            ${order.note ? `<tr><td style="font-size:13px;color:#999;padding:3px 0;">備註</td><td style="font-size:14px;color:#1a1a1a;">${esc(order.note)}</td></tr>` : ''}
           </table>
 
           <div style="font-size:13px;font-weight:600;color:#999;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">訂購商品</div>
@@ -264,7 +314,7 @@ export async function POST(request) {
               <td style="padding:6px 0;text-align:right;font-size:14px;color:#888;">NT$${(total + discount).toLocaleString()}</td>
             </tr>
             <tr>
-              <td style="padding:6px 0;font-size:14px;color:#1a7a3a;">${couponName || '優惠折扣'}</td>
+              <td style="padding:6px 0;font-size:14px;color:#1a7a3a;">${esc(couponName) || '優惠折扣'}</td>
               <td style="padding:6px 0;text-align:right;font-size:14px;font-weight:600;color:#1a7a3a;">-NT$${discount.toLocaleString()}</td>
             </tr>
             ` : ''}
@@ -285,7 +335,7 @@ export async function POST(request) {
 </html>`
 
   // 本機測試：略過寄給店家的新訂單通知；僅正式環境寄出
-  const storeNotifyTo = notifyEmail || brand.notifyEmail
+  const storeNotifyTo = brand.notifyEmail
   if (process.env.NODE_ENV === 'production' && storeNotifyTo) {
     resend.emails.send({
       from: `${storeName} <no-reply@daigogotw.com>`,

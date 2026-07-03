@@ -7,16 +7,17 @@ import { getStore } from '../../../lib/store'
 import { useI18n } from '../../layout'
 
 export default function OrderSuccessPage() {
-  const { id } = useParams()
+  // 路由參數雖名為 id，實為不可猜的 public_token（見 20250031 migration）。
+  const { id: token } = useParams()
   const { t, lang } = useI18n()
   const [order, setOrder] = useState(null)
   const [store, setStore] = useState(null)
 
   useEffect(() => {
-    supabase.rpc('get_consumer_order', { p_order_id: id })
+    supabase.rpc('get_consumer_order', { p_token: token })
       .then(({ data }) => setOrder(data))
     getStore().then(setStore).catch(() => {})
-  }, [id])
+  }, [token])
 
   const bank = store?.settings?.bank_account ? store.settings : null
 
@@ -110,7 +111,7 @@ export default function OrderSuccessPage() {
 
       <div className="order-no-card">
         <div className="order-no-label">{t('order.order_no')}</div>
-        <div className="order-no-value">#{String(id).slice(-8).toUpperCase()}</div>
+        <div className="order-no-value">{order?.id ? `#${String(order.id).slice(-8).toUpperCase()}` : '…'}</div>
       </div>
 
       {order && (

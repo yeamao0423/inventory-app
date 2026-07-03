@@ -74,12 +74,20 @@ export default async function ProductDetailPage({ params }) {
   }
 
   const jsonLd = buildProductJsonLd(data)
+  // 安全序列化 JSON-LD：JSON.stringify 不會跳脫 < > &，商品名稱/描述若含
+  // </script> 會脫出 script 標籤造成 XSS。轉成 \uXXXX（JSON-LD 標準做法）：
+  // 對 JSON 語意無影響，但再也無法閉合標籤或注入 HTML。
+  // 一併處理 U+2028/U+2029（JS 字串中的非法換行），避免極端內容破壞內嵌 JSON。
+  const jsonLdSafe = JSON.stringify(jsonLd).replace(
+    /[<>&\u2028\u2029]/g,
+    (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'),
+  )
 
   return (
     <>
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        dangerouslySetInnerHTML={{ __html: jsonLdSafe }}
       />
       <ProductDetail
         sp={data.sp}

@@ -194,35 +194,18 @@ export default function CheckoutPage() {
       return
     }
 
-    const orderId = placeResult.order_id
-    const finalDiscount = placeResult.discount_amount || 0
+    const orderToken = placeResult.public_token  // 不可猜連結：完成頁以此查詢，取代可枚舉的流水號
 
-    // 寄訂單確認信（不阻斷成功流程，失敗靜默處理）
+    // 寄訂單確認信（不阻斷成功流程，失敗靜默處理）。
+    // 只送不可猜的 token，收件人與內容由 server 依 token 從 DB 重建（見 send-order-email）。
     fetch('/api/send-order-email', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        order: {
-          id: orderId,
-          email: form.email,
-          name: form.name,
-          phone: form.phone,
-          store_name: form.store_name,
-          store_number: form.store_number,
-          remittance_last5: form.remittance_last5.trim(),
-          note: form.note,
-        },
-        items: cart,
-        total: orderTotal - finalDiscount,
-        discount: finalDiscount,
-        couponName: couponPreview?.name || null,
-        lang,
-        storeId: store?.id,
-      }),
+      body: JSON.stringify({ token: orderToken, lang }),
     }).catch(err => console.error('Email send failed:', err))
 
     clearCart()
-    router.push(`/order/${orderId}`)
+    router.push(`/order/${orderToken}`)
   }
 
   if (cart.length === 0 && !submitting) {

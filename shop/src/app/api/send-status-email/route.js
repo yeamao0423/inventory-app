@@ -1,13 +1,18 @@
 import { Resend } from 'resend'
 import { NextResponse } from 'next/server'
+import { createClient } from '@supabase/supabase-js'
 import { getStoreEmailBranding } from '../../../lib/emailBranding'
+import { escapeHtml as esc } from '../../../lib/escapeHtml'
 
 const resend = new Resend(process.env.RESEND_API_KEY)
+
+const SUPA_URL = process.env.NEXT_PUBLIC_SUPABASE_URL
+const ANON = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Authorization, Content-Type',
 }
 
 export async function OPTIONS() {
@@ -15,14 +20,44 @@ export async function OPTIONS() {
 }
 
 export async function POST(request) {
-  const { order, activeItems, cancelledItems, shippingFee, newTotal, fulfillment_type, trackingNumber, lang, storeId } = await request.json()
+  const { order, activeItems, cancelledItems, shippingFee, newTotal, fulfillment_type, trackingNumber, lang, storeId } = await request.json().catch(() => ({}))
   const zh = lang !== 'en'
 
-  console.log(`[send-status-email] type=${fulfillment_type} to=${order?.email} active=${activeItems?.length} cancelled=${cancelledItems?.length} total=${newTotal}`)
+  console.log(`[send-status-email] type=${fulfillment_type} order=${order?.id} active=${activeItems?.length} cancelled=${cancelledItems?.length} total=${newTotal}`)
 
-  if (!order?.email) {
-    return NextResponse.json({ error: 'Missing email' }, { status: 400, headers: corsHeaders })
+  // P0-1：後台（已登入員工）才可觸發。用呼叫者的 Supabase JWT 驗身分＋店家角色，
+  //       收件人一律以 DB 訂單的 email 為準（不信前端傳入），杜絕匿名開放中繼。
+  const jwt = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '')
+  if (!jwt || storeId == null || order?.id == null) {
+    return NextResponse.json({ error: 'missing token / storeId / order id' }, { status: 400, headers: corsHeaders })
   }
+  if (!SUPA_URL || !ANON) {
+    return NextResponse.json({ error: 'server not configured' }, { status: 500, headers: corsHeaders })
+  }
+
+  const sb = createClient(SUPA_URL, ANON, {
+    global: { headers: { Authorization: `Bearer ${jwt}` } },
+    auth: { persistSession: false },
+  })
+
+  const { data: { user } } = await sb.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401, headers: corsHeaders })
+
+  const { data: role } = await sb
+    .from('user_store_roles').select('role')
+    .eq('user_id', user.id).eq('store_id', storeId)
+    .in('role', ['super_admin', 'admin', 'editor'])
+    .maybeSingle()
+  if (!role) return NextResponse.json({ error: 'forbidden' }, { status: 403, headers: corsHeaders })
+
+  // 收件人取自 DB（RLS 確保此員工看得到該店訂單）；查不到或跨店 → 拒絕
+  const { data: orderRow } = await sb
+    .from('consumer_orders').select('email, store_id')
+    .eq('id', order.id).maybeSingle()
+  if (!orderRow || orderRow.store_id !== storeId || !orderRow.email) {
+    return NextResponse.json({ error: 'order not found' }, { status: 403, headers: corsHeaders })
+  }
+  const recipient = orderRow.email
 
   // 依訂單店家動態帶入品牌名與客服聯絡
   const brand = await getStoreEmailBranding(storeId)
@@ -44,9 +79,9 @@ export async function POST(request) {
     return (items || []).map(item => `
       <tr>
         <td style="padding:10px 0;border-bottom:1px solid #f0f0ea;vertical-align:top;${isCancelled ? 'opacity:0.5;' : ''}">
-          <div style="font-size:14px;font-weight:600;color:#1a1a1a;${isCancelled ? 'text-decoration:line-through;' : ''}">${item.name}</div>
+          <div style="font-size:14px;font-weight:600;color:#1a1a1a;${isCancelled ? 'text-decoration:line-through;' : ''}">${esc(item.name)}</div>
           ${item.color || item.size
-            ? `<div style="font-size:12px;color:#888;">${[item.color, item.size].filter(Boolean).join(' / ')}</div>`
+            ? `<div style="font-size:12px;color:#888;">${esc([item.color, item.size].filter(Boolean).join(' / '))}</div>`
             : ''}
         </td>
         <td style="padding:10px 0;border-bottom:1px solid #f0f0ea;text-align:right;vertical-align:top;white-space:nowrap;padding-left:12px;">
@@ -62,7 +97,7 @@ export async function POST(request) {
   const trackingHtml = trackingNumber ? `
       <div style="background:#f5f5ff;border-radius:12px;padding:14px 18px;margin-bottom:24px;">
         <div style="font-size:13px;color:#666;margin-bottom:4px;">${zh ? '📦 物流追蹤單號' : '📦 Tracking Number'}</div>
-        <div style="font-size:16px;font-weight:700;color:#1a1a1a;letter-spacing:0.5px;">${trackingNumber}</div>
+        <div style="font-size:16px;font-weight:700;color:#1a1a1a;letter-spacing:0.5px;">${esc(trackingNumber)}</div>
       </div>
   ` : ''
 
@@ -236,7 +271,7 @@ export async function POST(request) {
   const contactLineHtml = contactParts.length
     ? `${zh ? '如有任何問題，歡迎透過以下方式聯繫我們：' : 'If you have any questions, feel free to contact us:'}<br>${contactParts.join('&nbsp;&nbsp;|&nbsp;&nbsp;')}<br><br>`
     : ''
-  const footerHtml = `${contactLineHtml}© 2026 ${storeName}. All rights reserved.`
+  const footerHtml = `${contactLineHtml}© 2026 ${esc(storeName)}. All rights reserved.`
 
   const html = `<!DOCTYPE html>
 <html lang="${zh ? 'zh-TW' : 'en'}">
@@ -246,7 +281,7 @@ export async function POST(request) {
     <tr><td align="center">
       <table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;">
         <tr><td style="background:#1a1a1a;border-radius:16px 16px 0 0;padding:28px 32px;text-align:center;">
-          <div style="font-size:22px;font-weight:700;color:#fff;letter-spacing:-0.5px;">${storeName}</div>
+          <div style="font-size:22px;font-weight:700;color:#fff;letter-spacing:-0.5px;">${esc(storeName)}</div>
           <div style="font-size:13px;color:rgba(255,255,255,0.5);margin-top:4px;">${zh ? '訂單' : 'Order'} #${orderNo}</div>
         </td></tr>
         <tr><td style="background:#fff;padding:32px;border-left:0.5px solid #e8e8e0;border-right:0.5px solid #e8e8e0;">
@@ -265,7 +300,7 @@ export async function POST(request) {
 
   const { error } = await resend.emails.send({
     from: `${storeName} <no-reply@daigogotw.com>`,
-    to: order.email,
+    to: recipient,
     subject,
     html,
   })

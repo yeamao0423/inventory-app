@@ -1025,10 +1025,14 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
   async function triggerStatusEmail({ activeItems, cancelledItems, shippingFee, newTotal, fulfillment_type, trackingNumber }) {
     try {
       const shopUrl = import.meta.env.VITE_SHOP_URL || 'http://localhost:3000'
+      // 端點需驗證後台身分＋店家角色（P0-1）：帶上目前登入者的 Supabase JWT
+      const { data: { session } } = await supabase.auth.getSession()
+      const accessToken = session?.access_token
+      if (!accessToken) { console.error('[triggerStatusEmail] 無登入 session，略過寄信'); return }
       console.log(`[triggerStatusEmail] type=${fulfillment_type} email=${o.email} url=${shopUrl}/api/send-status-email`)
       const res = await fetch(`${shopUrl}/api/send-status-email`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
         body: JSON.stringify({
           order: {
             id: o.id,
