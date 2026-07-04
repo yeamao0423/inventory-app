@@ -4,6 +4,7 @@ import { SUPPORTED_CURRENCIES } from '../constants/currency'
 import { useAuth } from '../hooks/useAuth'
 import CustomSelect from '../components/CustomSelect'
 import { compressImage, uploadImages } from '../lib/imageUtils'
+import { revalidateShop } from '../lib/revalidateShop'
 import { toTwdCost, getEffectivePrices, getEffectiveCosts, getRawCosts, calcMarginRange, fmtRange, fmtMarginRate, fmtMarginAmount } from '../lib/pricing'
 import { cmpNum, cmpStr, cmpDate } from '../lib/sortUtils'
 import { Pill } from '../components/MenuPopover'
@@ -101,6 +102,13 @@ export default function InventoryPage() {
   const [page, setPage] = useState(1)
 
   useEffect(() => { if (!storeId) return; fetchProducts(); fetchCategories(); fetchOptionTypes(); fetchRates() }, [storeId])
+
+  // 商品編輯後：重載後台清單 + 通知商城清快取（store tag 涵蓋列表/詳情/店家資訊）。
+  // 集中在此一處，所有編輯器的 onSaved 都會經過（DRY）。revalidateShop 靜默失敗，不擋後台。
+  function handleSaved() {
+    fetchProducts()
+    revalidateShop({ storeId })
+  }
 
   async function fetchProducts() {
     const { data } = await supabase
@@ -279,13 +287,13 @@ export default function InventoryPage() {
       )}
 
       {sheet === 'add' && (
-        <AddProductSheet onClose={() => setSheet(null)} onSaved={fetchProducts} existingSources={existingSources} />
+        <AddProductSheet onClose={() => setSheet(null)} onSaved={handleSaved} existingSources={existingSources} />
       )}
       {sheet && sheet !== 'add' && (
         <ProductDetailSheet
           product={sheet}
           onClose={() => setSheet(null)}
-          onSaved={fetchProducts}
+          onSaved={handleSaved}
           canEdit={can('edit')}
           canDelete={can('delete')}
           existingSources={existingSources}
@@ -296,7 +304,7 @@ export default function InventoryPage() {
       {quickList && (
         <QuickListSheet
           onClose={() => setQuickList(false)}
-          onSaved={fetchProducts}
+          onSaved={handleSaved}
           existingSources={existingSources}
         />
       )}
