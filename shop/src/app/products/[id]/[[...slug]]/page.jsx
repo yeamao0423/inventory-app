@@ -1,5 +1,5 @@
 import { notFound, redirect } from 'next/navigation'
-import { getProductDetail } from '../../../../lib/data'
+import { getProductDetail, getAllPublishedProductParams } from '../../../../lib/data'
 import { slugifyName } from '../../../../lib/slug'
 import ProductDetail from '../ProductDetail'
 
@@ -8,6 +8,18 @@ import ProductDetail from '../ProductDetail'
 // tag 立即失效。revalidate 是保險上限，最久一小時自動再生一次。
 export const revalidate = 3600
 export const dynamicParams = true // 未預先產生的商品頁，首次請求時按需生成再快取
+
+// build 時預先渲染所有已上架商品的詳情頁（●SSG）→ 訪客直接 CDN 命中、不碰 DB。
+// slug 帶正規名稱段；缺少或不符的網址由頁面內 redirect 導到此正規網址。
+export async function generateStaticParams() {
+  const products = await getAllPublishedProductParams()
+  // 回傳原始（未編碼）slug；Next.js 自行處理 URL 編碼，傳已編碼會雙重編碼。
+  // 頁面內的 redirect 用 decodeURIComponent 比對，兩種編碼情況都相容。
+  return products.map((p) => ({
+    id: String(p.id),
+    slug: [slugifyName(p.name)],
+  }))
+}
 
 // SEO：伺服器端產生標題/描述/分享縮圖（爬蟲、LINE/FB 分享看得到）
 export async function generateMetadata({ params }) {

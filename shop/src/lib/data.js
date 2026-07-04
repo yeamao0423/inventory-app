@@ -193,5 +193,17 @@ export const getSitemapData = cache(async (storeId) => {
   )()
 })
 
+// ── generateStaticParams 用：所有已上架商品的 id + name（跨店）──
+// 商品詳情頁靠全域唯一的 product_id 反查店，不讀 host，故 build 時可預先渲染全部商品頁。
+// 不掛 unstable_cache：build 時執行一次即可，不需跨請求快取。
+export async function getAllPublishedProductParams() {
+  if (!supabase) return []
+  const { data } = await supabase
+    .from('storefront_products')
+    .select('product_id, products:shop_products!inner(name)')
+    .eq('published', true)
+  return (data || []).map(r => ({ id: r.product_id, name: r.products?.name || '' }))
+}
+
 // 給其他地方用（目前 product 詳情已內含 store）
 export { fetchStoreById as getStoreById }
