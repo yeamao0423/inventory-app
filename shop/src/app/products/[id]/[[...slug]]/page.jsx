@@ -3,8 +3,11 @@ import { getProductDetail } from '../../../../lib/data'
 import { slugifyName } from '../../../../lib/slug'
 import ProductDetail from '../ProductDetail'
 
-// 暫時：每次請求都抓最新（方便 local 測試）。F 層導入 ISR 後改為 revalidate + tag。
-export const dynamic = 'force-dynamic'
+// ISR：詳情頁不讀 host（靠 params.id 反查店），可完整靜態快取。
+// 靜態頁存 CDN，訪客直接命中不碰 DB；後台改商品時 /api/revalidate 打 product-{id}
+// tag 立即失效。revalidate 是保險上限，最久一小時自動再生一次。
+export const revalidate = 3600
+export const dynamicParams = true // 未預先產生的商品頁，首次請求時按需生成再快取
 
 // SEO：伺服器端產生標題/描述/分享縮圖（爬蟲、LINE/FB 分享看得到）
 export async function generateMetadata({ params }) {
