@@ -147,7 +147,10 @@ export const getProductDetail = cache(async (productId) => {
       if (!sp) return null
 
       const [{ data: varData }, { data: optData }, { data: optTypes }, { data: ptData }, { data: store }] = await Promise.all([
-        supabase.from('product_variants').select('*').eq('product_id', sp.product_id),
+        // 明列欄位：不含 variant_cost（migration 39 對 anon 封鎖成本，select('*') 會整句報錯）
+        supabase.from('product_variants')
+          .select('id, product_id, options, stock, price_adjustment, variant_price, sale_price')
+          .eq('product_id', sp.product_id),
         supabase.from('custom_options').select('*').eq('product_id', sp.product_id),
         supabase.from('variant_option_types')
           .select('*, variant_option_values(id, value, sort_order)')

@@ -55,7 +55,7 @@ export default function OrdersPage() {
       supabase.from('storefront_products').select('product_id, shop_price').eq('store_id', storeId),
       supabase.from('exchange_rates').select('*'),
       supabase.from('product_images').select('product_id, url, sort_order').order('sort_order', { ascending: true }),
-      supabase.from('product_variants').select('id, product_id, options'),
+      supabase.from('product_variants').select('id, product_id, options').eq('store_id', storeId),
       supabase.from('procurement_items').select('product_id, variant_id, quantity, actual_qty, status, batch:batch_id(status)'),
     ])
 
@@ -925,7 +925,7 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
     if (!storeId) return
     Promise.all([
       supabase.from('products').select('id, name, sku, quantity').eq('store_id', storeId),
-      supabase.from('product_variants').select('*'),
+      supabase.from('product_variants').select('*').eq('store_id', storeId),
       supabase.from('storefront_products').select('product_id, shop_price').eq('store_id', storeId),
       supabase.from('variant_option_values').select('id, value'),
     ]).then(([{ data: prods }, { data: vars }, { data: sp }, { data: vals }]) => {
@@ -1647,7 +1647,7 @@ function AddOrderSheet({ onClose, onSaved }) {
     async function load() {
       const [{ data: prods }, { data: vars }, { data: sp }, { data: vals }] = await Promise.all([
         supabase.from('products').select('id, name, sku, source').eq('store_id', storeId),
-        supabase.from('product_variants').select('*'),
+        supabase.from('product_variants').select('*').eq('store_id', storeId),
         supabase.from('storefront_products').select('product_id, shop_price').eq('store_id', storeId),
         supabase.from('variant_option_values').select('id, value'),
       ])
