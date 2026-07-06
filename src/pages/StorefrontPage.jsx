@@ -1396,7 +1396,8 @@ function ListingSheet({ item, products, onClose, onSaved }) {
         <div className="sec" style={{ marginTop: 8 }}>商品描述</div>
         <div className="form-group">
           <label className="form-label">中文描述</label>
-          <input className="form-input" placeholder="商品說明（顯示在商城）" value={form.desc_zh} onChange={e => set('desc_zh', e.target.value)} />
+          <textarea className="form-input" placeholder="商品說明（顯示在商城）" rows={3} value={form.desc_zh} onChange={e => set('desc_zh', e.target.value)}
+            style={{ resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.6 }} />
         </div>
         <div className="form-group">
           <label className="form-label">英文商品名稱</label>
