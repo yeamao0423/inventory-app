@@ -39,6 +39,42 @@ export function compressImage(file) {
   })
 }
 
+// 重新編碼為 webp（不限縮小條件、可控最長邊與品質）。
+// 給「僅供 AI 辨識」的高解析照片用：格式不支援或檔案過大時轉檔，
+// 與 compressImage 不同——不會因轉出檔比原檔大而退回原檔（重點是格式與尺寸合法）。
+export function reencodeImage(file, maxDim, quality) {
+  return new Promise((resolve) => {
+    const img = new Image()
+    const url = URL.createObjectURL(file)
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      let { width, height } = img
+      if (width > maxDim || height > maxDim) {
+        const ratio = Math.min(maxDim / width, maxDim / height)
+        width = Math.round(width * ratio)
+        height = Math.round(height * ratio)
+      }
+      const canvas = document.createElement('canvas')
+      canvas.width = width
+      canvas.height = height
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height)
+      canvas.toBlob(
+        (blob) => {
+          if (blob) {
+            resolve(new File([blob], file.name.replace(/\.\w+$/, '.webp'), { type: 'image/webp' }))
+          } else {
+            resolve(file)
+          }
+        },
+        'image/webp',
+        quality,
+      )
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file) }
+    img.src = url
+  })
+}
+
 export async function uploadImages(files, productId) {
   const results = []
   const errors = []

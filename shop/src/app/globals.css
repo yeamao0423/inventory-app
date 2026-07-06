@@ -245,7 +245,7 @@ input, textarea, select { font-family: inherit; }
 .detail-price-sale { color: var(--red); }
 .detail-price-old { font-size: 16px; font-weight: 400; color: var(--text-3); text-decoration: line-through; }
 @media (max-width: 600px) { .detail-price-old { font-size: 14px; } }
-.detail-desc { font-size: 15px; color: var(--text-2); line-height: 1.7; margin-bottom: 28px; }
+.detail-desc { font-size: 15px; color: var(--text-2); line-height: 1.7; margin-bottom: 28px; white-space: pre-line; }
 .spec-label { font-size: 13px; font-weight: 600; margin-bottom: 10px; color: var(--text-2); text-transform: uppercase; letter-spacing: .05em; }
 .spec-group { margin-bottom: 20px; }
 .color-options { display: flex; gap: 10px; flex-wrap: wrap; }
