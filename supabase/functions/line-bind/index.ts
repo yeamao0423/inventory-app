@@ -1,0 +1,80 @@
+// ============================================================
+// LINE 帳號綁定（消費者側）
+//   LIFF 頁面送來：①消費者的 Supabase access token ②LINE 的 id_token
+//   本函式：驗 Supabase token → 確認是哪個 consumer
+//          驗 LINE id_token → 取回「已驗證的 userId」（前端無法偽造）
+//          → 寫入 consumers.line_user_id（service role）
+//
+// 環境變數：LINE_LOGIN_CHANNEL_ID（LINE Login channel id，供 id_token 驗證；公開值）
+//          SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY 由平台注入
+// ============================================================
+
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const cors = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { ...cors, "Content-Type": "application/json" },
+  });
+
+const LINE_LOGIN_CHANNEL_ID = Deno.env.get("LINE_LOGIN_CHANNEL_ID") ?? "2010616155";
+
+const admin = createClient(
+  Deno.env.get("SUPABASE_URL")!,
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+);
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response(null, { headers: cors });
+  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
+
+  try {
+    // (1) 驗消費者的 Supabase 登入 → 取得 consumer id
+    const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
+    if (!token) return json({ error: "尚未登入" }, 401);
+    const { data: userData, error: userErr } = await admin.auth.getUser(token);
+    if (userErr || !userData?.user) return json({ error: "登入狀態無效，請重新登入" }, 401);
+    const consumerId = userData.user.id;
+
+    // (2) 驗 LINE id_token → 取回已驗證的 userId(sub)
+    const { id_token } = await req.json().catch(() => ({}));
+    if (!id_token) return json({ error: "缺少 LINE 驗證資訊" }, 400);
+
+    const verifyRes = await fetch("https://api.line.me/oauth2/v2.1/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ id_token, client_id: LINE_LOGIN_CHANNEL_ID }),
+    });
+    const verify = await verifyRes.json();
+    if (!verifyRes.ok || !verify.sub) {
+      return json({ error: "LINE 驗證失敗，請重新操作" }, 403);
+    }
+    const lineUserId = verify.sub as string;
+
+    // (3) 此 LINE 帳號是否已綁到別的消費者
+    const { data: existing } = await admin
+      .from("consumers")
+      .select("id")
+      .eq("line_user_id", lineUserId)
+      .maybeSingle();
+    if (existing && existing.id !== consumerId) {
+      return json({ error: "這個 LINE 帳號已綁定其他會員帳號" }, 409);
+    }
+
+    // (4) 寫入綁定（service role 繞過 RLS 與保護 trigger）
+    const { error: updErr } = await admin
+      .from("consumers")
+      .update({ line_user_id: lineUserId })
+      .eq("id", consumerId);
+    if (updErr) return json({ error: "綁定寫入失敗，請稍後再試" }, 500);
+
+    return json({ ok: true, line_name: verify.name ?? null });
+  } catch (_e) {
+    return json({ error: "伺服器錯誤" }, 500);
+  }
+});

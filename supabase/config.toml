@@ -362,6 +362,10 @@ allow_dynamic_registration = false
 [functions.line-webhook]
 verify_jwt = false
 
+# LINE 綁定：自行用 admin.auth.getUser 驗消費者 token ＋ LINE id_token，關閉平台 verify_jwt
+[functions.line-bind]
+verify_jwt = false
+
 [edge_runtime]
 enabled = true
 # Supported request policies: `oneshot`, `per_worker`.
