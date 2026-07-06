@@ -10,12 +10,21 @@ export interface ConversationTurn {
   content: string;
 }
 
+// 已綁定的消費者（由 line_user_id 反查而來；null＝尚未綁定）
+export interface BoundConsumer {
+  id: string;
+  name: string | null;
+  phone: string | null;
+  email: string | null;
+}
+
 // 每次工具執行時可拿到的情境（取代散落的全域變數，未來可放購物車…）
 export interface ToolContext {
   admin: SupabaseClient;
   storeId: number;
   lineUserId: string;
   history: ConversationTurn[]; // 本次 session 的近期對話（下單 slot-filling 可用）
+  consumer: BoundConsumer | null; // 綁定的本人；個人資料工具需檢查
 }
 
 export interface Tool {
