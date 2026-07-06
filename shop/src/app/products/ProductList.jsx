@@ -6,6 +6,19 @@ import { useI18n } from '../layout'
 import { getCardPricing } from '../../lib/salePrice'
 import { slugifyName } from '../../lib/slug'
 
+// 無法下單判斷：手動售完、收單截止、或庫存歸零。限時單與略過庫存檢查的商品不看庫存；
+// 多規格只要任一規格有庫存即算有貨。篩選、排序、卡片三處共用，勿各自複製。
+function getAvailability(sp) {
+  const isCollection = !!sp.collection_end
+  const collectionExpired = isCollection && new Date(sp.collection_end) < new Date()
+  const variants = sp.products?.product_variants || []
+  const allVariantsSoldOut = variants.length > 0
+    ? variants.every(v => (v.stock ?? 0) <= 0)
+    : (sp.products?.quantity ?? 0) <= 0
+  const outOfStock = !!sp.sold_out || (!isCollection && !sp.skip_stock_check && allVariantsSoldOut)
+  return { isCollection, collectionExpired, outOfStock, canOrder: !outOfStock && !collectionExpired }
+}
+
 // 資料由 server component（page.jsx）以 props 帶入。分頁狀態走 URL ?page=N。
 // initialSource：品牌頁 /products/brand/[source] 帶入，預選該品牌（採購來源）。
 export default function ProductList({ products, categories, tags, initialSource = null }) {
@@ -22,9 +35,9 @@ export default function ProductList({ products, categories, tags, initialSource 
   const [filterOpen, setFilterOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState({ tags: true, category: true, brand: true })
   const [sortBy, setSortBy] = useState('newest') // newest | oldest | price_asc | price_desc
-  const [inStockOnly, setInStockOnly] = useState(true)
+  const [inStockOnly, setInStockOnly] = useState(false)
   const [saleOnly, setSaleOnly] = useState(false)
-  const PAGE_SIZE = 20
+  const PAGE_SIZE = 30
 
   // Distinct sources from published products
   const sources = [...new Set(products.map(sp => sp.products?.source).filter(Boolean))].sort()
@@ -37,15 +50,7 @@ export default function ProductList({ products, categories, tags, initialSource 
     const productTagIds = (sp.products?.product_tags || []).map(pt => pt.tag_id)
     const matchTag = activeTags.length === 0 || activeTags.some(tid => productTagIds.includes(tid))
     const matchSource = activeSource === null || (sp.products?.source || '') === activeSource
-    const isCollection = !!sp.collection_end
-    const collectionExpired = isCollection && new Date(sp.collection_end) < new Date()
-    const variants = sp.products?.product_variants || []
-    const allVariantsSoldOut = variants.length > 0
-      ? variants.every(v => (v.stock ?? 0) <= 0)
-      : (sp.products?.quantity ?? 0) <= 0
-    const skipStock = sp.skip_stock_check
-    const stockUnavailable = !isCollection && !skipStock && allVariantsSoldOut
-    const matchStock = !inStockOnly || (!sp.sold_out && !collectionExpired && !stockUnavailable)
+    const matchStock = !inStockOnly || getAvailability(sp).canOrder
     const matchSale = !saleOnly || getCardPricing(sp).onSale
     return matchSearch && matchCat && matchTag && matchSource && matchStock && matchSale
   })
@@ -61,6 +66,10 @@ export default function ProductList({ products, categories, tags, initialSource 
   // 有效價最低值（特價中則為特價，否則原價）— 排序用
   const effPrice = sp => getCardPricing(sp).saleMin
   const sorted = [...filtered].sort((a, b) => {
+    // 無法下單的（缺貨／收單截止）一律沉底，群組內再照所選排序
+    const ua = getAvailability(a).canOrder ? 0 : 1
+    const ub = getAvailability(b).canOrder ? 0 : 1
+    if (ua !== ub) return ua - ub
     if (sortBy === 'oldest') return new Date(a.created_at) - new Date(b.created_at)
     if (sortBy === 'sale_first') {
       const sa = getCardPricing(a).onSale ? 0 : 1
@@ -428,16 +437,14 @@ function ProductCard({ sp, t, lang, allTags }) {
   const productTagIds = (p.product_tags || []).map(pt => pt.tag_id)
   const productTags = (allTags || []).filter(tg => productTagIds.includes(tg.id))
 
-  // Status logic
-  const isSoldOut = sp.sold_out
-  const isCollection = !!sp.collection_end
-  const collectionExpired = isCollection && new Date(sp.collection_end) < new Date()
-  const unavailable = isSoldOut || collectionExpired
+  // Status logic（含庫存歸零；規則見 getAvailability）
+  const { isCollection, collectionExpired, outOfStock, canOrder } = getAvailability(sp)
+  const unavailable = !canOrder
 
   let statusBadge = null
-  if (isSoldOut) {
+  if (outOfStock) {
     statusBadge = <span className="product-badge product-badge-soldout">{zh ? '缺貨中' : 'Sold Out'}</span>
-  } else if (isCollection && collectionExpired) {
+  } else if (collectionExpired) {
     statusBadge = <span className="product-badge product-badge-expired">{zh ? '收單已截止' : 'Collection Ended'}</span>
   } else if (isCollection) {
     const end = new Date(sp.collection_end)
@@ -484,7 +491,7 @@ function ProductCard({ sp, t, lang, allTags }) {
         </div>
         <div className="product-variants-hint">
           {unavailable
-            ? (isSoldOut ? (zh ? '缺貨中' : 'Sold Out') : (zh ? '收單已截止' : 'Collection Ended'))
+            ? (outOfStock ? (zh ? '缺貨中' : 'Sold Out') : (zh ? '收單已截止' : 'Collection Ended'))
             : (zh ? '點擊選擇規格' : 'Click to select variant')
           }
         </div>
