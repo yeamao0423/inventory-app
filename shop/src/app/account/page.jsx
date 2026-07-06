@@ -12,7 +12,7 @@ export default function AccountPage() {
   const router = useRouter()
   const zh = lang === 'zh'
 
-  const [profile, setProfile] = useState({ name: '', phone: '', line_id: '' })
+  const [profile, setProfile] = useState({ name: '', phone: '', line_id: '', line_user_id: '' })
   const [editProfile, setEditProfile] = useState(false)
   const [profileSaving, setProfileSaving] = useState(false)
 
@@ -45,11 +45,11 @@ export default function AccountPage() {
   async function loadProfile() {
     const { data } = await supabase.from('consumers').select('*').eq('id', user.id).single()
     if (data) {
-      setProfile({ name: data.name || '', phone: data.phone || '', line_id: data.line_id || '' })
+      setProfile({ name: data.name || '', phone: data.phone || '', line_id: data.line_id || '', line_user_id: data.line_user_id || '' })
     } else {
       const name = user.user_metadata?.name || ''
       await supabase.from('consumers').insert({ id: user.id, email: user.email, name })
-      setProfile({ name, phone: '', line_id: '' })
+      setProfile({ name, phone: '', line_id: '', line_user_id: '' })
     }
   }
 
@@ -197,8 +197,34 @@ export default function AccountPage() {
                 <span className="account-field-value">{profile.phone || <span style={{ color: 'var(--text-3)' }}>{zh ? '未設定' : 'Not set'}</span>}</span>
               </div>
               <div className="account-field" style={{ borderBottom: 'none' }}>
-                <span className="account-field-label">LINE ID</span>
-                <span className="account-field-value">{profile.line_id || <span style={{ color: 'var(--text-3)' }}>{zh ? '未設定' : 'Not set'}</span>}</span>
+                <span className="account-field-label">{zh ? 'LINE 綁定' : 'LINE'}</span>
+                <span className="account-field-value">
+                  {profile.line_user_id ? (
+                    // 已通過 LINE 認證的正式綁定
+                    <>
+                      <span style={{ color: 'var(--green)' }}>{zh ? '已綁定 ✅' : 'Linked ✅'}</span>
+                      <Link href="/line-bind" style={{ marginLeft: 10, fontSize: 12, color: 'var(--text-3)', textDecoration: 'underline' }}>
+                        {zh ? '重新綁定' : 'Re-link'}
+                      </Link>
+                    </>
+                  ) : profile.line_id ? (
+                    // 有自填 LINE ID 但尚未做 LINE 認證
+                    <>
+                      <span style={{ color: 'var(--amber)' }}>{zh ? '未認證' : 'Unverified'}</span>
+                      <Link href="/line-bind" style={{ marginLeft: 10, fontSize: 12, color: 'var(--text-1, #111)', textDecoration: 'underline' }}>
+                        {zh ? '前往認證 →' : 'Verify →'}
+                      </Link>
+                    </>
+                  ) : (
+                    // 什麼都沒設
+                    <>
+                      <span style={{ color: 'var(--text-3)' }}>{zh ? '未設定' : 'Not set'}</span>
+                      <Link href="/line-bind" style={{ marginLeft: 10, fontSize: 12, color: 'var(--text-1, #111)', textDecoration: 'underline' }}>
+                        {zh ? '前往綁定 →' : 'Link →'}
+                      </Link>
+                    </>
+                  )}
+                </span>
               </div>
               <button
                 className="btn-outline"
