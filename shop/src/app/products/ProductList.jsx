@@ -299,33 +299,31 @@ export default function ProductList({ products, categories, tags, initialSource 
               )}
             </div>
 
-            {/* Tags */}
-            {tags.length > 0 && (
-              <div className="sidebar-group">
-                <button className="sidebar-group-title" onClick={() => setSidebarOpen(s => ({ ...s, tags: !s.tags }))}>
-                  <span>{zh ? '標籤' : 'Tags'}</span>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ transition: 'transform .2s', transform: sidebarOpen.tags ? 'rotate(180deg)' : '' }}><path d="M6 9l6 6 6-6" /></svg>
-                </button>
-                {sidebarOpen.tags && (
-                  <div className="filter-tags-row">
-                    <button onClick={() => setInStockOnly(v => !v)}
-                      className={inStockOnly ? 'filter-tag filter-tag-active' : 'filter-tag'}>
-                      {zh ? '有貨' : 'In Stock'}
+            {/* Tags（內建「有貨／特價中」不依賴自訂標籤，永遠顯示） */}
+            <div className="sidebar-group">
+              <button className="sidebar-group-title" onClick={() => setSidebarOpen(s => ({ ...s, tags: !s.tags }))}>
+                <span>{tags.length > 0 ? (zh ? '標籤' : 'Tags') : (zh ? '篩選' : 'Filters')}</span>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ transition: 'transform .2s', transform: sidebarOpen.tags ? 'rotate(180deg)' : '' }}><path d="M6 9l6 6 6-6" /></svg>
+              </button>
+              {sidebarOpen.tags && (
+                <div className="filter-tags-row">
+                  <button onClick={() => setInStockOnly(v => !v)}
+                    className={inStockOnly ? 'filter-tag filter-tag-active' : 'filter-tag'}>
+                    {zh ? '有貨' : 'In Stock'}
+                  </button>
+                  <button onClick={() => setSaleOnly(v => !v)}
+                    className={saleOnly ? 'filter-tag filter-tag-sale-active' : 'filter-tag'}>
+                    {zh ? '特價中' : 'On Sale'}
+                  </button>
+                  {tags.map(tg => (
+                    <button key={tg.id} onClick={() => toggleTag(tg.id)}
+                      className={activeTags.includes(tg.id) ? 'filter-tag filter-tag-active' : 'filter-tag'}>
+                      {lang === 'en' && tg.name_en ? tg.name_en : tg.name}
                     </button>
-                    <button onClick={() => setSaleOnly(v => !v)}
-                      className={saleOnly ? 'filter-tag filter-tag-sale-active' : 'filter-tag'}>
-                      {zh ? '特價中' : 'On Sale'}
-                    </button>
-                    {tags.map(tg => (
-                      <button key={tg.id} onClick={() => toggleTag(tg.id)}
-                        className={activeTags.includes(tg.id) ? 'filter-tag filter-tag-active' : 'filter-tag'}>
-                        {lang === 'en' && tg.name_en ? tg.name_en : tg.name}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+                  ))}
+                </div>
+              )}
+            </div>
 
             {/* Categories */}
             {categories.length > 0 && (
