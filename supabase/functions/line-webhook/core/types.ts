@@ -25,6 +25,8 @@ export interface ToolContext {
   lineUserId: string;
   history: ConversationTurn[]; // 本次 session 的近期對話（下單 slot-filling 可用）
   consumer: BoundConsumer | null; // 綁定的本人；個人資料工具需檢查
+  imageData?: { base64: string; mediaType: string }; // Phase D: 傳圖搜尋（不落地，僅本輪存在）
+  defaultAddress?: string | null; // Phase E: 上次訂單地址，用於預填收件資訊
 }
 
 export interface Tool {
@@ -41,3 +43,14 @@ export interface AnthropicToolDef {
   description: string;
   input_schema: Record<string, unknown>;
 }
+
+// stage_order 成功時工具結果攜帶的短路訊號（askClaude 看到就直接送確認按鈕）
+export interface StagedOrder {
+  pendingId: string;
+  summary: string;
+}
+
+// askClaude 的回傳：純文字回覆，或「送出訂單確認按鈕」指令
+export type AskResult =
+  | { kind: "text"; text: string }
+  | { kind: "confirm_order"; staged: StagedOrder };
