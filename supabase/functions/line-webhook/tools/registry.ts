@@ -3,12 +3,14 @@ import type { AnthropicToolDef, Tool } from "../core/types.ts";
 import { searchProducts } from "./search-products.ts";
 import { getStock } from "./get-stock.ts";
 import { getMyOrders } from "./get-order-status.ts";
+import { stageOrder } from "./stage-order.ts";
 
 export const tools: Tool[] = [
   searchProducts,
   getStock,
-  getMyOrders, // 個人資料工具：需綁定，只查本人（handler 內以 ctx.consumer 把關）
-  // 之後：reportPayment / createOrder(action)...
+  getMyOrders,   // 個人資料工具：需綁定，只查本人
+  stageOrder,    // action tier：暫存訂單，確認交給 LINE 按鈕（postback）
+  // 之後：reportPayment(action)...
 ];
 
 // 名稱 → 工具，供 dispatch 查找
