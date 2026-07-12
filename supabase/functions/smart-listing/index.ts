@@ -125,12 +125,135 @@ ${results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.snippet}`).join("\n")}`,
   return parseClaudeJson(text);
 }
 
+const MAX_GROUP_IMAGES = 20; // 自動分組最多送 20 張
+
+function buildGroupPrompt(count: number): string {
+  return `你是代購商城的商品分組助手。以下是店家採購時拍攝的 ${count} 張照片，照片按順序編號 0 到 ${count - 1}。
+
+請判斷哪些照片屬於同一個商品（同商品的正面、側面、背面、細節、包裝等不同角度），將它們分在同一組。
+
+只輸出 JSON，不要任何其他文字：
+{"groups": [[0, 1, 2], [3], [4, 5]]}
+
+規則：
+- 同一個商品的多角度照片放同一組
+- 明顯不同的商品各自一組
+- 無法判斷歸屬時，每張照片各自一組（[[0],[1],[2]]）
+- 每組內保持原始順序
+- 所有 ${count} 張照片都必須出現在結果中，不能遺漏`;
+}
+
+async function autoGroupImages(
+  images: { data: string; media_type: string }[],
+): Promise<number[][] | null> {
+  const resp = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": ANTHROPIC_KEY,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      max_tokens: 512,
+      messages: [{
+        role: "user",
+        content: [
+          ...images.map((img) => ({
+            type: "image",
+            source: { type: "base64", media_type: img.media_type, data: img.data },
+          })),
+          { type: "text", text: buildGroupPrompt(images.length) },
+        ],
+      }],
+    }),
+  });
+  if (!resp.ok) {
+    console.error("autoGroup anthropic error", resp.status, await resp.text());
+    return null;
+  }
+  const data = await resp.json();
+  const text = (data.content ?? [])
+    .filter((b: { type: string }) => b.type === "text")
+    .map((b: { text: string }) => b.text)
+    .join("\n");
+  const parsed = parseClaudeJson(text);
+  if (!parsed || !Array.isArray(parsed.groups)) return null;
+  // 驗證：每個組是數字陣列，所有 index 在範圍內
+  const total = images.length;
+  const seen = new Set<number>();
+  for (const g of parsed.groups) {
+    if (!Array.isArray(g)) return null;
+    for (const idx of g) {
+      if (typeof idx !== "number" || idx < 0 || idx >= total) return null;
+      seen.add(idx);
+    }
+  }
+  // 若有遺漏的照片，每張補一個單獨組
+  for (let i = 0; i < total; i++) {
+    if (!seen.has(i)) parsed.groups.push([i]);
+  }
+  return parsed.groups as number[][];
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
   try {
-    const { images, categories, tags, sources } = await req.json();
+    const body = await req.json();
+    const { mode, images, categories, tags, sources } = body;
+
+    // ── 自動分組模式 ──────────────────────────────────────
+    if (mode === "group") {
+      if (!Array.isArray(images) || images.length === 0 || images.length > MAX_GROUP_IMAGES) {
+        return json({ error: `請提供 1-${MAX_GROUP_IMAGES} 張照片` }, 400);
+      }
+      for (const img of images) {
+        if (!img || typeof img.data !== "string" || !ALLOWED_MEDIA.includes(img.media_type)) {
+          return json({ error: "照片格式不支援" }, 400);
+        }
+        if (img.data.length > MAX_IMAGE_B64) return json({ error: "照片檔案過大" }, 400);
+      }
+
+      // 驗 JWT
+      const authHeader = req.headers.get("Authorization") ?? "";
+      const anon = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_ANON_KEY")!,
+        { global: { headers: { Authorization: authHeader } } },
+      );
+      const { data: { user } = { user: null } } = await anon.auth.getUser();
+      if (!user) return json({ error: "請先登入" }, 401);
+
+      const admin = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      );
+      const { data: roleRow } = await admin
+        .from("user_store_roles").select("store_id")
+        .eq("user_id", user.id).in("role", ALLOWED_ROLES).limit(1).maybeSingle();
+      if (!roleRow) return json({ error: "沒有上架權限" }, 403);
+
+      // 限流：分組算 1 次
+      const monthStart = new Date();
+      monthStart.setUTCDate(1); monthStart.setUTCHours(0, 0, 0, 0);
+      const { count } = await admin
+        .from("ai_usage_log").select("*", { count: "exact", head: true })
+        .eq("store_id", roleRow.store_id).gte("created_at", monthStart.toISOString());
+      if ((count ?? 0) >= MONTHLY_LIMIT) return json({ error: "本月 AI 額度已用完" }, 429);
+
+      const groups = await autoGroupImages(images);
+      if (!groups) return json({ error: "AI 分組失敗，請手動分組" }, 502);
+
+      await admin.from("ai_usage_log").insert({
+        store_id: roleRow.store_id, model: MODEL, ai_output: { mode: "group", groups },
+      });
+
+      return json({ ok: true, groups });
+    }
+
+    // ── 原有補齊模式 ──────────────────────────────────────
 
     // 輸入驗證：1-3 張 base64 圖，格式與大小都要合法
     if (!Array.isArray(images) || images.length === 0 || images.length > MAX_IMAGES) {

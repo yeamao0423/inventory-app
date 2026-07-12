@@ -10,6 +10,7 @@ import { cmpNum, cmpStr, cmpDate } from '../lib/sortUtils'
 import { Pill } from '../components/MenuPopover'
 import ListToolbar from '../components/ListToolbar'
 import QuickListSheet from '../components/QuickListSheet'
+import BulkListSheet from '../components/BulkListSheet'
 
 const LOW = 5
 
@@ -96,8 +97,9 @@ export default function InventoryPage() {
   const [categories, setCategories] = useState([])
   const [optionTypes, setOptionTypes] = useState([])
   const [exchangeRates, setExchangeRates] = useState({})
-  const [sheet, setSheet] = useState(null)   // null | 'add' | product obj
+  const [sheet, setSheet] = useState(null)   // null | product obj
   const [quickList, setQuickList] = useState(false)
+  const [bulkList, setBulkList] = useState(false)
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(1)
 
@@ -178,7 +180,23 @@ export default function InventoryPage() {
                   whiteSpace:'nowrap',
                 }}
               >快速上架</button>
-              <button className="icon-btn" onClick={() => setSheet('add')}>+</button>
+              <div style={{ position: 'relative', display: 'inline-flex' }}>
+                <button
+                  onClick={() => setBulkList(true)}
+                  style={{
+                    padding:'6px 12px',borderRadius:20,fontSize:12,fontWeight:600,
+                    background:'var(--surface)',color:'var(--text)',border:'1px solid var(--border)',cursor:'pointer',
+                    whiteSpace:'nowrap',
+                  }}
+                >批量上架</button>
+                <span style={{
+                  position: 'absolute', top: -6, right: -6,
+                  fontSize: 9, fontWeight: 700, lineHeight: 1,
+                  padding: '2px 5px', borderRadius: 6,
+                  background: 'var(--amber, #e67e22)', color: '#fff',
+                  whiteSpace: 'nowrap', pointerEvents: 'none',
+                }}>試用</span>
+              </div>
             </>
           )}
           <button
@@ -286,10 +304,7 @@ export default function InventoryPage() {
         </div>
       )}
 
-      {sheet === 'add' && (
-        <AddProductSheet onClose={() => setSheet(null)} onSaved={handleSaved} existingSources={existingSources} />
-      )}
-      {sheet && sheet !== 'add' && (
+      {sheet && (
         <ProductDetailSheet
           product={sheet}
           onClose={() => setSheet(null)}
@@ -304,6 +319,13 @@ export default function InventoryPage() {
       {quickList && (
         <QuickListSheet
           onClose={() => setQuickList(false)}
+          onSaved={handleSaved}
+          existingSources={existingSources}
+        />
+      )}
+      {bulkList && (
+        <BulkListSheet
+          onClose={() => setBulkList(false)}
           onSaved={handleSaved}
           existingSources={existingSources}
         />
@@ -362,165 +384,6 @@ function ProductRow({ product: p, onTap, exchangeRates = {} }) {
         </div>
       </div>
     </div>
-  )
-}
-
-
-// ── 新增商品 ────────────────────────────────────────────
-function AddProductSheet({ onClose, onSaved, existingSources = [] }) {
-  const { storeId } = useAuth()
-  const [form, setForm] = useState({ name:'', sku:'', quantity:'', unit:'個', cost:'', currency:'TWD', source:'' })
-  const [saving, setSaving] = useState(false)
-  const [imageFiles, setImageFiles] = useState([])
-  const [previews, setPreviews] = useState([])
-  const [categories, setCategories] = useState([])
-  const [selectedCategory, setSelectedCategory] = useState('')
-  const set = (k, v) => setForm(f => ({...f, [k]: v}))
-
-  useEffect(() => {
-    if (!storeId) return
-    supabase.from('categories').select('*').eq('store_id', storeId).order('sort_order')
-      .then(({ data }) => setCategories(data || []))
-  }, [storeId])
-
-  function onImagesChange(e) {
-    const files = Array.from(e.target.files)
-    if (!files.length) return
-    setImageFiles(prev => [...prev, ...files])
-    setPreviews(prev => [...prev, ...files.map(f => URL.createObjectURL(f))])
-    e.target.value = ''   // allow re-selecting same file
-  }
-
-  function removePreview(idx) {
-    setImageFiles(prev => prev.filter((_, i) => i !== idx))
-    setPreviews(prev => prev.filter((_, i) => i !== idx))
-  }
-
-  async function save() {
-    if (!form.name) return
-    setSaving(true)
-    const qty = Number(form.quantity) || 0
-    const { data: inserted } = await supabase.from('products').insert({
-      store_id: storeId,
-      name: form.name,
-      sku: form.sku.trim() ? form.sku.toUpperCase() : null,
-      quantity: qty,
-      unit: form.unit,
-      cost: Number(form.cost),
-      currency: form.currency,
-      category_id: selectedCategory ? Number(selectedCategory) : null,
-      source: form.source.trim() || null,
-    }).select('id').single()
-
-    if (imageFiles.length > 0 && inserted) {
-      await uploadImages(imageFiles, inserted.id)
-    }
-
-    if (qty > 0 && inserted) {
-      await supabase.from('history').insert({
-        store_id: storeId,
-        sku: form.sku.toUpperCase() || null,
-        product_id: inserted.id,
-        change: qty,
-        reason: '初始建立',
-      })
-    }
-    setSaving(false)
-    onSaved()
-    onClose()
-  }
-
-  return (
-    <Sheet title="新增商品" onClose={onClose}>
-      {/* 圖片區 */}
-      <div className="form-group">
-        <label className="form-label">商品圖片</label>
-        {previews.length > 0 && (
-          <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:10}}>
-            {previews.map((src, i) => (
-              <div key={i} style={{position:'relative'}}>
-                <img src={src} style={{width:72,height:72,objectFit:'cover',borderRadius:8,display:'block'}} />
-                <button
-                  onClick={() => removePreview(i)}
-                  style={{position:'absolute',top:-6,right:-6,width:20,height:20,borderRadius:'50%',background:'var(--red)',color:'#fff',border:'none',cursor:'pointer',fontSize:12,lineHeight:'20px',textAlign:'center',padding:0}}
-                >×</button>
-              </div>
-            ))}
-          </div>
-        )}
-        <label style={{display:'flex',alignItems:'center',justifyContent:'center',gap:6,padding:'11px',border:'1.5px dashed var(--border)',borderRadius:10,cursor:'pointer',fontSize:13,color:'var(--text-3)'}}>
-          📷 新增圖片
-          <input type="file" accept="image/*" multiple style={{display:'none'}} onChange={onImagesChange} />
-        </label>
-      </div>
-
-      <div className="form-group">
-        <label className="form-label">商品名稱</label>
-        <input className="form-input" placeholder="例：防水噴霧 500ml" value={form.name} onChange={e => set('name', e.target.value)} />
-      </div>
-      {categories.length > 0 && (
-        <div className="form-group">
-          <label className="form-label">分類</label>
-          <CustomSelect
-            label="— 無分類 —"
-            value={selectedCategory || null}
-            options={categories.map(c => ({ value: String(c.id), label: c.name }))}
-            onChange={v => setSelectedCategory(v || '')}
-          />
-        </div>
-      )}
-      <div className="form-group">
-        <label className="form-label">採購來源（品牌/店家）</label>
-        {form._selectMode ? (
-          <CustomSelect
-            label="— 選擇來源 —"
-            value={form.source || null}
-            options={[
-              ...existingSources.map(s => ({ value: s, label: s })),
-              { value: '__custom__', label: '＋ 自訂來源' },
-            ]}
-            onChange={v => {
-              if (v === '__custom__') { set('_selectMode', false); set('source', '') }
-              else { set('source', v || ''); set('_selectMode', false) }
-            }}
-            allowClear={false}
-          />
-        ) : (
-          <div style={{ display: 'flex', gap: 8 }}>
-            <input className="form-input" style={{ flex: 1 }} placeholder="例：UNIQLO、GU、ABC-MART" value={form.source} onChange={e => set('source', e.target.value)} />
-            {existingSources.length > 0 && (
-              <button type="button" className="btn btn-outline" style={{ width: 'auto', padding: '0 14px', fontSize: 13 }}
-                onClick={() => set('_selectMode', true)}>選擇</button>
-            )}
-          </div>
-        )}
-      </div>
-      <div className="form-group">
-        <label className="form-label">SKU 代碼</label>
-        <input className="form-input" placeholder="例：SPRAY-001" value={form.sku} onChange={e => set('sku', e.target.value)} style={{textTransform:'uppercase'}} />
-      </div>
-      <div className="form-group">
-        <label className="form-label">單位</label>
-        <input className="form-input" placeholder="個" value={form.unit} onChange={e => set('unit', e.target.value)} style={{ width: 120 }} />
-      </div>
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
-        <div className="form-group">
-          <label className="form-label">進貨成本</label>
-          <input className="form-input" type="number" placeholder="0" value={form.cost} onChange={e => set('cost', e.target.value)} />
-        </div>
-        <div className="form-group">
-          <label className="form-label">幣別</label>
-          <CustomSelect
-            label="TWD"
-            value={form.currency}
-            options={SUPPORTED_CURRENCIES.map(c => ({ value: c, label: c }))}
-            onChange={v => set('currency', v || 'TWD')}
-            allowClear={false}
-          />
-        </div>
-      </div>
-      <button className="btn" onClick={save} disabled={saving}>{saving ? '儲存中…' : '新增商品'}</button>
-    </Sheet>
   )
 }
 
