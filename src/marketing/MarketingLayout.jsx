@@ -1,12 +1,24 @@
-import { Link, NavLink, Outlet } from 'react-router-dom'
+import { useEffect } from 'react'
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import './marketing.css'
 
 // 平台品牌（要改名改這一行即可）
 export const PLATFORM_NAME = 'LikeDaigo'
 export const PLATFORM_TAGLINE = '代購電商管理平台'
 
+// 官網各頁 title（CSR 站，Googlebot 渲染後會讀到這裡設定的標題）
+const MKT_TITLES = {
+  '/': 'LikeDaigo｜代購電商一站式開店與庫存管理平台',
+  '/pricing': '定價方案｜LikeDaigo',
+  '/contact': '聯絡我們｜LikeDaigo',
+}
+
 export default function MarketingLayout() {
   const year = new Date().getFullYear()
+  const { pathname } = useLocation()
+  useEffect(() => {
+    document.title = MKT_TITLES[pathname] || MKT_TITLES['/']
+  }, [pathname])
   return (
     <div className="mkt">
       <header className="mkt-nav">

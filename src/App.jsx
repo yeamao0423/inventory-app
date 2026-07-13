@@ -41,6 +41,12 @@ export default function App() {
   // 換頁時自動關閉「更多」選單
   useEffect(() => { setMoreOpen(false) }, [location.pathname])
 
+  // index.html 預設 title 是官網（LikeDaigo）品牌，供 Googlebot 收錄。
+  // 登入後台後切回產品名，讓後台使用者的分頁標題正確。
+  useEffect(() => {
+    if (isBackendUser || isPlatformAdmin) document.title = 'Daigogo 庫存管理'
+  }, [isBackendUser, isPlatformAdmin])
+
   // 純平台管理員（無店身分）落地到平台頁
   useEffect(() => {
     if (!loading && user && !isBackendUser && isPlatformAdmin && location.pathname !== '/platform' && location.pathname !== '/invite') {
