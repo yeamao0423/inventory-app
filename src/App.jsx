@@ -17,6 +17,7 @@ import MarketingLayout from './marketing/MarketingLayout'
 import LandingPage from './marketing/LandingPage'
 import PricingPage from './marketing/PricingPage'
 import ContactPage from './marketing/ContactPage'
+import ProhibitedItemsPage from './marketing/ProhibitedItemsPage'
 
 // group: 'more' 的項目收進底部「更多」彈出選單，其餘留在底部主列（核心日常項）
 const allTabs = [
@@ -81,6 +82,7 @@ export default function App() {
         <Route path="/" element={<LandingPage />} />
         <Route path="/pricing" element={<PricingPage />} />
         <Route path="/contact" element={<ContactPage />} />
+        <Route path="/prohibited-items" element={<ProhibitedItemsPage />} />
         <Route path="*" element={<LandingPage />} />
       </Route>
     </Routes>
