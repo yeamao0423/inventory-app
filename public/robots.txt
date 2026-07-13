@@ -1,4 +1,5 @@
 User-agent: *
 Allow: /
+Disallow: /login
 
 Sitemap: https://likedaigo.com/sitemap.xml

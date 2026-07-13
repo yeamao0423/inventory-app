@@ -303,8 +303,128 @@
 .mkt-footer-links a { color: var(--text-2); text-decoration: none; }
 .mkt-footer-links a:hover { color: var(--text); }
 
+/* ===== 無法代購商品頁 ===== */
+.pi-tier {
+  border-radius: 22px;
+  padding: clamp(24px, 4vw, 36px);
+  margin-bottom: 22px;
+  border: 0.5px solid var(--border);
+}
+.pi-tier:last-child { margin-bottom: 0; }
+.pi-red   { background: var(--red-bg); }
+.pi-amber { background: var(--amber-bg); }
+.pi-blue  { background: var(--blue-bg); }
+
+.pi-tier-head { margin-bottom: 22px; }
+.pi-tier-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 5px 13px;
+  border-radius: 999px;
+  margin-bottom: 12px;
+}
+.pi-red   .pi-tier-badge { color: var(--red);   background: #fff; }
+.pi-amber .pi-tier-badge { color: var(--amber); background: #fff; }
+.pi-blue  .pi-tier-badge { color: var(--blue);  background: #fff; }
+.pi-tier-badge::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.pi-tier-title {
+  font-size: clamp(20px, 3vw, 26px);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0 0 8px;
+}
+.pi-tier-desc {
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--text-2);
+  margin: 0;
+  max-width: 60ch;
+}
+
+.pi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+.pi-card {
+  background: var(--surface);
+  border-radius: 16px;
+  padding: 20px 20px 18px;
+  display: flex;
+  flex-direction: column;
+}
+.pi-card-top {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 11px;
+}
+.pi-card-icon {
+  font-size: 22px;
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  border-radius: 11px;
+}
+.pi-card-name { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+.pi-card-note {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text-2);
+  margin: 0 0 14px;
+  flex: 1;
+}
+.pi-card-law {
+  font-size: 12px;
+  color: var(--text-3);
+  font-weight: 500;
+  padding-top: 11px;
+  border-top: 0.5px solid var(--border);
+}
+
+/* 免責區 */
+.pi-disclaimer {
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: 18px;
+  padding: clamp(22px, 3vw, 30px);
+}
+.pi-disclaimer h3 { font-size: 16px; font-weight: 700; margin: 0 0 14px; }
+.pi-disclaimer ul { margin: 0; padding-left: 18px; }
+.pi-disclaimer li {
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--text-2);
+  margin-bottom: 8px;
+}
+.pi-disclaimer a { color: var(--blue); text-decoration: none; }
+.pi-disclaimer a:hover { text-decoration: underline; }
+.pi-help {
+  font-size: 14px;
+  color: var(--text-2);
+  margin: 16px 0 0;
+  padding-top: 16px;
+  border-top: 0.5px solid var(--border);
+}
+.pi-help a { color: var(--blue); text-decoration: none; font-weight: 600; }
+
 /* ===== 響應式 ===== */
 @media (max-width: 640px) {
   .mkt-nav-links { display: none; }
   .mkt-contact-grid { grid-template-columns: 1fr; }
+  .pi-grid { grid-template-columns: 1fr; }
 }

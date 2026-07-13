@@ -10,6 +10,7 @@ export const PLATFORM_TAGLINE = '代購電商管理平台'
 const MKT_TITLES = {
   '/': 'LikeDaigo｜代購電商一站式開店與庫存管理平台',
   '/pricing': '定價方案｜LikeDaigo',
+  '/prohibited-items': '代購須知：哪些商品無法代購｜LikeDaigo',
   '/contact': '聯絡我們｜LikeDaigo',
 }
 
@@ -29,6 +30,7 @@ export default function MarketingLayout() {
           <NavLink to="/" end className="mkt-link">首頁</NavLink>
           <a href="/#features" className="mkt-link">功能</a>
           <NavLink to="/pricing" className="mkt-link">定價</NavLink>
+          <NavLink to="/prohibited-items" className="mkt-link">代購須知</NavLink>
           <NavLink to="/contact" className="mkt-link">聯絡我們</NavLink>
         </nav>
         <Link to="/login" className="mkt-login-btn">廠商登入</Link>
@@ -42,6 +44,7 @@ export default function MarketingLayout() {
         <div>© {year} {PLATFORM_NAME}．{PLATFORM_TAGLINE}</div>
         <div className="mkt-footer-links">
           <Link to="/pricing">定價</Link>
+          <Link to="/prohibited-items">代購須知</Link>
           <Link to="/contact">聯絡我們</Link>
           <Link to="/login">廠商登入</Link>
         </div>
