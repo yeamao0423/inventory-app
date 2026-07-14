@@ -1,3 +1,4 @@
+import { headers } from 'next/headers'
 import { getStoreByHost, getProductList } from '../../lib/data'
 import ProductList from './ProductList'
 
@@ -6,10 +7,25 @@ export const dynamic = 'force-dynamic'
 
 export async function generateMetadata() {
   const store = await getStoreByHost()
-  const title = store?.name ? `商品一覽｜${store.name}` : '商品一覽'
+  const storeName = store?.name || 'Daigogo'
+  const title = `商品一覽｜${storeName}`
+  const description = store?.settings?.seo_description
+    || `瀏覽 ${storeName} 全部商品，快速下單、安心代購。`
+  const host = (headers().get('host') || '').split(':')[0]
+  const siteUrl = `https://${host}`
+  const logoUrl = store?.settings?.logo_url
+
   return {
     title,
-    description: store?.settings?.seo_description || title,
+    description,
+    alternates: { canonical: `${siteUrl}/products` },
+    openGraph: {
+      title,
+      description,
+      type: 'website',
+      url: `${siteUrl}/products`,
+      ...(logoUrl ? { images: [{ url: logoUrl }] } : {}),
+    },
   }
 }
 
