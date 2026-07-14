@@ -59,3 +59,13 @@ export async function getStoreId() {
   const store = await getStore()
   return store.id
 }
+
+// 該店已發佈的靜態頁（footer 連結用）。anon 讀取，RLS 只露出 is_published。
+export async function getStorePages() {
+  const store = await getStore()
+  const { data } = await supabase
+    .from('store_pages').select('slug, title, sort_order')
+    .eq('store_id', store.id).eq('is_published', true)
+    .order('sort_order').order('id')
+  return data || []
+}

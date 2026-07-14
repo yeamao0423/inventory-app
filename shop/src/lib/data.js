@@ -205,5 +205,39 @@ export async function getAllPublishedProductParams() {
   return (data || []).map(r => ({ id: r.product_id, name: r.products?.name || '' }))
 }
 
+// ── 靜態頁：該店已發佈頁清單（footer/導覽用，快取 tag=store-{id}）──
+export const getStorePages = cache(async (storeId) => {
+  if (!supabase || storeId == null) return []
+  return unstable_cache(
+    async () => {
+      const { data } = await supabase
+        .from('store_pages')
+        .select('slug, title, sort_order')
+        .eq('store_id', storeId).eq('is_published', true)
+        .order('sort_order').order('id')
+      return data || []
+    },
+    ['store-pages', String(storeId)],
+    { tags: [`store-${storeId}`], revalidate: TTL },
+  )()
+})
+
+// ── 靜態頁：單一已發佈頁（依 store + slug，快取 tag=store-{id}）──
+export const getStorePage = cache(async (storeId, slug) => {
+  if (!supabase || storeId == null || !slug) return null
+  return unstable_cache(
+    async () => {
+      const { data } = await supabase
+        .from('store_pages')
+        .select('slug, title, body')
+        .eq('store_id', storeId).eq('slug', slug).eq('is_published', true)
+        .maybeSingle()
+      return data || null
+    },
+    ['store-page', String(storeId), slug],
+    { tags: [`store-${storeId}`], revalidate: TTL },
+  )()
+})
+
 // 給其他地方用（目前 product 詳情已內含 store）
 export { fetchStoreById as getStoreById }

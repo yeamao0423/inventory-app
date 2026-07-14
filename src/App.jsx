@@ -11,6 +11,7 @@ import CouponsPage from './pages/CouponsPage'
 import InvitePage from './pages/InvitePage'
 import PlatformPage from './pages/PlatformPage'
 import SettingsPage from './pages/SettingsPage'
+import StaticPagesPage from './pages/StaticPagesPage'
 import MembersPage from './pages/MembersPage'
 import MemberLevelsPage from './pages/MemberLevelsPage'
 import MarketingLayout from './marketing/MarketingLayout'
@@ -30,6 +31,7 @@ const allTabs = [
   { path: '/levels',     label: '等級',  icon: TierIcon, adminOnly: true, group: 'more' },
   { path: '/users',      label: '成員',  icon: UsersIcon, adminOnly: true, group: 'more' },
   { path: '/settings',   label: '設定',  icon: GearIcon, superOnly: true, group: 'more' },
+  { path: '/pages',      label: '靜態頁', icon: PageIcon, superOnly: true, group: 'more' },
   { path: '/platform',   label: '平台',  icon: PlatformIcon, platformOnly: true, group: 'more' },
 ]
 
@@ -151,6 +153,7 @@ export default function App() {
         <Route path="/trips"      element={<TripsPage />} />
         <Route path="/users"      element={<UsersPage />} />
         <Route path="/settings"   element={<SettingsPage />} />
+        <Route path="/pages"      element={<StaticPagesPage />} />
         <Route path="/platform"   element={<PlatformPage />} />
         <Route path="/invite"     element={<InvitePage />} />
         {/* 登入後若仍停在 /login 或官網路由（/pricing、/contact…），導回根目錄 */}
@@ -256,4 +259,7 @@ function PlatformIcon() {
 }
 function GearIcon() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33h.01a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51h.01a1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82v.01a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+}
+function PageIcon() {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/><line x1="8" y1="9" x2="10" y2="9"/></svg>
 }

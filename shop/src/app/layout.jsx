@@ -4,7 +4,7 @@ import { createContext, useContext, useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { supabase } from '../lib/supabase'
-import { getStore } from '../lib/store'
+import { getStore, getStorePages } from '../lib/store'
 import { initMetaPixel, trackPageView, trackPixel } from '../lib/metaPixel'
 import zhMessages from '../messages/zh.json'
 import enMessages from '../messages/en.json'
@@ -36,10 +36,12 @@ export default function RootLayout({ children }) {
   const [user, setUser] = useState(null)
   const [userLoading, setUserLoading] = useState(true)
   const [store, setStore] = useState(null)
+  const [footerPages, setFooterPages] = useState([])
 
   // 抓當前店資訊（名稱、logo），驅動導覽列/標題/favicon/footer
   useEffect(() => {
     getStore().then(setStore).catch(() => {})
+    getStorePages().then(setFooterPages).catch(() => {})
   }, [])
 
   // Meta Pixel：店家有在後台設定 Pixel ID 才載入（含首次 PageView）
@@ -133,7 +135,7 @@ export default function RootLayout({ children }) {
   const totalQty = cart.reduce((s, i) => s + i.qty, 0)
 
   return (
-    <html lang={lang}>
+    <html lang={lang === 'zh' ? 'zh-TW' : 'en'}>
       <body>
         <UserContext.Provider value={{ user, loading: userLoading }}>
           <I18nContext.Provider value={{ t, lang, setLang }}>
@@ -170,6 +172,13 @@ export default function RootLayout({ children }) {
               {children}
 
               <footer className="footer">
+                {footerPages.length > 0 && (
+                  <div className="footer-links">
+                    {footerPages.map(p => (
+                      <Link key={p.slug} href={`/legal/${p.slug}`}>{p.title}</Link>
+                    ))}
+                  </div>
+                )}
                 {store?.settings?.sender_email && (
                   <div style={{ marginBottom: 6 }}>
                     {lang === 'en' ? 'Contact: ' : '聯絡我們：'}
