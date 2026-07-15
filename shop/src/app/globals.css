@@ -388,13 +388,41 @@ input, textarea, select { font-family: inherit; }
 .footer-links a:hover { color: var(--text); text-decoration: underline; }
 
 /* ── Legal / 靜態頁 ──────────────────────── */
-.legal { padding: 40px 0 72px; }
-.legal-title { font-size: 26px; font-weight: 800; margin-bottom: 6px; }
-.legal-updated { font-size: 13px; color: var(--text-3); margin-bottom: 28px; }
-.legal-content h3 { font-size: 18px; font-weight: 700; margin: 28px 0 10px; }
-.legal-content h4 { font-size: 15px; font-weight: 700; margin: 20px 0 8px; }
-.legal-content p { font-size: 15px; line-height: 1.9; margin: 12px 0; color: var(--text); }
-.legal-content ul { margin: 12px 0; padding-left: 22px; }
-.legal-content li { font-size: 15px; line-height: 1.9; margin: 6px 0; }
-.legal-content hr { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
-.legal-content a { color: #2563eb; text-decoration: underline; }
+.legal-page { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+.legal-hero { padding: 60px 0 34px; border-bottom: 1px solid var(--border); }
+.legal-eyebrow { font-size: 13px; letter-spacing: .12em; font-weight: 600; color: var(--text-2); text-transform: uppercase; margin-bottom: 12px; }
+.legal-title { font-size: 32px; font-weight: 800; letter-spacing: -0.02em; color: var(--text); line-height: 1.25; }
+.legal-meta { margin-top: 14px; font-size: 14px; color: var(--text-3); }
+
+.legal-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 56px; padding: 44px 0 96px; }
+.legal-toc { position: sticky; top: 84px; align-self: start; font-size: 13.5px; }
+.legal-toc-title { font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-3); font-weight: 600; margin-bottom: 12px; }
+.legal-toc a { display: block; padding: 7px 0 7px 14px; color: var(--text-2); text-decoration: none; border-left: 2px solid var(--border); line-height: 1.45; transition: color .15s, border-color .15s; }
+.legal-toc a:hover { color: var(--text); }
+.legal-toc a.active { color: var(--text); border-left-color: var(--text); font-weight: 600; }
+
+.legal-main { max-width: 680px; min-width: 0; }
+.legal-content { color: var(--text-2); font-size: 16px; }
+.legal-content h3 { font-size: 21px; font-weight: 700; color: var(--text); margin: 48px 0 14px; letter-spacing: -0.01em; scroll-margin-top: 84px; }
+.legal-content h3:first-child { margin-top: 4px; }
+.legal-content h4 { font-size: 16px; font-weight: 700; color: var(--text); margin: 26px 0 8px; }
+.legal-content p { line-height: 1.85; margin: 14px 0; }
+.legal-content ul { margin: 14px 0; padding-left: 22px; }
+.legal-content li { line-height: 1.85; margin: 8px 0; }
+.legal-content li::marker { color: var(--text-3); }
+.legal-content strong { color: var(--text); font-weight: 700; }
+.legal-content hr { border: none; border-top: 1px solid var(--border-light); margin: 32px 0; }
+.legal-content a { color: #2563eb; text-decoration: underline; text-underline-offset: 2px; }
+
+@media (max-width: 860px) {
+  .legal-page { padding: 0 32px; }
+  .legal-layout { grid-template-columns: 1fr; gap: 0; padding: 24px 0 64px; }
+  .legal-toc { display: none; }        /* 收合後直接隱藏目錄，不排成清單 */
+  .legal-hero { padding: 40px 0 26px; }
+  .legal-title { font-size: 26px; }
+  .legal-content { font-size: 15px; }
+  .legal-content h3 { font-size: 19px; margin-top: 36px; }
+}
+@media (max-width: 600px) {
+  .legal-page { padding: 0 24px; }
+}

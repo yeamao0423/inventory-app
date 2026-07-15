@@ -229,7 +229,7 @@ export const getStorePage = cache(async (storeId, slug) => {
     async () => {
       const { data } = await supabase
         .from('store_pages')
-        .select('slug, title, body')
+        .select('slug, title, body, updated_at')
         .eq('store_id', storeId).eq('slug', slug).eq('is_published', true)
         .maybeSingle()
       return data || null

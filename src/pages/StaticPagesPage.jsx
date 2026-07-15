@@ -19,7 +19,10 @@ export default function StaticPagesPage() {
   const [error, setError] = useState('')
   const [msg, setMsg] = useState('')
 
-  const shopBase = resolveShopBaseUrl(store)
+  // 預覽網址：dev 指向本機商城（VITE_SHOP_URL），正式環境指向店家自己的網域（custom_domain / slug.root）
+  const shopBase = (import.meta.env.DEV && import.meta.env.VITE_SHOP_URL)
+    ? import.meta.env.VITE_SHOP_URL.replace(/\/+$/, '')
+    : resolveShopBaseUrl(store)
 
   async function load() {
     if (!storeId) return
@@ -147,12 +150,16 @@ export default function StaticPagesPage() {
   return (
     <div className="page">
       <style>{`
-        .md-preview h3 { font-size: 16px; font-weight: 700; margin: 18px 0 8px; }
-        .md-preview h4 { font-size: 14px; font-weight: 700; margin: 14px 0 6px; }
-        .md-preview p { font-size: 13px; line-height: 1.8; margin: 8px 0; color: var(--text); }
-        .md-preview ul { margin: 8px 0; padding-left: 20px; }
-        .md-preview li { font-size: 13px; line-height: 1.8; margin: 4px 0; }
-        .md-preview hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+        .md-preview { color: var(--text-2); font-size: 14.5px; max-width: 680px; }
+        .md-preview h3 { font-size: 18px; font-weight: 700; color: var(--text); margin: 28px 0 10px; letter-spacing: -0.01em; }
+        .md-preview h3:first-child { margin-top: 2px; }
+        .md-preview h4 { font-size: 15px; font-weight: 700; color: var(--text); margin: 20px 0 6px; }
+        .md-preview p { line-height: 1.8; margin: 12px 0; }
+        .md-preview ul { margin: 12px 0; padding-left: 20px; }
+        .md-preview li { line-height: 1.8; margin: 6px 0; }
+        .md-preview li::marker { color: var(--text-3); }
+        .md-preview strong { color: var(--text); font-weight: 700; }
+        .md-preview hr { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
         .md-preview a { color: var(--blue); }
       `}</style>
 

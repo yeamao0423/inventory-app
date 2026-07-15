@@ -45,3 +45,17 @@ export function renderMarkdown(md) {
   flushPara(); flushList()
   return html.join('\n')
 }
+
+// 渲染 + 產生目錄：為每個 ## 章節（<h3>）補 id，並回傳 { html, toc: [{id, text}] }。
+// 供靜態頁做左側目錄與 scroll-spy 高亮。
+export function renderMarkdownWithToc(md) {
+  const toc = []
+  let i = 0
+  const html = renderMarkdown(md).replace(/<h3>([\s\S]*?)<\/h3>/g, (m, inner) => {
+    i += 1
+    const id = `sec-${i}`
+    toc.push({ id, text: inner.replace(/<[^>]+>/g, '') })
+    return `<h3 id="${id}">${inner}</h3>`
+  })
+  return { html, toc }
+}
