@@ -370,7 +370,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
   }
 
   return (
-    <div className="sheet-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="sheet-overlay">
       <div className="sheet">
         <div className="sheet-handle" />
 
@@ -786,6 +786,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
                   <div style={{ paddingTop: 4 }}>
                     <VariantEditor
                       optionTypes={optionTypes}
+                      onOptionTypesChange={setOptionTypes}
                       selectedTypes={selectedTypes}
                       selectedValues={selectedValues}
                       variants={localVariants}

@@ -1,9 +1,13 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
+import { supabase } from '../lib/supabase'
+import { useAuth } from '../hooks/useAuth'
 
 // 規格編輯器（快速上架 QuickListSheet / 批量上架 BulkListSheet 共用）。
 // 受控元件：selectedTypes / selectedValues / variants 由父層持有——
 // 批量上架的草稿卡收合再展開會 unmount，狀態放內部會遺失。
 // 批次套用輸入框為暫態 UI，留在元件內部即可。
+// inline 新增規格類型/值：寫入店家規格庫（與規格管理頁同步），
+// insert 欄位與 sort_order 比照 TaxonomyManager 的 addSpec/addValue（追加末尾）。
 
 export function resolveVariantLabel(options, optionTypes) {
   if (!options || Object.keys(options).length === 0) return '無規格'
@@ -27,6 +31,7 @@ export default function VariantEditor({
   selectedValues,
   variants,
   onChange,            // (partial: {selectedTypes?, selectedValues?, variants?}) => void
+  onOptionTypesChange, // (nextOptionTypes) => void — inline 新增規格後回寫父層清單
   showStock = true,    // 限時單/不檢查庫存時隱藏庫存欄與批次列
   showSale = false,
   basePrice = '',
@@ -34,10 +39,16 @@ export default function VariantEditor({
   baseSale = '',
   currency = 'TWD',
 }) {
+  const { storeId } = useAuth()
   const [batchStock, setBatchStock] = useState('')
   const [batchPrice, setBatchPrice] = useState('')
   const [batchSale, setBatchSale] = useState('')
   const [batchCost, setBatchCost] = useState('')
+  const [addingValueFor, setAddingValueFor] = useState(null)  // 正在新增值的 type id
+  const [newValueText, setNewValueText] = useState('')
+  const [addingType, setAddingType] = useState(false)
+  const [newTypeText, setNewTypeText] = useState('')
+  const creatingRef = useRef(false)  // 防 Enter 連按重複 insert
 
   function toggleType(typeId) {
     const tid = String(typeId)
@@ -60,6 +71,56 @@ export default function VariantEditor({
     if (next[tid].has(valueId)) next[tid].delete(valueId)
     else next[tid].add(valueId)
     onChange({ selectedValues: next, variants: [] })
+  }
+
+  // inline 新增規格值：同名（trim 後）直接選取既有值不重複建立；DB UNIQUE 為最後防線
+  async function createValue(typeId) {
+    const val = newValueText.trim()
+    if (!val) { setAddingValueFor(null); setNewValueText(''); return }
+    if (creatingRef.current) return
+    const type = optionTypes.find(t => t.id === typeId)
+    const existing = (type?.variant_option_values || []).find(v => v.value === val)
+    if (existing) {
+      if (!selectedValues[String(typeId)]?.has(existing.id)) toggleValue(typeId, existing.id)
+      setNewValueText('')
+      return
+    }
+    creatingRef.current = true
+    const { data, error } = await supabase.from('variant_option_values')
+      .insert({ option_type_id: typeId, value: val, sort_order: (type?.variant_option_values || []).length })
+      .select('*').single()
+    creatingRef.current = false
+    if (error || !data) { alert('新增規格值失敗：' + (error?.message || '未知錯誤')); return }
+    onOptionTypesChange?.(optionTypes.map(t =>
+      t.id === typeId ? { ...t, variant_option_values: [...(t.variant_option_values || []), data] } : t
+    ))
+    // 自動選取新值（依既有規則會清掉已產生的組合）；輸入框保持開啟方便連續新增
+    toggleValue(typeId, data.id)
+    setNewValueText('')
+  }
+
+  // inline 新增規格類型：建立後自動勾選，並開啟其值輸入框方便接著加值
+  async function createType() {
+    const name = newTypeText.trim()
+    if (!name) { setAddingType(false); setNewTypeText(''); return }
+    if (creatingRef.current) return
+    const existing = optionTypes.find(t => t.name === name)
+    if (existing) {
+      if (!selectedTypes[String(existing.id)]) toggleType(existing.id)
+      setAddingType(false); setNewTypeText('')
+      return
+    }
+    creatingRef.current = true
+    const { data, error } = await supabase.from('variant_option_types')
+      .insert({ name, sort_order: optionTypes.length, store_id: storeId })
+      .select('*').single()
+    creatingRef.current = false
+    if (error || !data) { alert('新增規格類型失敗：' + (error?.message || '未知錯誤')); return }
+    onOptionTypesChange?.([...optionTypes, { ...data, variant_option_values: [] }])
+    onChange({ selectedTypes: { ...selectedTypes, [String(data.id)]: true }, variants: [] })
+    setAddingType(false)
+    setNewTypeText('')
+    setAddingValueFor(data.id)
   }
 
   function generateCombinations() {
@@ -133,7 +194,7 @@ export default function VariantEditor({
                 )}
               </label>
               {isActive && (
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', paddingLeft: 24 }}>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', paddingLeft: 24, alignItems: 'center' }}>
                   {vals.map(val => {
                     const isSelected = selectedValues[tid]?.has(val.id)
                     return (
@@ -150,11 +211,85 @@ export default function VariantEditor({
                       >{val.value}</button>
                     )
                   })}
+                  {addingValueFor === type.id ? (
+                    <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                      <input
+                        autoFocus
+                        value={newValueText}
+                        onChange={e => setNewValueText(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') createValue(type.id)
+                          if (e.key === 'Escape') { setAddingValueFor(null); setNewValueText('') }
+                        }}
+                        onBlur={() => { setAddingValueFor(null); setNewValueText('') }}
+                        placeholder="新規格值"
+                        style={{
+                          width: 90, fontSize: 13, padding: '4px 10px', borderRadius: 20,
+                          border: '0.5px solid var(--text)', outline: 'none', background: 'var(--bg)',
+                        }}
+                      />
+                      <button
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => createValue(type.id)}
+                        style={{
+                          fontSize: 13, padding: '4px 10px', borderRadius: 20, cursor: 'pointer',
+                          border: '0.5px solid var(--border)', background: 'var(--bg)', color: 'var(--text)',
+                        }}
+                      >✓</button>
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => { setAddingType(false); setAddingValueFor(type.id); setNewValueText('') }}
+                      title="新增規格值"
+                      style={{
+                        fontSize: 13, padding: '4px 14px', borderRadius: 20,
+                        background: 'transparent', color: 'var(--text-3)',
+                        border: '0.5px dashed var(--border)', cursor: 'pointer',
+                      }}
+                    >＋</button>
+                  )}
                 </div>
               )}
             </div>
           )
         })}
+
+        {addingType ? (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 }}>
+            <input
+              autoFocus
+              value={newTypeText}
+              onChange={e => setNewTypeText(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') createType()
+                if (e.key === 'Escape') { setAddingType(false); setNewTypeText('') }
+              }}
+              onBlur={() => { setAddingType(false); setNewTypeText('') }}
+              placeholder="規格類型名稱（例：顏色、尺寸）"
+              style={{
+                width: 200, fontSize: 13, padding: '6px 10px', borderRadius: 8,
+                border: '0.5px solid var(--text)', outline: 'none', background: 'var(--bg)',
+              }}
+            />
+            <button
+              onMouseDown={e => e.preventDefault()}
+              onClick={createType}
+              style={{
+                fontSize: 13, padding: '6px 12px', borderRadius: 8, cursor: 'pointer',
+                border: '0.5px solid var(--border)', background: 'var(--bg)', color: 'var(--text)',
+              }}
+            >✓</button>
+          </div>
+        ) : (
+          <button
+            onClick={() => { setAddingValueFor(null); setAddingType(true); setNewTypeText('') }}
+            style={{
+              fontSize: 13, padding: '6px 12px', borderRadius: 8, marginBottom: 4,
+              border: '0.5px dashed var(--border)', background: 'transparent',
+              color: 'var(--text-3)', cursor: 'pointer',
+            }}
+          >＋ 新增規格類型</button>
+        )}
 
         {totalCombos > 0 && (
           <button

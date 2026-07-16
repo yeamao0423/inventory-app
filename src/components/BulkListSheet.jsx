@@ -685,6 +685,7 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
                 categories={categories}
                 allTags={allTags}
                 optionTypes={optionTypes}
+                onOptionTypesChange={setOptionTypes}
                 sellingMode={sellingMode}
                 existingSources={existingSources}
                 onUpdate={updates => updateDraft(i, updates)}
@@ -749,7 +750,7 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
 }
 
 // ── 草稿列 ─────────────────────────────────────────────────────────────
-function DraftRow({ index, draft, groupIndices, previews, photos, categories, allTags, optionTypes, sellingMode, existingSources, onUpdate, onRerunAi, onApplySuggestedAs, onApplyAllSuggestedAs, onLightbox, onHoverEnter, onHoverLeave, onTouchStart, onTouchEnd }) {
+function DraftRow({ index, draft, groupIndices, previews, photos, categories, allTags, optionTypes, onOptionTypesChange, sellingMode, existingSources, onUpdate, onRerunAi, onApplySuggestedAs, onApplyAllSuggestedAs, onLightbox, onHoverEnter, onHoverLeave, onTouchStart, onTouchEnd }) {
   const catOptions = categories.map(c => ({ value: String(c.id), label: c.name }))
   const canConfirm = draft.name.trim() && draft.shopPrice
   const selectionChanged = useRef(false)
@@ -1010,6 +1011,7 @@ function DraftRow({ index, draft, groupIndices, previews, photos, categories, al
               {draft.hasVariants && (
                 <VariantEditor
                   optionTypes={optionTypes}
+                  onOptionTypesChange={onOptionTypesChange}
                   selectedTypes={draft.selectedTypes}
                   selectedValues={draft.selectedValues}
                   variants={draft.variants}
