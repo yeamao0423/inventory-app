@@ -4,6 +4,7 @@ import { useAuth } from '../hooks/useAuth'
 import { uploadImages, compressImage, reencodeImage } from '../lib/imageUtils'
 import { SUPPORTED_CURRENCIES } from '../constants/currency'
 import CustomSelect from './CustomSelect'
+import VariantEditor from './VariantEditor'
 
 const AI_MEDIA_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
 
@@ -42,6 +43,7 @@ function blankDraft(groupSize) {
   return {
     aiStatus: 'idle',
     aiError: null,
+    aiWanted: true,          // 是否勾選要 AI 補齊（進入確認頁後由使用者決定）
     aiSelected: defaultSelected,
     aiOnly: [],
     name: '',
@@ -56,6 +58,10 @@ function blankDraft(groupSize) {
     categoryId: '',
     tagIds: [],
     quantity: '',
+    hasVariants: false,
+    selectedTypes: {},
+    selectedValues: {},
+    variants: [],
     confirmed: false,
     logId: null,
     expanded: false,
@@ -79,19 +85,23 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
 
   const [categories, setCategories] = useState([])
   const [allTags, setAllTags] = useState([])
+  const [optionTypes, setOptionTypes] = useState([])
   const [saving, setSaving] = useState(false)
   const [autoGrouping, setAutoGrouping] = useState(false)
 
   const [lightboxUrl, setLightboxUrl] = useState(null)
   const [hoverInfo, setHoverInfo] = useState(null)
   const pressTimer = useRef(null)
-  const aiStartedRef = useRef(false)
 
   useEffect(() => {
     if (!storeId) return
     Promise.all([
       supabase.from('categories').select('*').eq('store_id', storeId).order('sort_order'),
       supabase.from('tags').select('*').eq('store_id', storeId).order('sort_order'),
+      supabase.from('variant_option_types')
+        .select('*, variant_option_values(id, value, sort_order)')
+        .eq('store_id', storeId)
+        .order('sort_order').order('name'),
       supabase
         .from('storefront_products')
         .select('collection_end')
@@ -100,9 +110,10 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
         .gt('collection_end', new Date().toISOString())
         .order('collection_end', { ascending: false })
         .limit(5),
-    ]).then(([{ data: cats }, { data: tgs }, { data: ends }]) => {
+    ]).then(([{ data: cats }, { data: tgs }, { data: opts }, { data: ends }]) => {
       setCategories(cats || [])
       setAllTags(tgs || [])
+      setOptionTypes(opts || [])
       if (ends) {
         const pad = n => String(n).padStart(2, '0')
         const unique = [...new Set(ends.map(r => {
@@ -266,14 +277,19 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
     setStep('review')
   }
 
-  useEffect(() => {
-    if (step !== 'review' || !reviewGroups.length || aiStartedRef.current) return
-    aiStartedRef.current = true
-    drafts.forEach((d, i) => runAiForGroup(i, reviewGroups[i], d.aiSelected, d.aiOnly, categories, allTags))
-  }, [step, reviewGroups.length])
+  // 只跑「有勾選且尚未跑過」的組；沒勾的保留 idle，可事後單獨補齊
+  function startAiForSelected() {
+    drafts.forEach((d, i) => {
+      if (d.aiStatus === 'idle' && d.aiWanted)
+        runAiForGroup(i, reviewGroups[i], d.aiSelected, d.aiOnly, categories, allTags)
+    })
+  }
+
+  function setAllAiWanted(on) {
+    setDrafts(prev => prev.map(d => (d.aiStatus === 'idle' ? { ...d, aiWanted: on } : d)))
+  }
 
   function goBackToUpload() {
-    aiStartedRef.current = false
     setStep('upload')
   }
 
@@ -287,9 +303,14 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
     let ok = 0, fail = 0
     for (const { draft, groupIdx } of toSubmit) {
       try {
+        const hasVariants = draft.hasVariants && draft.variants.length > 0
+        // 有規格時 quantity = 各規格庫存加總（與快速上架一致）
+        const baseQty = hasVariants
+          ? (sellingMode === 'stock' ? draft.variants.reduce((s, v) => s + (v.stock || 0), 0) : 0)
+          : (sellingMode === 'stock' && draft.quantity ? Number(draft.quantity) : 0)
         const { data: inserted, error: prodErr } = await supabase.from('products').insert({
           name: draft.name.trim(),
-          quantity: sellingMode === 'stock' && draft.quantity ? Number(draft.quantity) : 0,
+          quantity: baseQty,
           unit: '個',
           cost: draft.cost ? Number(draft.cost) : 0,
           currency: draft.currency || 'TWD',
@@ -310,6 +331,18 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
         if (draft.tagIds.length) {
           await supabase.from('product_tags').insert(
             draft.tagIds.map(tagId => ({ product_id: productId, tag_id: tagId }))
+          )
+        }
+        if (hasVariants) {
+          await supabase.from('product_variants').insert(
+            draft.variants.map(v => ({
+              product_id: productId,
+              options: v.options,
+              stock: sellingMode === 'stock' ? (v.stock || 0) : 0,
+              variant_price: v.variant_price,
+              sale_price: null,
+              variant_cost: v.variant_cost ?? null,
+            }))
           )
         }
         const { error: sfErr } = await supabase.from('storefront_products').insert({
@@ -347,6 +380,8 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
 
   const confirmedCount = drafts.filter(d => d.confirmed).length
   const suggestedCount = drafts.filter(d => d.aiSuggestedPrice).length
+  const aiIdleCount = drafts.filter(d => d.aiStatus === 'idle').length
+  const aiIdleWanted = drafts.filter(d => d.aiStatus === 'idle' && d.aiWanted).length
 
   // review mode: .sheet 轉 flex column，底部列脫離捲軸
   // overflow: 'hidden' 讓 sheet 本身不捲（由內部 scrollable div 負責），
@@ -355,8 +390,9 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
     ? { display: 'flex', flexDirection: 'column', overflowY: 'hidden' }
     : {}
 
+  // 點背景不關閉（誤觸會丟掉整批草稿），只能按 ×
   return (
-    <div className="sheet-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="sheet-overlay">
       <div className="sheet" style={sheetStyle}>
         <div className="sheet-handle" style={{ flexShrink: 0 }} />
 
@@ -544,7 +580,7 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
               disabled={photos.length === 0}
               style={{ width: '100%', opacity: photos.length === 0 ? 0.4 : 1 }}
             >
-              確認分組，開始 AI 補齊（{liveGroups.length} 件）
+              確認分組（{liveGroups.length} 件）
             </button>
           </div>
         )}
@@ -565,6 +601,37 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
                 {sellingMode === 'collection' ? '🛒 限時單' : '📦 現貨單'}
               </span>
             </div>
+
+            {/* AI 補齊選擇列 — 還有未跑過 AI 的商品時顯示 */}
+            {aiIdleCount > 0 && (
+              <div style={{
+                marginBottom: 12, padding: '8px 12px', borderRadius: 10,
+                background: 'var(--surface)', border: '0.5px solid var(--border)',
+              }}>
+                <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 8 }}>
+                  ✦ 勾選要 AI 補齊的商品（已勾 {aiIdleWanted} / {aiIdleCount} 件）
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    onClick={() => setAllAiWanted(aiIdleWanted < aiIdleCount)}
+                    style={{
+                      fontSize: 12, padding: '5px 12px', borderRadius: 8, cursor: 'pointer',
+                      border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)',
+                    }}
+                  >{aiIdleWanted < aiIdleCount ? '全選' : '全不選'}</button>
+                  <button
+                    onClick={startAiForSelected}
+                    disabled={aiIdleWanted === 0}
+                    style={{
+                      flex: 1, fontSize: 12, fontWeight: 600, padding: '5px 0', borderRadius: 8,
+                      border: 'none', background: 'var(--text)', color: '#fff',
+                      cursor: aiIdleWanted === 0 ? 'default' : 'pointer',
+                      opacity: aiIdleWanted === 0 ? 0.4 : 1,
+                    }}
+                  >✦ 開始 AI 補齊（{aiIdleWanted} 件）</button>
+                </div>
+              </div>
+            )}
 
             {sellingMode === 'collection' && collectionEnd && (
               <div style={{
@@ -617,6 +684,7 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
                 photos={photos}
                 categories={categories}
                 allTags={allTags}
+                optionTypes={optionTypes}
                 sellingMode={sellingMode}
                 existingSources={existingSources}
                 onUpdate={updates => updateDraft(i, updates)}
@@ -681,7 +749,7 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
 }
 
 // ── 草稿列 ─────────────────────────────────────────────────────────────
-function DraftRow({ index, draft, groupIndices, previews, photos, categories, allTags, sellingMode, existingSources, onUpdate, onRerunAi, onApplySuggestedAs, onApplyAllSuggestedAs, onLightbox, onHoverEnter, onHoverLeave, onTouchStart, onTouchEnd }) {
+function DraftRow({ index, draft, groupIndices, previews, photos, categories, allTags, optionTypes, sellingMode, existingSources, onUpdate, onRerunAi, onApplySuggestedAs, onApplyAllSuggestedAs, onLightbox, onHoverEnter, onHoverLeave, onTouchStart, onTouchEnd }) {
   const catOptions = categories.map(c => ({ value: String(c.id), label: c.name }))
   const canConfirm = draft.name.trim() && draft.shopPrice
   const selectionChanged = useRef(false)
@@ -723,6 +791,17 @@ function DraftRow({ index, draft, groupIndices, previews, photos, categories, al
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
         <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>商品 {index + 1}</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {draft.aiStatus === 'idle' && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--text-2)', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={draft.aiWanted}
+                onChange={e => onUpdate({ aiWanted: e.target.checked })}
+                style={{ width: 14, height: 14, accentColor: 'var(--text)' }}
+              />
+              AI 補齊
+            </label>
+          )}
           {statusChip && (
             <span style={{ fontSize: 12, color: statusChip.color }}>{statusChip.label}</span>
           )}
@@ -880,24 +959,69 @@ function DraftRow({ index, draft, groupIndices, previews, photos, categories, al
         </div>
       )}
 
-      {/* ── 現貨庫存 ── */}
+      {/* ── 現貨庫存（有規格時由規格加總，於「更多欄位」編輯）── */}
       {sellingMode === 'stock' && (
-        <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>庫存數量</div>
-          <input
-            className="form-input"
-            type="number"
-            placeholder="0"
-            value={draft.quantity}
-            onChange={e => onUpdate({ quantity: e.target.value })}
-            style={{ width: 120 }}
-          />
-        </div>
+        draft.hasVariants && draft.variants.length > 0 ? (
+          <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 10 }}>
+            庫存由規格加總：{draft.variants.reduce((s, v) => s + (v.stock || 0), 0)} 個（{draft.variants.length} 種規格）
+          </div>
+        ) : (
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>庫存數量</div>
+            <input
+              className="form-input"
+              type="number"
+              placeholder="0"
+              value={draft.quantity}
+              onChange={e => onUpdate({ quantity: e.target.value })}
+              style={{ width: 120 }}
+            />
+          </div>
+        )
       )}
 
-      {/* ── 展開的進階欄位（品牌來源 / 分類 / 描述 / 標籤）── */}
+      {/* ── 展開的進階欄位（規格 / 品牌來源 / 分類 / 描述 / 標籤）── */}
       {draft.expanded && (
         <div style={{ borderTop: '0.5px solid var(--border)', paddingTop: 12, marginBottom: 10 }}>
+
+          {/* 商品規格 */}
+          {optionTypes.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: draft.hasVariants ? 10 : 0 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-2)' }}>商品規格</span>
+                <div
+                  onClick={() => {
+                    if (draft.hasVariants) onUpdate({ hasVariants: false, selectedTypes: {}, selectedValues: {}, variants: [] })
+                    else onUpdate({ hasVariants: true })
+                  }}
+                  style={{
+                    width: 44, height: 26, borderRadius: 13, cursor: 'pointer', transition: 'background .2s',
+                    background: draft.hasVariants ? 'var(--green, #27ae60)' : 'var(--border)',
+                    position: 'relative',
+                  }}
+                >
+                  <div style={{
+                    width: 20, height: 20, borderRadius: '50%', background: '#fff',
+                    position: 'absolute', top: 3, transition: 'left .2s',
+                    left: draft.hasVariants ? 21 : 3,
+                  }} />
+                </div>
+              </div>
+              {draft.hasVariants && (
+                <VariantEditor
+                  optionTypes={optionTypes}
+                  selectedTypes={draft.selectedTypes}
+                  selectedValues={draft.selectedValues}
+                  variants={draft.variants}
+                  onChange={onUpdate}
+                  showStock={sellingMode === 'stock'}
+                  basePrice={draft.shopPrice}
+                  baseCost={draft.cost}
+                  currency={draft.currency}
+                />
+              )}
+            </div>
+          )}
 
           {/* 品牌來源 */}
           <div style={{ marginBottom: 10 }}>
@@ -997,7 +1121,7 @@ function DraftRow({ index, draft, groupIndices, previews, photos, categories, al
           className="btn btn-outline"
           style={{ flex: 1, fontSize: 13, padding: '8px 0' }}
         >
-          {draft.expanded ? '收起 ▲' : '更多欄位 ▼'}
+          {draft.expanded ? '收起 ▲' : '規格／更多欄位 ▼'}
         </button>
         <button
           onClick={() => canConfirm && onUpdate({ confirmed: !draft.confirmed })}

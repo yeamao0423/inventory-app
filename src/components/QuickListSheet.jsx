@@ -4,6 +4,7 @@ import { SUPPORTED_CURRENCIES } from '../constants/currency'
 import { useAuth } from '../hooks/useAuth'
 import { uploadImages, compressImage, reencodeImage } from '../lib/imageUtils'
 import CustomSelect from './CustomSelect'
+import VariantEditor, { resolveVariantLabel } from './VariantEditor'
 
 const STEPS = ['拍照', '商品資料', '確認上架']
 
@@ -83,10 +84,6 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
   const [selectedTypes, setSelectedTypes] = useState({})
   const [selectedValues, setSelectedValues] = useState({})
   const [localVariants, setLocalVariants] = useState([])
-  const [batchStock, setBatchStock] = useState('')
-  const [batchPrice, setBatchPrice] = useState('')
-  const [batchSale, setBatchSale] = useState('')
-  const [batchCost, setBatchCost] = useState('')
   const [recentEnds, setRecentEnds] = useState([])
 
   // AI 補齊
@@ -259,94 +256,6 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
     }
     setSelectedTags(prev => [...new Set([...prev, ...existingIds, ...created.map(t => t.id)])])
   }
-
-  // --- Variant helpers ---
-  function toggleType(typeId) {
-    const tid = String(typeId)
-    setSelectedTypes(prev => {
-      const next = { ...prev }
-      if (next[tid]) {
-        delete next[tid]
-        setSelectedValues(prev2 => { const n = { ...prev2 }; delete n[tid]; return n })
-      } else {
-        next[tid] = true
-      }
-      return next
-    })
-    setLocalVariants([])
-  }
-
-  function toggleValue(typeId, valueId) {
-    const tid = String(typeId)
-    setSelectedValues(prev => {
-      const next = { ...prev }
-      if (!next[tid]) next[tid] = new Set()
-      else next[tid] = new Set(next[tid])
-      if (next[tid].has(valueId)) next[tid].delete(valueId)
-      else next[tid].add(valueId)
-      return next
-    })
-    setLocalVariants([])
-  }
-
-  function cartesian(arrays) {
-    if (arrays.length === 0) return [[]]
-    return arrays.reduce((acc, arr) =>
-      acc.flatMap(combo => arr.map(item => [...combo, item])),
-    [[]])
-  }
-
-  function generateCombinations() {
-    const activeTypeIds = Object.keys(selectedTypes).filter(tid => selectedTypes[tid] && selectedValues[tid]?.size > 0)
-    if (activeTypeIds.length === 0) return
-    const axes = activeTypeIds.map(tid =>
-      [...selectedValues[tid]].map(vid => ({ tid, vid }))
-    )
-    const combos = cartesian(axes)
-    setLocalVariants(combos.map(combo => {
-      const options = {}
-      combo.forEach(({ tid, vid }) => { options[tid] = vid })
-      return { options, stock: 0, variant_price: null, sale_price: null, variant_cost: null }
-    }))
-  }
-
-  function updateLocalVariant(idx, field, value) {
-    setLocalVariants(prev => prev.map((v, i) => {
-      if (i !== idx) return v
-      if (field === 'stock') return { ...v, stock: value === '' ? 0 : Number(value) }
-      if (field === 'sale_price') return { ...v, sale_price: value === '' ? null : Number(value) }
-      if (field === 'variant_cost') return { ...v, variant_cost: value === '' ? null : Number(value) }
-      return { ...v, variant_price: value === '' ? null : Number(value) }
-    }))
-  }
-
-  function removeLocalVariant(idx) {
-    setLocalVariants(prev => prev.filter((_, i) => i !== idx))
-  }
-
-  function applyBatch(field) {
-    const val = field === 'stock' ? batchStock : field === 'sale_price' ? batchSale : field === 'variant_cost' ? batchCost : batchPrice
-    if (val === '') return
-    setLocalVariants(prev => prev.map(v => ({ ...v, [field]: Number(val) })))
-    if (field === 'stock') setBatchStock('')
-    else if (field === 'sale_price') setBatchSale('')
-    else if (field === 'variant_cost') setBatchCost('')
-    else setBatchPrice('')
-  }
-
-  function resolveVariantLabel(options) {
-    if (!options || Object.keys(options).length === 0) return '無規格'
-    return Object.entries(options).map(([typeId, valueId]) => {
-      const type = optionTypes.find(t => t.id === Number(typeId))
-      const val = type?.variant_option_values?.find(v => v.id === valueId)
-      return val ? `${type.name}: ${val.value}` : ''
-    }).filter(Boolean).join(' / ')
-  }
-
-  const activeTypeIds = Object.keys(selectedTypes).filter(tid => selectedTypes[tid] && selectedValues[tid]?.size > 0)
-  const totalCombos = activeTypeIds.length > 0
-    ? activeTypeIds.reduce((acc, tid) => acc * (selectedValues[tid]?.size || 1), 1)
-    : 0
 
   // --- Validation ---
   function canNext() {
@@ -875,202 +784,23 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
 
                 {hasVariants && (
                   <div style={{ paddingTop: 4 }}>
-                    {/* Select types & values */}
-                    <div style={{ background: 'var(--surface)', borderRadius: 12, padding: 14, marginBottom: 12, border: '0.5px solid var(--border)' }}>
-                      <div className="muted fs12 fw600" style={{ marginBottom: 10 }}>1. 選擇規格</div>
-                      {optionTypes.map(type => {
-                        const tid = String(type.id)
-                        const isActive = !!selectedTypes[tid]
-                        const vals = [...(type.variant_option_values || [])].sort((a, b) => a.sort_order - b.sort_order)
-                        return (
-                          <div key={type.id} style={{ marginBottom: 12 }}>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: isActive ? 8 : 0 }}>
-                              <input
-                                type="checkbox"
-                                checked={isActive}
-                                onChange={() => toggleType(type.id)}
-                                style={{ width: 16, height: 16, accentColor: 'var(--text)' }}
-                              />
-                              <span className="fw600" style={{ fontSize: 14 }}>{type.name}</span>
-                              {isActive && selectedValues[tid]?.size > 0 && (
-                                <span className="muted fs12">（已選 {selectedValues[tid].size} 個）</span>
-                              )}
-                            </label>
-                            {isActive && (
-                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', paddingLeft: 24 }}>
-                                {vals.map(val => {
-                                  const isSelected = selectedValues[tid]?.has(val.id)
-                                  return (
-                                    <button
-                                      key={val.id}
-                                      onClick={() => toggleValue(type.id, val.id)}
-                                      style={{
-                                        fontSize: 13, padding: '4px 14px', borderRadius: 20,
-                                        background: isSelected ? 'var(--text)' : 'transparent',
-                                        color: isSelected ? '#fff' : 'var(--text-2)',
-                                        border: '0.5px solid var(--border)',
-                                        cursor: 'pointer', transition: 'all .15s',
-                                      }}
-                                    >{val.value}</button>
-                                  )
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        )
-                      })}
-
-                      {totalCombos > 0 && (
-                        <button
-                          className="btn"
-                          onClick={generateCombinations}
-                          style={{ fontSize: 13, padding: '10px 0', marginTop: 4 }}
-                        >
-                          產生組合（共 {totalCombos} 種）
-                        </button>
-                      )}
-                    </div>
-
-                    {/* Variant matrix */}
-                    {localVariants.length > 0 && (
-                      <div style={{ background: 'var(--surface)', borderRadius: 12, padding: 14, border: '0.5px solid var(--border)' }}>
-                        <div className="muted fs12 fw600" style={{ marginBottom: 10 }}>
-                          2. 編輯規格（{localVariants.length} 種）
-                        </div>
-
-                        {/* Batch controls */}
-                        {!skipStockCheck && (
-                          <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-                            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                              <span className="muted fs12">批次庫存:</span>
-                              <input
-                                type="number"
-                                value={batchStock}
-                                onChange={e => setBatchStock(e.target.value)}
-                                placeholder="0"
-                                style={{ width: 60, padding: '4px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center' }}
-                              />
-                              <button onClick={() => applyBatch('stock')} style={{ padding: '4px 10px', borderRadius: 6, border: '0.5px solid var(--border)', background: 'var(--bg)', fontSize: 11, cursor: 'pointer' }}>套用</button>
-                            </div>
-                            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                              <span className="muted fs12">批次售價:</span>
-                              <input
-                                type="number"
-                                value={batchPrice}
-                                onChange={e => setBatchPrice(e.target.value)}
-                                placeholder={String(shopPrice || 0)}
-                                style={{ width: 80, padding: '4px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center' }}
-                              />
-                              <button onClick={() => applyBatch('variant_price')} style={{ padding: '4px 10px', borderRadius: 6, border: '0.5px solid var(--border)', background: 'var(--bg)', fontSize: 11, cursor: 'pointer' }}>套用</button>
-                            </div>
-                            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                              <span className="muted fs12">批次成本:</span>
-                              <input
-                                type="number"
-                                value={batchCost}
-                                onChange={e => setBatchCost(e.target.value)}
-                                placeholder={cost !== '' ? String(cost) : '成本'}
-                                style={{ width: 80, padding: '4px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center' }}
-                              />
-                              <button onClick={() => applyBatch('variant_cost')} style={{ padding: '4px 10px', borderRadius: 6, border: '0.5px solid var(--border)', background: 'var(--bg)', fontSize: 11, cursor: 'pointer' }}>套用</button>
-                            </div>
-                            {onSale && (
-                              <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                                <span className="muted fs12" style={{ color: 'var(--red)' }}>批次特價:</span>
-                                <input
-                                  type="number"
-                                  value={batchSale}
-                                  onChange={e => setBatchSale(e.target.value)}
-                                  placeholder={salePrice !== '' ? String(salePrice) : '特價'}
-                                  style={{ width: 80, padding: '4px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center' }}
-                                />
-                                <button onClick={() => applyBatch('sale_price')} style={{ padding: '4px 10px', borderRadius: 6, border: '0.5px solid var(--border)', background: 'var(--bg)', fontSize: 11, cursor: 'pointer' }}>套用</button>
-                              </div>
-                            )}
-                          </div>
-                        )}
-
-                        {/* Table */}
-                        <div style={{ overflowX: 'auto' }}>
-                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                            <thead>
-                              <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                                <th style={{ padding: '8px 6px', textAlign: 'left', fontSize: 12, color: 'var(--text-3)', fontWeight: 600 }}>規格</th>
-                                {!skipStockCheck && (
-                                  <th style={{ padding: '8px 6px', width: 70, textAlign: 'center', fontSize: 12, color: 'var(--text-3)', fontWeight: 600 }}>庫存</th>
-                                )}
-                                <th style={{ padding: '8px 6px', width: 90, textAlign: 'center', fontSize: 12, color: 'var(--text-3)', fontWeight: 600 }}>售價(NT$)</th>
-                                <th style={{ padding: '8px 6px', width: 90, textAlign: 'center', fontSize: 12, color: 'var(--text-3)', fontWeight: 600 }}>成本({currency})</th>
-                                {onSale && (
-                                  <th style={{ padding: '8px 6px', width: 90, textAlign: 'center', fontSize: 12, color: 'var(--red)', fontWeight: 600 }}>特價(NT$)</th>
-                                )}
-                                <th style={{ padding: '8px 6px', width: 36 }}></th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {localVariants.map((v, idx) => (
-                                <tr key={idx} style={{ borderBottom: '1px solid var(--border-light)' }}>
-                                  <td style={{ padding: '8px 6px' }}>
-                                    <span className="fw600">{resolveVariantLabel(v.options)}</span>
-                                  </td>
-                                  {!skipStockCheck && (
-                                    <td style={{ padding: '8px 6px', textAlign: 'center' }}>
-                                      <input
-                                        type="number"
-                                        value={v.stock || ''}
-                                        onChange={e => updateLocalVariant(idx, 'stock', e.target.value)}
-                                        placeholder="0"
-                                        style={{ width: '100%', padding: '5px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center', background: 'var(--bg)' }}
-                                      />
-                                    </td>
-                                  )}
-                                  <td style={{ padding: '8px 6px', textAlign: 'center' }}>
-                                    <input
-                                      type="number"
-                                      value={v.variant_price ?? ''}
-                                      onChange={e => updateLocalVariant(idx, 'variant_price', e.target.value)}
-                                      placeholder={String(shopPrice || 0)}
-                                      style={{ width: '100%', padding: '5px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center', background: 'var(--bg)' }}
-                                    />
-                                  </td>
-                                  <td style={{ padding: '8px 6px', textAlign: 'center' }}>
-                                    <input
-                                      type="number"
-                                      value={v.variant_cost ?? ''}
-                                      onChange={e => updateLocalVariant(idx, 'variant_cost', e.target.value)}
-                                      placeholder={cost !== '' ? String(cost) : '成本'}
-                                      style={{ width: '100%', padding: '5px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center', background: 'var(--bg)' }}
-                                    />
-                                  </td>
-                                  {onSale && (
-                                    <td style={{ padding: '8px 6px', textAlign: 'center' }}>
-                                      <input
-                                        type="number"
-                                        value={v.sale_price ?? ''}
-                                        onChange={e => updateLocalVariant(idx, 'sale_price', e.target.value)}
-                                        placeholder={salePrice !== '' ? String(salePrice) : '特價'}
-                                        style={{ width: '100%', padding: '5px 8px', borderRadius: 6, border: '0.5px solid var(--red)', fontSize: 13, textAlign: 'center', background: 'var(--bg)' }}
-                                      />
-                                    </td>
-                                  )}
-                                  <td style={{ padding: '8px 6px', textAlign: 'center' }}>
-                                    <button
-                                      onClick={() => removeLocalVariant(idx)}
-                                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', fontSize: 15, padding: 0 }}
-                                    >×</button>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                        <div className="muted fs12" style={{ marginTop: 8 }}>
-                          售價留空 = 使用商城售價 NT${Number(shopPrice || 0).toLocaleString()}
-                          <br/>成本留空 = 使用進貨成本{cost !== '' ? ` ${Number(cost).toLocaleString()} ${currency}` : ''}
-                          {onSale && <><br/>特價留空 = 使用全品特價{salePrice !== '' ? ` NT$${Number(salePrice).toLocaleString()}` : '（未設定則該規格不特價）'}</>}
-                        </div>
-                      </div>
-                    )}
+                    <VariantEditor
+                      optionTypes={optionTypes}
+                      selectedTypes={selectedTypes}
+                      selectedValues={selectedValues}
+                      variants={localVariants}
+                      onChange={u => {
+                        if (u.selectedTypes !== undefined) setSelectedTypes(u.selectedTypes)
+                        if (u.selectedValues !== undefined) setSelectedValues(u.selectedValues)
+                        if (u.variants !== undefined) setLocalVariants(u.variants)
+                      }}
+                      showStock={!skipStockCheck}
+                      showSale={onSale}
+                      basePrice={shopPrice}
+                      baseCost={cost}
+                      baseSale={salePrice}
+                      currency={currency}
+                    />
                   </div>
                 )}
               </>
@@ -1205,7 +935,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
                     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                     padding: '8px 12px', borderBottom: idx < localVariants.length - 1 ? '0.5px solid var(--border-light)' : 'none',
                   }}>
-                    <span className="fs13">{resolveVariantLabel(v.options)}</span>
+                    <span className="fs13">{resolveVariantLabel(v.options, optionTypes)}</span>
                     <span className="fs12 muted">
                       {!skipStockCheck && `庫存 ${v.stock}`}
                       {!skipStockCheck && v.variant_price != null && ' · '}
