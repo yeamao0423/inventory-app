@@ -35,5 +35,5 @@ export default async function ProductsPage() {
     ? await getProductList(store.id)
     : { products: [], categories: [], tags: [] }
 
-  return <ProductList products={products} categories={categories} tags={tags} />
+  return <ProductList products={products} categories={categories} tags={tags} menuSettings={store?.settings} />
 }

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import CustomSelect from '../components/CustomSelect'
+import { buildCatOptions } from '../lib/catOptions'
 import {
   PLATFORMS, DEFAULT_SHARE_TEMPLATE, renderTemplate, buildShareUrl,
   buildProductUrl, resolveShopBaseUrl,
@@ -12,6 +13,7 @@ import { toTwdCost, calcMargin, getEffectivePrices, getEffectiveCosts, calcMargi
 import { cmpNum, cmpStr, cmpDate } from '../lib/sortUtils'
 import { Pill } from '../components/MenuPopover'
 import ListToolbar from '../components/ListToolbar'
+import TaxonomyManager from '../components/TaxonomyManager'
 
 // 商城排序選項（預設＝第一項：上架 新→舊）
 const STORE_SORT = [
@@ -47,11 +49,6 @@ export default function StorefrontPage() {
   const [products, setProducts] = useState([])
   const [categories, setCategories] = useState([])
   const [tags, setTags] = useState([])
-  const [optionTypes, setOptionTypes] = useState([])
-  const [newCat, setNewCat] = useState({ name: '', name_en: '' })
-  const [newTag, setNewTag] = useState({ name: '', name_en: '' })
-  const [newOptTypeName, setNewOptTypeName] = useState('')
-  const [newOptValues, setNewOptValues] = useState({}) // { typeId: inputString }
   const [loading, setLoading] = useState(true)
   const [sheet, setSheet] = useState(null)     // null | 'add' | listing obj
   const [shareItem, setShareItem] = useState(null)  // 分享面板：上架商品 listing obj
@@ -86,7 +83,7 @@ export default function StorefrontPage() {
       const [{ data: sp }, { data: pr }, { data: cats }, { data: tgs }] = await Promise.all([
         supabase.from('storefront_products').select('*, products(*, product_images(id, url, sort_order), categories(id, name), product_tags(tag_id), product_variants(variant_price, sale_price, stock, variant_cost))').eq('store_id', storeId).order('sort_order'),
         supabase.from('products').select('id, name, sku, cost, currency').eq('store_id', storeId).order('name'),
-        supabase.from('categories').select('id, name').eq('store_id', storeId).order('sort_order').order('name'),
+        supabase.from('categories').select('id, name, parent_id').eq('store_id', storeId).order('sort_order').order('name'),
         supabase.from('tags').select('id, name').eq('store_id', storeId).order('sort_order').order('name'),
       ])
       setListings(sp || [])
@@ -94,74 +91,9 @@ export default function StorefrontPage() {
       setTags(tgs || [])
       const listed = new Set((sp || []).map(s => s.product_id))
       setProducts((pr || []).filter(p => !listed.has(p.id)))
-    } else if (tab === 'taxonomy') {
-      const [{ data: cats }, { data: tgs }, { data: opts }] = await Promise.all([
-        supabase.from('categories').select('*').eq('store_id', storeId).order('sort_order').order('name'),
-        supabase.from('tags').select('*').eq('store_id', storeId).order('sort_order').order('name'),
-        supabase.from('variant_option_types')
-          .select('*, variant_option_values(id, value, sort_order)')
-          .eq('store_id', storeId)
-          .order('sort_order').order('name'),
-      ])
-      setCategories(cats || [])
-      setTags(tgs || [])
-      setOptionTypes(opts || [])
     }
+    // taxonomy 分頁的資料由 TaxonomyManager 元件自理
     setLoading(false)
-  }
-
-  async function addCategory() {
-    if (!newCat.name.trim()) return
-    await supabase.from('categories').insert({ name: newCat.name.trim(), name_en: newCat.name_en.trim() || null, store_id: storeId })
-    setNewCat({ name: '', name_en: '' })
-    fetchAll()
-  }
-
-  async function deleteCategory(id) {
-    if (!window.confirm('刪除此分類？（已設定的商品分類將變為空）')) return
-    await supabase.from('categories').delete().eq('id', id)
-    fetchAll()
-  }
-
-  async function addTag() {
-    if (!newTag.name.trim()) return
-    await supabase.from('tags').insert({ name: newTag.name.trim(), name_en: newTag.name_en.trim() || null, store_id: storeId })
-    setNewTag({ name: '', name_en: '' })
-    fetchAll()
-  }
-
-  async function deleteTag(id) {
-    if (!window.confirm('刪除此標籤？（已套用的商品標籤將一併移除）')) return
-    await supabase.from('tags').delete().eq('id', id)
-    fetchAll()
-  }
-
-  async function addOptionType() {
-    if (!newOptTypeName.trim()) return
-    const { error } = await supabase.from('variant_option_types').insert({ name: newOptTypeName.trim(), store_id: storeId })
-    if (error) { alert('建立失敗：' + error.message); return }
-    setNewOptTypeName('')
-    fetchAll()
-  }
-
-  async function deleteOptionType(id) {
-    if (!window.confirm('刪除此規格類型？（所有相關規格值和商品規格將一併刪除）')) return
-    await supabase.from('variant_option_types').delete().eq('id', id)
-    fetchAll()
-  }
-
-  async function addOptionValue(typeId) {
-    const val = (newOptValues[typeId] || '').trim()
-    if (!val) return
-    const { error } = await supabase.from('variant_option_values').insert({ option_type_id: typeId, value: val })
-    if (error) { alert('新增失敗：' + error.message); return }
-    setNewOptValues(f => ({ ...f, [typeId]: '' }))
-    fetchAll()
-  }
-
-  async function deleteOptionValue(id) {
-    await supabase.from('variant_option_values').delete().eq('id', id)
-    fetchAll()
   }
 
   // Check if product has any stock (base qty or any variant stock > 0)
@@ -306,7 +238,7 @@ export default function StorefrontPage() {
                       <div>
                         <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-3)', marginBottom: 8 }}>分類</div>
                         <CustomSelect compact label="全部分類" value={filterCat || null}
-                          options={catsInUse.map(c => ({ value: String(c.id), label: c.name }))}
+                          options={buildCatOptions(catsInUse)}
                           onChange={v => { setFilterCat(v || ''); setPage(1) }} />
                       </div>
                     )}
@@ -519,142 +451,8 @@ export default function StorefrontPage() {
         )
       })()}
 
-      {/* Taxonomy tab */}
-      {!loading && tab === 'taxonomy' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-
-          {/* Categories */}
-          <div>
-            <div className="sec">商品分類（每件商品只屬於一個分類）</div>
-            {categories.length === 0 && <div className="muted fs13" style={{ marginBottom: 12 }}>尚未建立分類</div>}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-              {categories.map(c => (
-                <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 20, padding: '5px 12px' }}>
-                  <span className="fs13 fw600">{c.name}</span>
-                  {c.name_en && <span className="muted fs12">/ {c.name_en}</span>}
-                  {can('delete') && (
-                    <button onClick={() => deleteCategory(c.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', fontSize: 14, padding: '0 0 0 4px', lineHeight: 1 }}>×</button>
-                  )}
-                </div>
-              ))}
-            </div>
-            {can('add') && (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-                <div>
-                  <label className="form-label fs12">中文名稱 *</label>
-                  <input className="form-input" placeholder="例：上衣" value={newCat.name} onChange={e => setNewCat(f => ({ ...f, name: e.target.value }))} onKeyDown={e => e.key === 'Enter' && addCategory()} style={{ width: 120 }} />
-                </div>
-                <div>
-                  <label className="form-label fs12">英文名稱</label>
-                  <input className="form-input" placeholder="e.g. Tops" value={newCat.name_en} onChange={e => setNewCat(f => ({ ...f, name_en: e.target.value }))} onKeyDown={e => e.key === 'Enter' && addCategory()} style={{ width: 120 }} />
-                </div>
-                <button className="btn" onClick={addCategory} style={{ fontSize: 13, padding: '9px 16px', marginBottom: 0 }}>新增分類</button>
-              </div>
-            )}
-          </div>
-
-          {/* Tags */}
-          <div>
-            <div className="sec">商品標籤（每件商品可有 0～N 個標籤）</div>
-            {tags.length === 0 && <div className="muted fs13" style={{ marginBottom: 12 }}>尚未建立標籤</div>}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-              {tags.map(t => (
-                <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#f0f6ff', border: '0.5px solid #c5d9f7', borderRadius: 20, padding: '5px 12px' }}>
-                  <span className="fs13 fw600" style={{ color: '#2563eb' }}>{t.name}</span>
-                  {t.name_en && <span style={{ fontSize: 12, color: '#6b9be8' }}>/ {t.name_en}</span>}
-                  {can('delete') && (
-                    <button onClick={() => deleteTag(t.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b9be8', fontSize: 14, padding: '0 0 0 4px', lineHeight: 1 }}>×</button>
-                  )}
-                </div>
-              ))}
-            </div>
-            {can('add') && (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-                <div>
-                  <label className="form-label fs12">中文名稱 *</label>
-                  <input className="form-input" placeholder="例：特價" value={newTag.name} onChange={e => setNewTag(f => ({ ...f, name: e.target.value }))} onKeyDown={e => e.key === 'Enter' && addTag()} style={{ width: 120 }} />
-                </div>
-                <div>
-                  <label className="form-label fs12">英文名稱</label>
-                  <input className="form-input" placeholder="e.g. Sale" value={newTag.name_en} onChange={e => setNewTag(f => ({ ...f, name_en: e.target.value }))} onKeyDown={e => e.key === 'Enter' && addTag()} style={{ width: 120 }} />
-                </div>
-                <button className="btn" onClick={addTag} style={{ fontSize: 13, padding: '9px 16px', marginBottom: 0 }}>新增標籤</button>
-              </div>
-            )}
-          </div>
-
-          {/* Variant Option Types */}
-          <div>
-            <div className="sec">商品規格選項（可組合，例：顏色 + 尺寸）</div>
-            <div className="muted fs12" style={{ marginBottom: 12 }}>在此建立規格類型與選項值，再到商品的「設定」頁面選擇組合套用</div>
-
-            {optionTypes.length === 0 && <div className="muted fs13" style={{ marginBottom: 12 }}>尚未建立規格類型</div>}
-
-            {optionTypes.map(type => {
-              const values = [...(type.variant_option_values || [])].sort((a, b) => a.sort_order - b.sort_order)
-              return (
-                <div key={type.id} style={{ background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 12, padding: 16, marginBottom: 12 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: values.length > 0 || can('add') ? 12 : 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span className="fw600 fs15">{type.name}</span>
-                      <span className="muted fs12">{values.length} 個選項</span>
-                    </div>
-                    {can('delete') && (
-                      <button onClick={() => deleteOptionType(type.id)} style={{ ...smallBtn, color: 'var(--red)', fontSize: 11 }}>刪除類型</button>
-                    )}
-                  </div>
-
-                  {/* Existing values as chips */}
-                  {(values.length > 0 || !can('add')) && (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: can('add') ? 14 : 0 }}>
-                      {values.map(v => (
-                        <div key={v.id} style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--bg)', border: '0.5px solid var(--border)', borderRadius: 16, padding: '5px 12px' }}>
-                          <span className="fs13">{v.value}</span>
-                          {can('delete') && (
-                            <button onClick={() => deleteOptionValue(v.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', fontSize: 13, padding: '0 0 0 2px', lineHeight: 1 }}>×</button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {values.length === 0 && can('add') && (
-                    <div className="muted fs12" style={{ marginBottom: 12 }}>尚無選項值，請在下方新增</div>
-                  )}
-
-                  {/* Add value input */}
-                  {can('add') && (
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-                      <div>
-                        <label className="form-label fs12">新增選項值</label>
-                        <input
-                          className="form-input"
-                          placeholder={`例：${type.name === '顏色' ? '黑色' : type.name === '尺寸' || type.name === '鞋子尺碼' ? 'S' : '選項名稱'}`}
-                          value={newOptValues[type.id] || ''}
-                          onChange={e => setNewOptValues(f => ({ ...f, [type.id]: e.target.value }))}
-                          onKeyDown={e => e.key === 'Enter' && addOptionValue(type.id)}
-                          style={{ width: 140 }}
-                        />
-                      </div>
-                      <button className="btn" onClick={() => addOptionValue(type.id)} style={{ fontSize: 13, padding: '9px 16px', marginBottom: 0 }}>新增</button>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-
-            {/* Create new option type */}
-            {can('add') && (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginTop: 8, paddingTop: 8, borderTop: '0.5px solid var(--border)' }}>
-                <div>
-                  <label className="form-label fs12">新增規格類型</label>
-                  <input className="form-input" placeholder="例：顏色" value={newOptTypeName} onChange={e => setNewOptTypeName(e.target.value)} onKeyDown={e => e.key === 'Enter' && addOptionType()} style={{ width: 140 }} />
-                </div>
-                <button className="btn" onClick={addOptionType} style={{ fontSize: 13, padding: '9px 16px', marginBottom: 0 }}>建立類型</button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      {/* Taxonomy tab：分類/標籤/規格 管理（資料與 UI 由 TaxonomyManager 自理） */}
+      {tab === 'taxonomy' && <TaxonomyManager storeId={storeId} can={can} syncShop={syncShop} />}
 
       {/* Collection end prompt */}
       {collectionPrompt && (

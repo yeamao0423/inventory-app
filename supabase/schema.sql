@@ -77,6 +77,8 @@ CREATE TABLE IF NOT EXISTS public.categories (
     name text NOT NULL UNIQUE,
     name_en text,
     sort_order integer DEFAULT 0,
+    parent_id bigint REFERENCES public.categories(id) ON DELETE SET NULL, -- 兩層專區：NULL = 頂層
+    active boolean NOT NULL DEFAULT true, -- false = 商城選單/篩選隱藏（含子分類），商品仍可瀏覽
     created_at timestamptz DEFAULT now()
 );
 

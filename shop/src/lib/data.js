@@ -100,11 +100,12 @@ export const getProductList = cache(async (storeId) => {
       const [{ data: sp }, { data: cats }, { data: tgs }] = await Promise.all([
         supabase
           .from('storefront_products')
-          .select('*, products:shop_products(*, product_images(url, sort_order), categories(id, name, name_en), product_tags(tag_id), product_variants(stock, variant_price, sale_price))')
+          .select('*, products:shop_products(*, product_images(url, sort_order), categories(id, name, name_en, parent_id), product_tags(tag_id), product_variants(stock, variant_price, sale_price))')
           .eq('store_id', storeId)
           .eq('published', true)
           .order('created_at', { ascending: false }),
-        supabase.from('categories').select('*').eq('store_id', storeId).order('sort_order').order('name'),
+        // 只取上架分類（下架的父分類其子分類也不會出現在選單樹，因子分類靠父節點展開）
+        supabase.from('categories').select('*').eq('store_id', storeId).eq('active', true).order('sort_order').order('name'),
         supabase.from('tags').select('*').eq('store_id', storeId).order('sort_order').order('name'),
       ])
       return { products: sp || [], categories: cats || [], tags: tgs || [] }

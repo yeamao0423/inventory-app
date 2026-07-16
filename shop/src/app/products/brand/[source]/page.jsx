@@ -31,6 +31,7 @@ export default async function BrandPage({ params }) {
       categories={categories}
       tags={tags}
       initialSource={source}
+      menuSettings={store?.settings}
     />
   )
 }

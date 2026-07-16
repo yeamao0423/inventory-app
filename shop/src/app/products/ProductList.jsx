@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useI18n } from '../layout'
 import { getCardPricing } from '../../lib/salePrice'
 import { slugifyName } from '../../lib/slug'
+import { getMenuItems, groupEnabled, resolvePin } from '../../lib/menu'
 
 // 無法下單判斷：手動售完、收單截止、或庫存歸零。限時單與略過庫存檢查的商品不看庫存；
 // 多規格只要任一規格有庫存即算有貨。篩選、排序、卡片三處共用，勿各自複製。
@@ -21,19 +22,23 @@ function getAvailability(sp) {
 
 // 資料由 server component（page.jsx）以 props 帶入。分頁狀態走 URL ?page=N。
 // initialSource：品牌頁 /products/brand/[source] 帶入，預選該品牌（採購來源）。
-export default function ProductList({ products, categories, tags, initialSource = null }) {
+// menuSettings：store.settings（含 menu 選單設定：群組開關＋自訂置頂專區）。
+export default function ProductList({ products, categories, tags, initialSource = null, menuSettings = null }) {
   const { t, lang } = useI18n()
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
 
   const [search, setSearch] = useState('')
-  const [activeCat, setActiveCat] = useState(null)   // null = 全部
+  // 分類改由網址驅動：/products?cat=<id>（漢堡選單「專區」連結可直達、可分享）。null = 全部。
+  const activeCat = Number(searchParams.get('cat')) || null
   const [activeTags, setActiveTags] = useState([])   // multi-select, OR logic
   // 品牌（採購來源）改由網址驅動：/products/brand/[source]。null = 全部。
   const activeSource = initialSource ?? null
-  const [filterOpen, setFilterOpen] = useState(false)
-  const [sidebarOpen, setSidebarOpen] = useState({ tags: true, category: true, brand: true })
+  const [filterOpen, setFilterOpen] = useState(false)         // 手機篩選面板
+  const [deskFilterOpen, setDeskFilterOpen] = useState(false) // 桌機篩選列（與手機分開，避免互相牽動）
+  const [sidebarOpen, setSidebarOpen] = useState({ pins: true, category: true, brand: true })
+  const [openCats, setOpenCats] = useState({})       // 側欄父分類展開狀態 { catId: bool }
   const [sortBy, setSortBy] = useState('newest') // newest | oldest | price_asc | price_desc
   const [inStockOnly, setInStockOnly] = useState(false)
   const [saleOnly, setSaleOnly] = useState(false)
@@ -42,11 +47,26 @@ export default function ProductList({ products, categories, tags, initialSource 
   // Distinct sources from published products
   const sources = [...new Set(products.map(sp => sp.products?.source).filter(Boolean))].sort()
 
+  // 分類階層：頂層＋子分類（parent_id）。選父分類時，子分類底下的商品也一併顯示。
+  const topCats = categories.filter(c => !c.parent_id)
+  const childrenOf = id => categories.filter(c => c.parent_id === id)
+  const catName = c => (lang === 'en' && c.name_en ? c.name_en : c.name)
+
+  // 選單設定：群組開關（關閉的群組不在側欄/篩選出現）＋自訂置頂專區
+  const menuItems = getMenuItems(menuSettings)
+  const showTagsGroup = groupEnabled(menuItems, 'tags')
+  const showCatsGroup = groupEnabled(menuItems, 'categories')
+  const showBrandsGroup = groupEnabled(menuItems, 'brands')
+  const pins = menuItems.filter(i => i.type !== 'group')
+    .map(i => resolvePin(i, { cats: categories, brands: sources, tags, lang }))
+    .filter(Boolean)
+
   const filtered = products.filter(sp => {
     const name = (lang === 'en' && sp.name_en ? sp.name_en : sp.products?.name) || ''
     const matchSearch = name.toLowerCase().includes(search.toLowerCase()) ||
       sp.products?.sku?.toLowerCase().includes(search.toLowerCase())
-    const matchCat = activeCat === null || sp.products?.categories?.id === activeCat
+    const cat = sp.products?.categories
+    const matchCat = activeCat === null || cat?.id === activeCat || cat?.parent_id === activeCat
     const productTagIds = (sp.products?.product_tags || []).map(pt => pt.tag_id)
     const matchTag = activeTags.length === 0 || activeTags.some(tid => productTagIds.includes(tid))
     const matchSource = activeSource === null || (sp.products?.source || '') === activeSource
@@ -102,6 +122,30 @@ export default function ProductList({ products, categories, tags, initialSource 
     router.push(src ? `/products/brand/${encodeURIComponent(src)}` : '/products', { scroll: false })
   }
 
+  // 分類選取 → 寫回網址 ?cat=<id> 並回到第 1 頁。null = 清除分類。
+  function goToCat(id) {
+    const params = new URLSearchParams(Array.from(searchParams.entries()))
+    if (id == null) params.delete('cat')
+    else params.set('cat', String(id))
+    params.delete('page')
+    const qs = params.toString()
+    router.push(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
+  }
+
+  // 標籤連結支援：/products?tag=<id>（漢堡選單、置頂專區用）。
+  const tagParam = Number(searchParams.get('tag')) || null
+  useEffect(() => {
+    if (tagParam) setActiveTags([tagParam])
+  }, [tagParam])
+
+  // 清除全部：一次移除 cat / tag / page 參數
+  function clearUrlFilters() {
+    const params = new URLSearchParams(Array.from(searchParams.entries()))
+    params.delete('cat'); params.delete('tag'); params.delete('page')
+    const qs = params.toString()
+    router.push(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
+  }
+
   // 篩選/排序改變 → 回到第 1 頁（移除 page 參數）。略過首次渲染。
   const firstRender = useRef(true)
   useEffect(() => {
@@ -116,6 +160,13 @@ export default function ProductList({ products, categories, tags, initialSource 
 
   function toggleTag(id) {
     setActiveTags(prev => prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id])
+    // 手動增減標籤後移除網址 tag 參數，避免網址與實際選取脫鉤
+    if (searchParams.has('tag')) {
+      const params = new URLSearchParams(Array.from(searchParams.entries()))
+      params.delete('tag')
+      const qs = params.toString()
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
+    }
   }
 
   const hasActiveFilter = activeCat || activeSource || activeTags.length > 0 || inStockOnly || saleOnly
@@ -136,7 +187,7 @@ export default function ProductList({ products, categories, tags, initialSource 
         </span>
       )}
       {activeCat && (
-        <span className="filter-chip" onClick={() => setActiveCat(null)}>
+        <span className="filter-chip" onClick={() => goToCat(null)}>
           {(lang === 'en' && categories.find(c => c.id === activeCat)?.name_en) || categories.find(c => c.id === activeCat)?.name} ×
         </span>
       )}
@@ -154,7 +205,7 @@ export default function ProductList({ products, categories, tags, initialSource 
         ) : null
       })}
       <button
-        onClick={() => { setActiveCat(null); setActiveTags([]); setInStockOnly(false); setSaleOnly(false); if (initialSource) goToBrand(null) }}
+        onClick={() => { setActiveTags([]); setInStockOnly(false); setSaleOnly(false); if (initialSource) goToBrand(null); else clearUrlFilters() }}
         style={{ fontSize: 12, color: 'var(--red)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 6px' }}
       >
         {zh ? '清除全部' : 'Clear all'}
@@ -249,24 +300,7 @@ export default function ProductList({ products, categories, tags, initialSource 
                   <button onClick={() => setSearch('')} style={{ background: 'none', border: 'none', fontSize: 16, color: 'var(--text-3)', cursor: 'pointer', padding: 0 }}>×</button>
                 )}
               </div>
-              <div className="filter-dropdowns">
-                {categories.length > 0 && (
-                  <FilterDropdown
-                    label={zh ? '所有分類' : 'All Categories'}
-                    value={activeCat}
-                    options={categories.map(c => ({ value: c.id, label: lang === 'en' && c.name_en ? c.name_en : c.name }))}
-                    onChange={setActiveCat}
-                  />
-                )}
-                {sources.length > 0 && (
-                  <FilterDropdown
-                    label={zh ? '所有品牌' : 'All Brands'}
-                    value={activeSource}
-                    options={sources.map(src => ({ value: src, label: src }))}
-                    onChange={goToBrand}
-                  />
-                )}
-              </div>
+              {/* 分類/品牌已收進導覽列漢堡選單（layout.jsx），手機篩選面板只留搜尋＋標籤 */}
               <div className="filter-tags-row">
                 <button onClick={() => setInStockOnly(v => !v)}
                   className={inStockOnly ? 'filter-tag filter-tag-active' : 'filter-tag'}>
@@ -276,7 +310,7 @@ export default function ProductList({ products, categories, tags, initialSource 
                   className={saleOnly ? 'filter-tag filter-tag-sale-active' : 'filter-tag'}>
                   {zh ? '特價中' : 'On Sale'}
                 </button>
-                {tags.map(tg => (
+                {showTagsGroup && tags.map(tg => (
                   <button key={tg.id} onClick={() => toggleTag(tg.id)}
                     className={activeTags.includes(tg.id) ? 'filter-tag filter-tag-active' : 'filter-tag'}>
                     {lang === 'en' && tg.name_en ? tg.name_en : tg.name}
@@ -308,34 +342,23 @@ export default function ProductList({ products, categories, tags, initialSource 
               )}
             </div>
 
-            {/* Tags（內建「有貨／特價中」不依賴自訂標籤，永遠顯示） */}
-            <div className="sidebar-group">
-              <button className="sidebar-group-title" onClick={() => setSidebarOpen(s => ({ ...s, tags: !s.tags }))}>
-                <span>{tags.length > 0 ? (zh ? '標籤' : 'Tags') : (zh ? '篩選' : 'Filters')}</span>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ transition: 'transform .2s', transform: sidebarOpen.tags ? 'rotate(180deg)' : '' }}><path d="M6 9l6 6 6-6" /></svg>
-              </button>
-              {sidebarOpen.tags && (
-                <div className="filter-tags-row">
-                  <button onClick={() => setInStockOnly(v => !v)}
-                    className={inStockOnly ? 'filter-tag filter-tag-active' : 'filter-tag'}>
-                    {zh ? '有貨' : 'In Stock'}
-                  </button>
-                  <button onClick={() => setSaleOnly(v => !v)}
-                    className={saleOnly ? 'filter-tag filter-tag-sale-active' : 'filter-tag'}>
-                    {zh ? '特價中' : 'On Sale'}
-                  </button>
-                  {tags.map(tg => (
-                    <button key={tg.id} onClick={() => toggleTag(tg.id)}
-                      className={activeTags.includes(tg.id) ? 'filter-tag filter-tag-active' : 'filter-tag'}>
-                      {lang === 'en' && tg.name_en ? tg.name_en : tg.name}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            {/* 精選專區（店家在後台「選單」設定的置頂項目） */}
+            {pins.length > 0 && (
+              <div className="sidebar-group">
+                <button className="sidebar-group-title" onClick={() => setSidebarOpen(s => ({ ...s, pins: !s.pins }))}>
+                  <span>{zh ? '精選專區' : 'Featured'}</span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ transition: 'transform .2s', transform: sidebarOpen.pins ? 'rotate(180deg)' : '' }}><path d="M6 9l6 6 6-6" /></svg>
+                </button>
+                {sidebarOpen.pins && pins.map(p => (
+                  <Link key={p.key} href={p.href} className="sidebar-option sidebar-option-pin">{p.label}</Link>
+                ))}
+              </div>
+            )}
+
+            {/* 標籤/篩選 pills 移到商品列表上方（排序旁），與手機版一致；側欄留純導覽 */}
 
             {/* Categories */}
-            {categories.length > 0 && (
+            {showCatsGroup && categories.length > 0 && (
               <div className="sidebar-group">
                 <button className="sidebar-group-title" onClick={() => setSidebarOpen(s => ({ ...s, category: !s.category }))}>
                   <span>{zh ? '分類' : 'Category'}</span>
@@ -345,26 +368,53 @@ export default function ProductList({ products, categories, tags, initialSource 
                   <>
                     <button
                       className={`sidebar-option${activeCat === null ? ' active' : ''}`}
-                      onClick={() => setActiveCat(null)}
+                      onClick={() => goToCat(null)}
                     >
                       {zh ? '全部分類' : 'All'}
                     </button>
-                    {categories.map(c => (
-                      <button
-                        key={c.id}
-                        className={`sidebar-option${activeCat === c.id ? ' active' : ''}`}
-                        onClick={() => setActiveCat(activeCat === c.id ? null : c.id)}
-                      >
-                        {lang === 'en' && c.name_en ? c.name_en : c.name}
-                      </button>
-                    ))}
+                    {topCats.map(c => {
+                      const kids = childrenOf(c.id)
+                      // 子分類被選中時自動展開，其餘依使用者點擊狀態
+                      const expanded = openCats[c.id] ?? kids.some(k => k.id === activeCat)
+                      return (
+                        <div key={c.id}>
+                          <div style={{ display: 'flex', alignItems: 'center' }}>
+                            <button
+                              className={`sidebar-option${activeCat === c.id ? ' active' : ''}`}
+                              style={{ flex: 1 }}
+                              onClick={() => goToCat(activeCat === c.id ? null : c.id)}
+                            >
+                              {catName(c)}
+                            </button>
+                            {kids.length > 0 && (
+                              <button
+                                onClick={() => setOpenCats(s => ({ ...s, [c.id]: !expanded }))}
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px 6px', color: 'var(--text-3)' }}
+                              >
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ transition: 'transform .2s', transform: expanded ? 'rotate(180deg)' : '' }}><path d="M6 9l6 6 6-6" /></svg>
+                              </button>
+                            )}
+                          </div>
+                          {kids.length > 0 && expanded && kids.map(k => (
+                            <button
+                              key={k.id}
+                              className={`sidebar-option${activeCat === k.id ? ' active' : ''}`}
+                              style={{ paddingLeft: 22 }}
+                              onClick={() => goToCat(activeCat === k.id ? null : k.id)}
+                            >
+                              {catName(k)}
+                            </button>
+                          ))}
+                        </div>
+                      )
+                    })}
                   </>
                 )}
               </div>
             )}
 
             {/* Brands / Sources */}
-            {sources.length > 0 && (
+            {showBrandsGroup && sources.length > 0 && (
               <div className="sidebar-group">
                 <button className="sidebar-group-title" onClick={() => setSidebarOpen(s => ({ ...s, brand: !s.brand }))}>
                   <span>{zh ? '品牌' : 'Brand'}</span>
@@ -395,23 +445,52 @@ export default function ProductList({ products, categories, tags, initialSource 
           </aside>
 
           <div className="products-main">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 16 }}>
               <div className="section-title" style={{ marginBottom: 0 }}>
                 {t('nav.products')}
                 <span style={{ fontSize: 15, fontWeight: 400, color: 'var(--text-3)', marginLeft: 8 }}>
                   ({sorted.length})
                 </span>
               </div>
-              <div style={{ width: 170 }}>
-                <FilterDropdown
-                  label={sortOptions.find(o => o.value === sortBy)?.label}
-                  value={sortBy}
-                  options={sortOptions}
-                  onChange={v => setSortBy(v || 'newest')}
-                  hideReset
-                />
+              {/* 排序＋篩選按鈕（與手機版一致：點開才展開標籤，避免標籤一多把版面撐爆） */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ width: 170 }}>
+                  <FilterDropdown
+                    label={sortOptions.find(o => o.value === sortBy)?.label}
+                    value={sortBy}
+                    options={sortOptions}
+                    onChange={v => setSortBy(v || 'newest')}
+                    hideReset
+                  />
+                </div>
+                <button className="filter-toggle-btn" onClick={() => setDeskFilterOpen(v => !v)}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="20" y2="12" /><line x1="12" y1="18" x2="20" y2="18" />
+                    <circle cx="6" cy="12" r="1.5" fill="currentColor" /><circle cx="10" cy="18" r="1.5" fill="currentColor" />
+                  </svg>
+                  {zh ? '篩選' : 'Filter'}
+                  {(inStockOnly || saleOnly || activeTags.length > 0) && <span className="filter-toggle-dot" />}
+                </button>
               </div>
             </div>
+            {deskFilterOpen && (
+              <div className="filter-tags-row" style={{ marginBottom: 16, animation: 'filterSlideDown .2s ease' }}>
+                <button onClick={() => setInStockOnly(v => !v)}
+                  className={inStockOnly ? 'filter-tag filter-tag-active' : 'filter-tag'}>
+                  {zh ? '有貨' : 'In Stock'}
+                </button>
+                <button onClick={() => setSaleOnly(v => !v)}
+                  className={saleOnly ? 'filter-tag filter-tag-sale-active' : 'filter-tag'}>
+                  {zh ? '特價中' : 'On Sale'}
+                </button>
+                {showTagsGroup && tags.map(tg => (
+                  <button key={tg.id} onClick={() => toggleTag(tg.id)}
+                    className={activeTags.includes(tg.id) ? 'filter-tag filter-tag-active' : 'filter-tag'}>
+                    {lang === 'en' && tg.name_en ? tg.name_en : tg.name}
+                  </button>
+                ))}
+              </div>
+            )}
             {filterChips}
             {productContent}
           </div>

@@ -443,3 +443,34 @@ html, body, #root {
   .lt-ctrl__chev { display: inline-flex; }
   .lt-ctrl { padding: 5px 8px; }
 }
+
+/* ── 商城管理 › 分類/標籤/規格（TaxonomyManager） ── */
+.tx-two-col { display: grid; grid-template-columns: 300px 1fr; background: var(--surface); border: 0.5px solid var(--border); border-radius: 14px; overflow: hidden; min-height: 420px; }
+.tx-pane-left { border-right: 0.5px solid var(--border); padding: 14px; display: flex; flex-direction: column; }
+.tx-pane-right { padding: 16px 20px; display: flex; flex-direction: column; }
+.tx-list { display: flex; flex-direction: column; gap: 4px; flex: 1; overflow-y: auto; }
+.tx-row { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 9px; border: 1px solid transparent; cursor: pointer; transition: background .12s; }
+.tx-row:hover { background: var(--bg); }
+.tx-row-active { background: var(--bg); border-color: var(--border); }
+.tx-row-disabled { opacity: .5; }
+.tx-grip { color: var(--text-3); cursor: grab; flex-shrink: 0; display: flex; align-items: center; }
+.tx-name { font-size: 14px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tx-count { font-size: 12px; color: var(--text-3); white-space: nowrap; }
+.tx-icon-btn { border: none; background: transparent; color: var(--text-3); padding: 5px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; line-height: 1; flex-shrink: 0; }
+.tx-icon-btn:hover { background: var(--bg); color: var(--text); }
+.tx-icon-btn-danger:hover { background: var(--red-bg); color: var(--red); }
+.tx-toggle { width: 34px; height: 19px; border-radius: 999px; border: none; position: relative; flex-shrink: 0; cursor: pointer; transition: background .15s; padding: 0; }
+.tx-toggle-thumb { position: absolute; top: 2px; left: 2px; width: 15px; height: 15px; border-radius: 50%; background: #fff; transition: transform .15s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+.tx-add-btn { margin-top: 10px; border: 1px dashed var(--border); background: transparent; color: var(--text-3); border-radius: 9px; padding: 9px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.tx-add-btn:hover { background: var(--bg); color: var(--text); }
+.tx-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: flex; align-items: center; justify-content: center; z-index: 300; animation: fadeIn .15s ease; }
+.tx-modal { background: var(--surface); border-radius: 14px; padding: 20px; width: 320px; max-width: calc(100vw - 32px); box-shadow: 0 10px 30px rgba(0,0,0,.15); }
+.tx-modal .btn { width: auto; font-size: 13px; padding: 9px 16px; border-radius: 10px; }
+.tx-toast { position: fixed; bottom: calc(70px + var(--safe-bot, 0px)); left: 50%; transform: translateX(-50%); background: var(--text); color: #fff; padding: 9px 16px; border-radius: 999px; font-size: 13px; font-weight: 600; z-index: 400; animation: fadeIn .2s ease; }
+.tx-m-row { display: flex; align-items: center; gap: 8px; padding: 12px 10px; border-radius: 12px; background: var(--surface); border: 0.5px solid var(--border); }
+.tx-m-name { font-size: 14px; font-weight: 700; }
+.tx-m-sub { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+.tx-menu { background: var(--surface); border: 0.5px solid var(--border); border-radius: 10px; margin: 4px 8px 8px 24px; overflow: hidden; box-shadow: 0 4px 14px rgba(0,0,0,.08); }
+.tx-menu button { display: flex; align-items: center; gap: 8px; width: 100%; border: none; background: transparent; padding: 10px 14px; font-size: 13px; font-weight: 600; color: var(--text); text-align: left; border-bottom: 0.5px solid var(--border); cursor: pointer; }
+.tx-menu button:last-child { border-bottom: none; }
+.tx-menu .tx-menu-danger { color: var(--red); }

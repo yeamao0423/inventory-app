@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { SUPPORTED_CURRENCIES } from '../constants/currency'
 import { useAuth } from '../hooks/useAuth'
 import CustomSelect from '../components/CustomSelect'
+import { buildCatOptions } from '../lib/catOptions'
 import { compressImage, uploadImages } from '../lib/imageUtils'
 import { revalidateShop } from '../lib/revalidateShop'
 import { toTwdCost, getEffectivePrices, getEffectiveCosts, getRawCosts, calcMarginRange, fmtRange, fmtMarginRate, fmtMarginAmount } from '../lib/pricing'
@@ -231,7 +232,7 @@ export default function InventoryPage() {
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-3)', marginBottom: 8 }}>分類</div>
                   <CustomSelect compact label="全部分類" value={filterCategory || null}
-                    options={categories.map(c => ({ value: String(c.id), label: c.name }))}
+                    options={buildCatOptions(categories)}
                     onChange={v => { setFilterCategory(v || ''); setPage(1) }} />
                 </div>
               )}
@@ -888,12 +889,12 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete, exi
                 <CustomSelect
                   label="— 無分類 —"
                   value={selectedCategory || null}
-                  options={categories.map(c => ({ value: String(c.id), label: c.name }))}
+                  options={buildCatOptions(categories)}
                   onChange={v => saveCategory(v || '')}
                 />
               ) : (
                 <div className="form-input" style={{ background: 'var(--bg)', color: 'var(--text-3)' }}>
-                  {categories.find(c => String(c.id) === String(selectedCategory))?.name || '— 無分類 —'}
+                  {buildCatOptions(categories).find(o => o.value === String(selectedCategory))?.label || '— 無分類 —'}
                 </div>
               )}
             </div>
