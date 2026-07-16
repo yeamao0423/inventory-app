@@ -112,6 +112,10 @@ file_size_limit = "50MiB"
 # allowed_mime_types = ["image/png", "image/jpeg"]
 # objects_path = "./images"
 
+# 商品圖片（與 remote 一致；上傳 policy 見 schema.sql 的 Storage 段）
+[storage.buckets.product-images]
+public = true
+
 # Allow connections via S3 compatible clients
 [storage.s3_protocol]
 enabled = true

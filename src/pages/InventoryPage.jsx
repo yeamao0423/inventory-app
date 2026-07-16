@@ -94,6 +94,7 @@ export default function InventoryPage() {
   const [filterSource, setFilterSource] = useState('')
   const [filterCategory, setFilterCategory] = useState('')
   const [filterNoCost, setFilterNoCost] = useState(false)
+  const [filterLowStock, setFilterLowStock] = useState(false)
   const [sort, setSort] = useState('created_desc')
   const [categories, setCategories] = useState([])
   const [optionTypes, setOptionTypes] = useState([])
@@ -148,17 +149,14 @@ export default function InventoryPage() {
     const matchSource = !filterSource || (p.source || '') === filterSource
     const matchCategory = !filterCategory || String(p.category_id || '') === filterCategory
     const matchNoCost = !filterNoCost || p.cost == null
-    return matchSearch && matchSource && matchCategory && matchNoCost
+    const matchLowStock = !filterLowStock || isLowStock(p)
+    return matchSearch && matchSource && matchCategory && matchNoCost && matchLowStock
   })
-  // 低庫存警示永遠釘最上、依庫存少→多（最急的在前）；其餘依使用者選的排序
-  const low = filtered.filter(isLowStock).sort(cmpNum(totalStock, 'asc'))
-  const normal = filtered.filter(p => !isLowStock(p)).sort(sortComparator(sort, exchangeRates))
-  const allFiltered = [...low, ...normal]
+  // 整份列表依使用者選的排序；低庫存改由統計卡點擊篩選（不再常駐置頂）
+  const allFiltered = [...filtered].sort(sortComparator(sort, exchangeRates))
   const totalPages = Math.max(1, Math.ceil(allFiltered.length / PAGE_SIZE))
   const safePage = Math.min(page, totalPages)
   const pagedProducts = allFiltered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
-  const pagedLow = pagedProducts.filter(isLowStock)
-  const pagedNormal = pagedProducts.filter(p => !isLowStock(p))
   const existingSources = [...new Set(products.map(p => p.source).filter(Boolean))].sort()
 
   return (
@@ -212,9 +210,13 @@ export default function InventoryPage() {
           <div className="stat-val">{products.length}</div>
           <div className="stat-lbl">商品種類</div>
         </div>
-        <div className="stat">
+        <div
+          className="stat"
+          onClick={() => { setFilterLowStock(v => !v); setPage(1) }}
+          style={{ cursor: 'pointer', borderColor: filterLowStock ? 'var(--red)' : undefined }}
+        >
           <div className="stat-val text-red">{products.filter(isLowStock).length}</div>
-          <div className="stat-lbl"><span className="dot" style={{background:'var(--red)'}} />低庫存</div>
+          <div className="stat-lbl"><span className="dot" style={{background:'var(--red)'}} />低庫存{filterLowStock ? '（點擊取消篩選）' : ''}</div>
         </div>
       </div>
 
@@ -255,20 +257,11 @@ export default function InventoryPage() {
 
       {loading && <div className="empty">載入中…</div>}
 
-      {pagedLow.length > 0 && (
+      {pagedProducts.length > 0 && (
         <>
-          <div className="sec">⚠ 低庫存警示</div>
+          <div className="sec">{filterLowStock ? '⚠ 低庫存商品' : '所有商品'}</div>
           <div className="card-grid">
-            {pagedLow.map(p => <ProductRow key={p.id} product={p} onTap={() => setSheet(p)} exchangeRates={exchangeRates} />)}
-          </div>
-        </>
-      )}
-
-      {pagedNormal.length > 0 && (
-        <>
-          <div className="sec">所有商品</div>
-          <div className="card-grid">
-            {pagedNormal.map(p => <ProductRow key={p.id} product={p} onTap={() => setSheet(p)} exchangeRates={exchangeRates} />)}
+            {pagedProducts.map(p => <ProductRow key={p.id} product={p} onTap={() => setSheet(p)} exchangeRates={exchangeRates} />)}
           </div>
         </>
       )}

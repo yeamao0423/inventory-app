@@ -337,6 +337,14 @@ CREATE POLICY "users read own profile" ON public.consumers FOR SELECT USING (aut
 CREATE POLICY "users insert own profile" ON public.consumers FOR INSERT WITH CHECK (auth.uid() = id);
 CREATE POLICY "users update own profile" ON public.consumers FOR UPDATE USING (auth.uid() = id);
 
+-- ── Storage ──────────────────────────────────────────────────
+-- 商品圖片 bucket（public 讀取）＋上傳/讀取 policies，與 remote 一致
+
+INSERT INTO storage.buckets (id, name, public) VALUES ('product-images', 'product-images', true) ON CONFLICT (id) DO NOTHING;
+
+CREATE POLICY "auth upload" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'product-images' AND auth.role() = 'authenticated');
+CREATE POLICY "public read" ON storage.objects FOR SELECT USING (bucket_id = 'product-images');
+
 -- ── Seed data ────────────────────────────────────────────────
 
 INSERT INTO public.stores (id, name) VALUES (1, 'Daigogo') ON CONFLICT DO NOTHING;
