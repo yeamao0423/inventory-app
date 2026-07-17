@@ -16,10 +16,13 @@ import { createPortal } from 'react-dom'
  *   style       – optional style on wrapper
  *   className   – optional extra class on wrapper
  *   allowClear  – if true, show the label option to clear selection (default true)
+ *   emptyText   – shown when options is empty and there is no clear row，
+ *                 否則選單會渲染成一條看不見的空框（曾被誤判為選單被遮住）
  */
 export default function CustomSelect({
   label, value, options, onChange,
   compact = false, style, className = '', allowClear = true,
+  emptyText = '沒有可選的項目',
 }) {
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState(null) // { left, width, top?, bottom?, maxHeight, placement }
@@ -122,6 +125,11 @@ export default function CustomSelect({
               onClick={() => { onChange(null); setOpen(false) }}
             >
               {label}
+            </div>
+          )}
+          {!allowClear && options.length === 0 && (
+            <div className="custom-dropdown-item" style={{ color: 'var(--text-3)', cursor: 'default' }}>
+              {emptyText}
             </div>
           )}
           {options.map(opt => (

@@ -147,7 +147,7 @@ export default function StorefrontPage() {
   }
 
   async function deleteListing(id) {
-    if (!window.confirm('確定從商城下架並刪除此設定？')) return
+    if (!window.confirm('確定移除此商品的商城上架設定？庫存資料會保留，之後可從右上角「＋」重新上架。')) return
     await supabase.from('storefront_products').delete().eq('id', id)
     syncShop()
     fetchAll()
@@ -928,6 +928,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
               options={products.map(p => ({ value: String(p.id), label: `${p.name}（${p.sku}）` }))}
               onChange={v => set('product_id', v || '')}
               allowClear={false}
+              emptyText="所有庫存商品都已上架，沒有可新增的商品"
             />
           </div>
         )}

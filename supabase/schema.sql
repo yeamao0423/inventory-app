@@ -344,6 +344,7 @@ INSERT INTO storage.buckets (id, name, public) VALUES ('product-images', 'produc
 
 CREATE POLICY "auth upload" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'product-images' AND auth.role() = 'authenticated');
 CREATE POLICY "public read" ON storage.objects FOR SELECT USING (bucket_id = 'product-images');
+CREATE POLICY "auth delete" ON storage.objects FOR DELETE USING (bucket_id = 'product-images' AND auth.role() = 'authenticated');
 
 -- ── Seed data ────────────────────────────────────────────────
 

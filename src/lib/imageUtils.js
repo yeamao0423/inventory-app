@@ -75,6 +75,31 @@ export function reencodeImage(file, maxDim, quality) {
   })
 }
 
+// 清空商品在 Storage 的整個資料夾（{productId}/...）。
+// best-effort：失敗只記 log 不丟錯，Storage 清理不該擋商品刪除本身。
+export async function deleteProductStorage(productId) {
+  try {
+    const { data: files, error } = await supabase.storage
+      .from('product-images').list(String(productId), { limit: 1000 })
+    if (error || !files?.length) return
+    await supabase.storage.from('product-images')
+      .remove(files.map(f => `${productId}/${f.name}`))
+  } catch (err) {
+    console.error('Storage cleanup error:', err)
+  }
+}
+
+// 依 public URL 刪除單一 Storage 檔案（best-effort，同上）。
+export async function removeImageByUrl(url) {
+  try {
+    const path = url?.split('/product-images/')[1]
+    if (!path) return
+    await supabase.storage.from('product-images').remove([decodeURIComponent(path)])
+  } catch (err) {
+    console.error('Storage cleanup error:', err)
+  }
+}
+
 export async function uploadImages(files, productId) {
   const results = []
   const errors = []

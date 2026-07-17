@@ -4,7 +4,7 @@ import { SUPPORTED_CURRENCIES } from '../constants/currency'
 import { useAuth } from '../hooks/useAuth'
 import CustomSelect from '../components/CustomSelect'
 import { buildCatOptions } from '../lib/catOptions'
-import { compressImage, uploadImages } from '../lib/imageUtils'
+import { compressImage, uploadImages, deleteProductStorage, removeImageByUrl } from '../lib/imageUtils'
 import { revalidateShop } from '../lib/revalidateShop'
 import { toTwdCost, getEffectivePrices, getEffectiveCosts, getRawCosts, calcMarginRange, fmtRange, fmtMarginRate, fmtMarginAmount } from '../lib/pricing'
 import { cmpNum, cmpStr, cmpDate } from '../lib/sortUtils'
@@ -112,6 +112,14 @@ export default function InventoryPage() {
   function handleSaved() {
     fetchProducts()
     revalidateShop({ storeId })
+  }
+
+  // 列表直接刪商品：storefront_products 等衛星表由 FK CASCADE 帶掉，Storage 圖片另行清理
+  async function deleteProduct(p) {
+    if (!window.confirm(`確定刪除「${p.name}」？商城上架設定與商品圖片會一併刪除。`)) return
+    await supabase.from('products').delete().eq('id', p.id)
+    await deleteProductStorage(p.id)
+    handleSaved()
   }
 
   async function fetchProducts() {
@@ -261,7 +269,10 @@ export default function InventoryPage() {
         <>
           <div className="sec">{filterLowStock ? '⚠ 低庫存商品' : '所有商品'}</div>
           <div className="card-grid">
-            {pagedProducts.map(p => <ProductRow key={p.id} product={p} onTap={() => setSheet(p)} exchangeRates={exchangeRates} />)}
+            {pagedProducts.map(p => (
+              <ProductRow key={p.id} product={p} onTap={() => setSheet(p)} exchangeRates={exchangeRates}
+                canDelete={can('delete')} onDelete={() => deleteProduct(p)} />
+            ))}
           </div>
         </>
       )}
@@ -328,7 +339,7 @@ export default function InventoryPage() {
   )
 }
 
-function ProductRow({ product: p, onTap, exchangeRates = {} }) {
+function ProductRow({ product: p, onTap, exchangeRates = {}, canDelete = false, onDelete }) {
   const thumb = p.product_images?.sort((a, b) => a.sort_order - b.sort_order)[0]?.url
   const vs = p.product_variants || []
   const hasVar = vs.length > 0
@@ -375,6 +386,12 @@ function ProductRow({ product: p, onTap, exchangeRates = {} }) {
           <div className="fw600 fs15" style={{color: (low || out) ? 'var(--red)' : 'var(--text)'}}>{total}</div>
           {hasVar && <div className="muted fs11">{vs.length} 規格</div>}
           <div className="fs12 mt8">{badge}</div>
+          {canDelete && (
+            <button
+              onClick={e => { e.stopPropagation(); onDelete() }}
+              style={{ marginTop: 8, padding: '3px 10px', borderRadius: 8, fontSize: 12, fontWeight: 600, background: 'var(--surface)', border: '0.5px solid var(--border)', color: 'var(--red)', cursor: 'pointer' }}
+            >刪除</button>
+          )}
         </div>
       </div>
     </div>
@@ -697,8 +714,9 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete, exi
     setUploading(false)
   }
 
-  async function deleteImage(imgId, idx) {
-    await supabase.from('product_images').delete().eq('id', imgId)
+  async function deleteImage(img, idx) {
+    await supabase.from('product_images').delete().eq('id', img.id)
+    removeImageByUrl(img.url)
     setImages(prev => prev.filter((_, i) => i !== idx))
   }
 
@@ -719,8 +737,9 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete, exi
   }
 
   async function deleteProduct() {
-    if (!window.confirm(`確定刪除「${product.name}」？`)) return
+    if (!window.confirm(`確定刪除「${product.name}」？商城上架設定與商品圖片會一併刪除。`)) return
     await supabase.from('products').delete().eq('id', product.id)
+    await deleteProductStorage(product.id)
     onSaved()
     onClose()
   }
@@ -750,7 +769,7 @@ function ProductDetailSheet({ product, onClose, onSaved, canEdit, canDelete, exi
                   {canEdit && (
                     <>
                       <button
-                        onClick={() => deleteImage(img.id, idx)}
+                        onClick={() => deleteImage(img, idx)}
                         style={{position:'absolute',top:-6,right:-6,width:20,height:20,borderRadius:'50%',background:'var(--red)',color:'#fff',border:'none',cursor:'pointer',fontSize:12,lineHeight:'20px',textAlign:'center',padding:0}}
                       >×</button>
                       {images.length > 1 && (
