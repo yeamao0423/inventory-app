@@ -4,6 +4,7 @@
 export default function LoginCard({ flow }) {
   const {
     phase, msg, lineName, emailInput, setEmailInput, password, setPassword,
+    otpCode, setOtpCode, verifyEmailCode, resendEmailCode,
     submitEmail, verifyWithPassword, sendMagicLink,
   } = flow
 
@@ -38,6 +39,30 @@ export default function LoginCard({ flow }) {
             </div>
             <button className="btn-primary" style={{ marginTop: 8 }} onClick={submitEmail}>
               完成註冊
+            </button>
+          </>
+        )}
+
+        {phase === 'verify_email' && (
+          <>
+            <p style={{ fontSize: 14, color: 'var(--text-3)', marginBottom: 12 }}>
+              驗證碼已寄到 <b>{emailInput}</b>。請輸入信中的 6 位數驗證碼，
+              確認這個信箱是你的。
+            </p>
+            <div className="form-group">
+              <label className="form-label">驗證碼</label>
+              <input className="form-input" type="text" inputMode="numeric" maxLength={6}
+                value={otpCode} onChange={e => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                placeholder="123456"
+                onKeyDown={e => e.key === 'Enter' && verifyEmailCode()} />
+            </div>
+            <button className="btn-primary" style={{ marginTop: 8 }} onClick={verifyEmailCode}>
+              驗證並完成註冊
+            </button>
+            <button
+              onClick={resendEmailCode}
+              style={{ display: 'block', width: '100%', margin: '14px auto 0', fontSize: 13, color: 'var(--text-3)', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>
+              沒收到？重寄驗證碼
             </button>
           </>
         )}

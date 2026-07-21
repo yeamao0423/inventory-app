@@ -177,6 +177,20 @@ Deno.serve(async (req) => {
       });
     }
 
+    // (5.5) 方案 C：email 擁有權驗證。LINE 提供的 email 已由 LINE 驗證過（來自
+    //     驗過簽章的 id_token），直接信任；使用者手打/改過的 email 則要先寄
+    //     驗證碼證明擁有權（防打錯字與搶註別人信箱），前端走 signInWithOtp →
+    //     verifyOtp → line-bind（該函式會替新用戶建 consumers 列）。
+    const lineVerifiedEmail = identity.email ? normalizeEmail(identity.email) : null;
+    if (finalEmail !== lineVerifiedEmail) {
+      return json({
+        ok: true,
+        status: "verify_email",
+        line_name: lineName,
+        id_token: effectiveIdToken,
+      });
+    }
+
     // (6) 全新會員：建 auth user（真實 email）→ consumers ＋ 綁定 → 簽發 session
     const { data: created, error: cErr } = await admin.auth.admin.createUser({
       email: finalEmail,

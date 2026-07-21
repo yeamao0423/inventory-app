@@ -37,12 +37,14 @@ export function getRedirect() {
 
 export function useLineLogin() {
   const router = useRouter()
-  const [phase, setPhase] = useState('verifying') // verifying | need_email | needs_verification | link_sent | creating | error
+  const [phase, setPhase] = useState('verifying') // verifying | need_email | verify_email | needs_verification | link_sent | creating | error
   const [msg, setMsg] = useState('')
   const [lineName, setLineName] = useState('')
   const [emailInput, setEmailInput] = useState('')
   const [password, setPassword] = useState('')
+  const [otpCode, setOtpCode] = useState('')
   const idTokenRef = useRef('')
+  const emailRef = useRef('')   // email 關卡送出的值（handleResult 的 closure 拿不到最新 state）
 
   // 拿到 session 後的共同落地：連回匯入名單 → 回跳
   const finishLogin = useCallback(async (tokenHash) => {
@@ -70,6 +72,16 @@ export function useLineLogin() {
       return
     }
     if (out.status === 'needs_verification') { setPhase('needs_verification'); return }
+    // 方案 C：手打/改過的 email 要先驗證擁有權 → 寄 6 位數驗證碼
+    if (out.status === 'verify_email') {
+      const { error } = await supabase.auth.signInWithOtp({
+        email: emailRef.current,
+        options: { shouldCreateUser: true, data: { name: out.line_name || 'LINE 會員', line_login: true } },
+      })
+      if (error) { setPhase('error'); setMsg('驗證信寄送失敗，請稍後再試'); return }
+      setPhase('verify_email')
+      return
+    }
     setPhase('error'); setMsg('未知的回應，請稍後再試')
   }, [finishLogin])
 
@@ -102,16 +114,13 @@ export function useLineLogin() {
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setMsg('請輸入正確的 Email'); return }
     const idToken = idTokenRef.current || sessionStorage.getItem(IDT_KEY) || ''
     if (!idToken) { setPhase('error'); setMsg('LINE 驗證已失效，請重新登入'); return }
+    emailRef.current = email
     return callLogin('create', { id_token: idToken, email })
   }, [emailInput, callLogin])
 
-  // 本人驗證（手段 B）：密碼登入成功 = 證明本人 → 用既有 line-bind 綁定
-  const verifyWithPassword = useCallback(async () => {
-    const email = emailInput.trim()
-    if (!password) { setMsg('請輸入密碼'); return }
-    setMsg('')
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) { setMsg('密碼錯誤，請再試一次'); return }
+  // 已有 session 後的共同綁定落地：呼叫 line-bind → 合併匯入名單 → 回跳
+  //（密碼驗證與 email 驗證碼兩條路共用）
+  const bindAndFinish = useCallback(async () => {
     const idToken = idTokenRef.current || sessionStorage.getItem(IDT_KEY) || ''
     const { data: { session } } = await supabase.auth.getSession()
     let storeId = null
@@ -127,9 +136,44 @@ export function useLineLogin() {
       router.replace('/line-bind')
       return
     }
+    try {
+      const store = await getStore()
+      await supabase.rpc('promote_member', { p_store_id: store.id })
+    } catch { /* 合併失敗不擋登入；/account 載入時會再跑一次 */ }
     sessionStorage.removeItem(IDT_KEY)
     router.replace(getRedirect())
-  }, [emailInput, password, router])
+  }, [router])
+
+  // 本人驗證（手段 B）：密碼登入成功 = 證明本人 → 用既有 line-bind 綁定
+  const verifyWithPassword = useCallback(async () => {
+    const email = emailInput.trim()
+    if (!password) { setMsg('請輸入密碼'); return }
+    setMsg('')
+    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    if (error) { setMsg('密碼錯誤，請再試一次'); return }
+    await bindAndFinish()
+  }, [emailInput, password, bindAndFinish])
+
+  // email 驗證碼（方案 C）：輸入信中 6 位數 → 驗證擁有權＝建號登入 → 綁定
+  const verifyEmailCode = useCallback(async () => {
+    const email = emailRef.current || emailInput.trim()
+    const code = otpCode.trim()
+    if (!/^\d{6}$/.test(code)) { setMsg('請輸入信中的 6 位數驗證碼'); return }
+    setMsg('')
+    const { error } = await supabase.auth.verifyOtp({ email, token: code, type: 'email' })
+    if (error) { setMsg('驗證碼錯誤或已過期，請再試一次'); return }
+    await bindAndFinish()
+  }, [emailInput, otpCode, bindAndFinish])
+
+  const resendEmailCode = useCallback(async () => {
+    const email = emailRef.current || emailInput.trim()
+    setMsg('')
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { shouldCreateUser: true, data: { name: lineName || 'LINE 會員', line_login: true } },
+    })
+    setMsg(error ? '重寄失敗，請稍後再試' : '驗證碼已重寄')
+  }, [emailInput, lineName])
 
   // 本人驗證（手段 A）：寄登入連結，點信後落在既有 /line-bind 完成綁定
   // （跨瀏覽器開信也成立：/line-bind 會自己重跑 LINE 認證）
@@ -146,6 +190,7 @@ export function useLineLogin() {
 
   return {
     phase, msg, lineName, emailInput, setEmailInput, password, setPassword,
+    otpCode, setOtpCode, verifyEmailCode, resendEmailCode,
     setPhase, setMsg, start, submitEmail, verifyWithPassword, sendMagicLink,
   }
 }

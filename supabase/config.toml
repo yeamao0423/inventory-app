@@ -234,6 +234,11 @@ content_path = "./supabase/templates/confirmation.html"
 subject = "重設您的密碼"
 content_path = "./supabase/templates/recovery.html"
 
+# LINE 登入 email 驗證碼流程用（signInWithOtp 既有用戶走此樣板；新用戶走 confirmation）
+[auth.email.template.magic_link]
+subject = "您的登入驗證碼"
+content_path = "./supabase/templates/magic_link.html"
+
 # Uncomment to customize email template
 # [auth.email.template.invite]
 # subject = "You have been invited"

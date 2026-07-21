@@ -78,12 +78,25 @@ Deno.serve(async (req) => {
       return json({ error: "這個 LINE 帳號已綁定其他會員帳號" }, 409);
     }
 
-    // (4) 寫入綁定（service role 繞過 RLS 與保護 trigger）
-    const { error: updErr } = await admin
+    // (4) 寫入綁定（service role 繞過 RLS 與保護 trigger）。
+    //     新用戶（email 驗證碼流程）此時還沒有 consumers 列：update 影響 0 列
+    //     時直接建立，避免綁定默默遺失。
+    const { data: updRows, error: updErr } = await admin
       .from("consumers")
       .update({ line_user_id: lineUserId })
-      .eq("id", consumerId);
+      .eq("id", consumerId)
+      .select("id");
     if (updErr) return json({ error: "綁定寫入失敗，請稍後再試" }, 500);
+    if (!updRows || updRows.length === 0) {
+      const meta = (userData.user.user_metadata ?? {}) as Record<string, unknown>;
+      const { error: insErr } = await admin.from("consumers").insert({
+        id: consumerId,
+        email: userData.user.email,
+        name: (meta.name as string | undefined) ?? "LINE 會員",
+        line_user_id: lineUserId,
+      });
+      if (insErr) return json({ error: "綁定寫入失敗，請稍後再試" }, 500);
+    }
 
     return json({ ok: true, line_name: verify.name ?? null });
   } catch (_e) {
