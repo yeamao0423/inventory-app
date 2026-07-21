@@ -5,7 +5,8 @@
 //          驗 LINE id_token → 取回「已驗證的 userId」（前端無法偽造）
 //          → 寫入 consumers.line_user_id（service role）
 //
-// 環境變數：LINE_LOGIN_CHANNEL_ID（LINE Login channel id，供 id_token 驗證；公開值）
+// 環境變數：LINE_LOGIN_CHANNEL_ID（fallback；優先讀 stores.settings.line_channel_id，
+//            與 line-login 一致——多租戶下每店各有自己的 LINE Login channel）
 //          SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY 由平台注入
 // ============================================================
 
@@ -42,13 +43,23 @@ Deno.serve(async (req) => {
     const consumerId = userData.user.id;
 
     // (2) 驗 LINE id_token → 取回已驗證的 userId(sub)
-    const { id_token } = await req.json().catch(() => ({}));
+    const { id_token, p_store_id } = await req.json().catch(() => ({}));
     if (!id_token) return json({ error: "缺少 LINE 驗證資訊" }, 400);
+
+    // channel id 以店家 settings 為準（每店各有自己的 channel），env 只當 fallback
+    let channelId = LINE_LOGIN_CHANNEL_ID;
+    const storeId = Number.isFinite(Number(p_store_id)) ? Number(p_store_id) : null;
+    if (storeId) {
+      const { data: storeRow } = await admin
+        .from("stores").select("settings").eq("id", storeId).maybeSingle();
+      const cid = (storeRow?.settings as Record<string, unknown> | null)?.line_channel_id;
+      if (cid) channelId = String(cid);
+    }
 
     const verifyRes = await fetch("https://api.line.me/oauth2/v2.1/verify", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ id_token, client_id: LINE_LOGIN_CHANNEL_ID }),
+      body: new URLSearchParams({ id_token, client_id: channelId }),
     });
     const verify = await verifyRes.json();
     if (!verifyRes.ok || !verify.sub) {
@@ -57,12 +68,13 @@ Deno.serve(async (req) => {
     const lineUserId = verify.sub as string;
 
     // (3) 此 LINE 帳號是否已綁到別的消費者
-    const { data: existing } = await admin
+    //（不用 maybeSingle：它遇重複列會報錯，原寫法錯誤被忽略時衝突檢查會被跳過）
+    const { data: existingRows, error: exErr } = await admin
       .from("consumers")
       .select("id")
-      .eq("line_user_id", lineUserId)
-      .maybeSingle();
-    if (existing && existing.id !== consumerId) {
+      .eq("line_user_id", lineUserId);
+    if (exErr) return json({ error: "查詢失敗，請稍後再試" }, 500);
+    if (existingRows?.some((r) => r.id !== consumerId)) {
       return json({ error: "這個 LINE 帳號已綁定其他會員帳號" }, 409);
     }
 

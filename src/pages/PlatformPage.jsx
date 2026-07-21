@@ -26,7 +26,7 @@ export default function PlatformPage() {
     setLoading(true)
     const { data: storeRows } = await supabase
       .from('stores')
-      .select('id, name, slug, custom_domain, is_active, created_at')
+      .select('id, name, slug, custom_domain, is_active, settings, created_at')
       .order('id', { ascending: true })
 
     const rows = storeRows ?? []
@@ -104,6 +104,21 @@ export default function PlatformPage() {
     setSaving(s.id)
     const { error } = await supabase.from('stores').update({ is_active: !s.is_active }).eq('id', s.id)
     if (!error) setStores(prev => prev.map(x => x.id === s.id ? { ...x, is_active: !s.is_active } : x))
+    else alert('操作失敗：' + error.message)
+    setSaving(null)
+  }
+
+  // LINE 登入開通（平台層閘門）：寫 settings.line_login_provisioned；
+  // 開通後該店後台才會出現 LINE 憑證設定區塊，店家再自行啟用。
+  // 注意 settings 用 merge 寫回，避免整包覆蓋掉店家既有設定。
+  async function toggleLineLogin(s) {
+    const cur = !!s.settings?.line_login_provisioned
+    if (!cur && !confirm(`確定為「${s.name}」開通 LINE 登入？開通後店家後台會出現 LINE 設定區塊。`)) return
+    if (cur && !confirm(`確定關閉「${s.name}」的 LINE 登入？商城將不再顯示 LINE 登入按鈕。`)) return
+    setSaving(s.id)
+    const nextSettings = { ...(s.settings ?? {}), line_login_provisioned: !cur }
+    const { error } = await supabase.from('stores').update({ settings: nextSettings }).eq('id', s.id)
+    if (!error) setStores(prev => prev.map(x => x.id === s.id ? { ...x, settings: nextSettings } : x))
     else alert('操作失敗：' + error.message)
     setSaving(null)
   }
@@ -217,7 +232,15 @@ export default function PlatformPage() {
                   儲存網域
                 </button>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', width: '100%' }}>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, width: '100%' }}>
+                <button onClick={() => toggleLineLogin(s)} disabled={saving === s.id}
+                  style={{
+                    background: 'none', border: '1px solid var(--border)', borderRadius: 8,
+                    padding: '5px 14px', fontSize: 12, cursor: 'pointer',
+                    color: s.settings?.line_login_provisioned ? 'var(--red)' : 'var(--green)',
+                  }}>
+                  {s.settings?.line_login_provisioned ? '關閉 LINE 登入' : '開通 LINE 登入'}
+                </button>
                 <button onClick={() => toggleActive(s)} disabled={saving === s.id}
                   style={{
                     background: 'none', border: '1px solid var(--border)', borderRadius: 8,

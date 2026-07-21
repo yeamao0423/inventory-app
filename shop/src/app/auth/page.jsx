@@ -1,9 +1,10 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
 import { getStore } from '../../lib/store'
 import { useI18n } from '../layout'
+import { STATE_KEY } from '../line-login/useLineLogin'
 
 export default function AuthPage() {
   const { lang } = useI18n()
@@ -16,7 +17,15 @@ export default function AuthPage() {
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
+  // LINE 登入需平台開通＋店家啟用，兩者皆真才顯示按鈕（後端 line-login 也會擋）
+  const [lineEnabled, setLineEnabled] = useState(false)
   const zh = lang === 'zh'
+
+  useEffect(() => {
+    getStore()
+      .then(s => setLineEnabled(!!(s?.settings?.line_login_provisioned && s?.settings?.line_login_enabled)))
+      .catch(() => {})
+  }, [])
 
   function switchMode(m) { setMode(m); setError(''); setMessage('') }
 
@@ -60,6 +69,29 @@ export default function AuthPage() {
       router.push('/account')
     }
     setLoading(false)
+  }
+
+  // LINE 登入分流：LINE App 內建瀏覽器走 LIFF（無感）；一般瀏覽器走 LINE Web OAuth
+  async function handleLineLogin() {
+    if (typeof navigator !== 'undefined' && / Line\//i.test(navigator.userAgent)) {
+      router.push('/line-login')
+      return
+    }
+    let store = null
+    try { store = await getStore() } catch { /* 取不到就用 fallback */ }
+    const channelId = store?.settings?.line_channel_id || process.env.NEXT_PUBLIC_LINE_CHANNEL_ID || '2010616155'
+    const redirectUri = store?.settings?.line_callback_url || `${window.location.origin}/line-login/callback`
+    const state = crypto.randomUUID()
+    sessionStorage.setItem(STATE_KEY, state)
+    const url = new URL('https://access.line.me/oauth2/v2.1/authorize')
+    url.search = new URLSearchParams({
+      response_type: 'code',
+      client_id: channelId,
+      redirect_uri: redirectUri,
+      state,
+      scope: 'openid profile email',
+    }).toString()
+    window.location.href = url.toString()
   }
 
   async function handleForgot() {
@@ -168,6 +200,23 @@ export default function AuthPage() {
             <button className="btn-primary" style={{ marginTop: 8 }} onClick={submitFn} disabled={loading}>
               {submitLabel}
             </button>
+
+            {mode !== 'forgot' && lineEnabled && (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '16px 0 0' }}>
+                  <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+                  <span style={{ fontSize: 12, color: 'var(--text-3)' }}>{zh ? '或' : 'or'}</span>
+                  <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+                </div>
+                <button
+                  type="button"
+                  onClick={handleLineLogin}
+                  style={{ width: '100%', marginTop: 12, padding: '12px 16px', borderRadius: 8, border: 'none', background: '#06C755', color: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}
+                >
+                  {zh ? '用 LINE 繼續' : 'Continue with LINE'}
+                </button>
+              </>
+            )}
 
             {mode === 'login' && (
               <button

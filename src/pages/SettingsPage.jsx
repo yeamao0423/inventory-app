@@ -22,6 +22,9 @@ export default function SettingsPage() {
     package_value: 999,
   })
   const [storeName, setStoreName] = useState('')
+  // LINE Channel Secret 為寫入型欄位：值只進不出（存 store_line_secrets，非 settings），
+  // 已否設定看 settings.line_channel_secret_set 旗標
+  const [lineSecret, setLineSecret] = useState('')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
@@ -76,6 +79,16 @@ export default function SettingsPage() {
       .eq('id', storeId)
     if (err) setError('儲存失敗：' + err.message)
     else {
+      // Channel Secret 走 RPC 另存（settings 會整包送到商城前端，機密不能放那）；
+      // 必須在 stores.update 之後跑，RPC 會把 line_channel_secret_set 旗標併回 settings
+      const secretVal = lineSecret.trim()
+      if (secretVal) {
+        const { error: secErr } = await supabase.rpc('set_line_channel_secret', {
+          p_store_id: storeId, p_secret: secretVal,
+        })
+        if (secErr) { setError('Channel Secret 儲存失敗：' + secErr.message); setSaving(false); return }
+        setLineSecret('')
+      }
       await refreshStore()
       // 設定（店名/Logo/運費等）會影響商城顯示 → 通知商城清快取
       revalidateShop({ storeId, slug: store?.slug })
@@ -259,6 +272,45 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
+
+        {/* LINE 登入：平台開通（PlatformPage line_login_provisioned）後才顯示；店家再自行啟用 */}
+        {store?.settings?.line_login_provisioned && (
+          <>
+            <div className="sec">LINE 登入（消費者用 LINE 帳號註冊/登入商城）</div>
+            <div className="card" style={{ padding: 16 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, cursor: 'pointer', marginBottom: 12 }}>
+                <input type="checkbox"
+                  checked={!!form.line_login_enabled}
+                  onChange={e => { setForm(prev => ({ ...prev, line_login_enabled: e.target.checked })); setSaved(false) }} />
+                <b>啟用 LINE 登入</b>（開啟後商城登入頁會出現「用 LINE 繼續」按鈕）
+              </label>
+              {inputRow('LINE Login Channel ID', 'line_channel_id', 'text', '例：2010616155')}
+              {inputRow('LIFF ID（LINE App 內登入頁）', 'line_liff_id', 'text', '例：2010616155-bJSaanw4')}
+              {inputRow('Web 登入 Callback URL', 'line_callback_url', 'text', '例：https://你的商城網域/line-login/callback')}
+              <div className="form-group" style={{ marginBottom: 10 }}>
+                <label className="form-label">
+                  LINE Channel Secret
+                  <span style={{
+                    fontSize: 11, marginLeft: 6, fontWeight: 600,
+                    color: form.line_channel_secret_set ? 'var(--green)' : 'var(--text-3)',
+                  }}>
+                    {form.line_channel_secret_set ? '已設定' : '未設定'}
+                  </span>
+                </label>
+                <input className="form-input" type="password" autoComplete="new-password"
+                  placeholder={form.line_channel_secret_set ? '已設定（輸入新值可更新，留空維持不變）' : '貼上 LINE Login channel 的 Channel Secret'}
+                  value={lineSecret}
+                  onChange={e => { setLineSecret(e.target.value); setSaved(false) }} />
+              </div>
+              <div style={{ marginTop: 4, fontSize: 12, color: 'var(--text-3)', lineHeight: 1.7 }}>
+                以上值都可在 <a href="https://developers.line.biz/console/" target="_blank" rel="noreferrer"
+                  style={{ color: 'var(--blue)' }}>LINE Developers Console</a> 的 LINE Login channel 取得；
+                Callback URL 需同步加入該 channel 的白名單，Email 取得權限需另外申請（審核制）。<br />
+                Channel Secret 儲存後不會回顯（僅伺服器可讀取），要更換直接輸入新值再儲存即可。
+              </div>
+            </div>
+          </>
+        )}
 
         <div className="sec">出貨單寄件人（交貨便匯出用，可日後要匯出時再填）</div>
         <div className="card" style={{ padding: 16 }}>

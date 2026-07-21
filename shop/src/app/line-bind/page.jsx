@@ -3,7 +3,9 @@
 // LIFF SDK 以 CDN 載入，不新增 npm 依賴。
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '../../lib/supabase'
+import { getStore } from '../../lib/store'
 
+// fallback；優先讀店家 settings.line_liff_id（每店各有自己的 LINE Login channel）
 const LIFF_ID = process.env.NEXT_PUBLIC_LIFF_ID || '2010616155-bJSaanw4'
 const BIND_ENDPOINT = `${process.env.NEXT_PUBLIC_SUPABASE_URL || ''}/functions/v1/line-bind`
 
@@ -35,10 +37,12 @@ export default function LineBindPage() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { setPhase('need-login'); return }
       setPhase('binding')
+      let storeId = null
+      try { storeId = (await getStore()).id } catch { /* 取不到就交給後端 env fallback */ }
       const res = await fetch(BIND_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({ id_token: idToken }),
+        body: JSON.stringify({ id_token: idToken, p_store_id: storeId }),
       })
       const out = await res.json().catch(() => ({}))
       if (res.ok && out.ok) {
@@ -56,8 +60,10 @@ export default function LineBindPage() {
     let mounted = true
     ;(async () => {
       try {
+        let settings = {}
+        try { settings = (await getStore()).settings ?? {} } catch { /* 取不到就用 fallback */ }
         const liff = await loadLiff()
-        await liff.init({ liffId: LIFF_ID })
+        await liff.init({ liffId: settings.line_liff_id || LIFF_ID })
         if (!mounted) return
         const { data: { session } } = await supabase.auth.getSession()
         if (!session) { setPhase('need-login'); return }
