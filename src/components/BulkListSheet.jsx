@@ -93,6 +93,14 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
   const [hoverInfo, setHoverInfo] = useState(null)
   const pressTimer = useRef(null)
 
+  // 拖曳排序（桌機滑鼠 + 手機觸控共用 pointer events）
+  const [dragIdx, setDragIdx] = useState(null) // 正在被拖曳的縮圖目前索引
+  const [ghost, setGhost] = useState(null)      // 跟隨指標的浮動縮圖 { url, x, y }
+  const dragRef = useRef(null)                  // 進行中的 pointer session
+  const stripRef = useRef(null)                 // 縮圖列容器（供自動捲動用）
+  const autoScrollRef = useRef(null)            // requestAnimationFrame id
+  const scrollDirRef = useRef(0)                // -1 左 / 0 停 / 1 右
+
   useEffect(() => {
     if (!storeId) return
     Promise.all([
@@ -374,9 +382,131 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
   }
   function handleTouchEnd() { clearTimeout(pressTimer.current) }
   function handleMouseEnter(e, url) {
+    if (dragRef.current?.active) return // 拖曳中不顯示 hover 預覽
     const rect = e.currentTarget.getBoundingClientRect()
     setHoverInfo({ url, x: rect.right + 8, y: Math.max(8, rect.top - 80) })
   }
+
+  // ── 拖曳排序 ──────────────────────────────────────────────
+  function movePhoto(from, to) {
+    if (from === to) return
+    const reorder = arr => {
+      const next = arr.slice()
+      const [item] = next.splice(from, 1)
+      next.splice(to, 0, item)
+      return next
+    }
+    setPhotos(prev => reorder(prev))
+    setPreviews(prev => reorder(prev))
+    // dividers 是「位置邊界」語義，重排照片時維持不動
+  }
+
+  function photoIdxAtPoint(x, y) {
+    const holder = document.elementFromPoint(x, y)?.closest?.('[data-photoidx]')
+    if (!holder) return null
+    const n = Number(holder.getAttribute('data-photoidx'))
+    return Number.isNaN(n) ? null : n
+  }
+
+  function maybeAutoScroll(x) {
+    const el = stripRef.current
+    if (!el) { scrollDirRef.current = 0; return }
+    const rect = el.getBoundingClientRect()
+    const edge = 48
+    scrollDirRef.current = x < rect.left + edge ? -1 : x > rect.right - edge ? 1 : 0
+    if (scrollDirRef.current !== 0 && !autoScrollRef.current) {
+      const step = () => {
+        if (scrollDirRef.current === 0 || !stripRef.current) { autoScrollRef.current = null; return }
+        stripRef.current.scrollLeft += scrollDirRef.current * 10
+        autoScrollRef.current = requestAnimationFrame(step)
+      }
+      autoScrollRef.current = requestAnimationFrame(step)
+    }
+  }
+  function stopAutoScroll() {
+    scrollDirRef.current = 0
+    if (autoScrollRef.current) { cancelAnimationFrame(autoScrollRef.current); autoScrollRef.current = null }
+  }
+
+  function beginDrag(s, x, y) {
+    if (s.active) return
+    s.active = true
+    clearTimeout(s.timer)
+    setHoverInfo(null)
+    setDragIdx(s.idx)
+    setGhost({ url: previews[s.idx], x, y })
+  }
+
+  function onPhotoPointerDown(e, idx) {
+    if (e.pointerType === 'mouse' && e.button !== 0) return
+    const s = {
+      pointerId: e.pointerId, pointerType: e.pointerType,
+      startX: e.clientX, startY: e.clientY,
+      lastX: e.clientX, lastY: e.clientY,
+      idx, active: false, timer: null, move: null, up: null,
+    }
+    dragRef.current = s
+    const move = ev => handlePointerMove(ev, s)
+    const up = ev => handlePointerUp(ev, s)
+    s.move = move; s.up = up
+    window.addEventListener('pointermove', move, { passive: false })
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
+    // 手機：長按啟動拖曳；桌機：移動超過閾值才啟動（見 handlePointerMove）
+    if (e.pointerType === 'touch') {
+      s.timer = setTimeout(() => beginDrag(s, s.lastX, s.lastY), 200)
+    }
+  }
+
+  function handlePointerMove(ev, s) {
+    if (ev.pointerId !== s.pointerId) return
+    s.lastX = ev.clientX; s.lastY = ev.clientY
+    if (!s.active) {
+      const dist = Math.hypot(ev.clientX - s.startX, ev.clientY - s.startY)
+      if (s.pointerType === 'mouse') {
+        if (dist > 6) beginDrag(s, ev.clientX, ev.clientY)
+      } else if (dist > 12) {
+        clearTimeout(s.timer); s.timer = null // 長按前滑動 → 視為捲動，不啟動拖曳
+      }
+      if (!s.active) return
+    }
+    ev.preventDefault()
+    setGhost(g => (g ? { ...g, x: ev.clientX, y: ev.clientY } : g))
+    maybeAutoScroll(ev.clientX)
+    const t = photoIdxAtPoint(ev.clientX, ev.clientY)
+    if (t != null && t !== s.idx) {
+      movePhoto(s.idx, t)
+      s.idx = t
+      setDragIdx(t)
+    }
+  }
+
+  function handlePointerUp(ev, s) {
+    if (ev.pointerId !== s.pointerId) return
+    clearTimeout(s.timer)
+    stopAutoScroll()
+    window.removeEventListener('pointermove', s.move)
+    window.removeEventListener('pointerup', s.up)
+    window.removeEventListener('pointercancel', s.up)
+    const wasActive = s.active
+    const dist = Math.hypot(s.lastX - s.startX, s.lastY - s.startY)
+    dragRef.current = null
+    setDragIdx(null)
+    setGhost(null)
+    // 沒進入拖曳且幾乎沒移動 → 視為單擊，開大圖
+    if (!wasActive && dist < 6 && ev.type === 'pointerup') setLightboxUrl(previews[s.idx])
+  }
+
+  // 卸載時清理進行中的拖曳
+  useEffect(() => () => {
+    const s = dragRef.current
+    if (s) {
+      window.removeEventListener('pointermove', s.move)
+      window.removeEventListener('pointerup', s.up)
+      window.removeEventListener('pointercancel', s.up)
+    }
+    if (autoScrollRef.current) cancelAnimationFrame(autoScrollRef.current)
+  }, [])
 
   const confirmedCount = drafts.filter(d => d.confirmed).length
   const suggestedCount = drafts.filter(d => d.aiSuggestedPrice).length
@@ -514,19 +644,20 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
                   </button>
                 </div>
 
-                <div style={{ display: 'flex', overflowX: 'auto', alignItems: 'center', paddingBottom: 12, WebkitOverflowScrolling: 'touch', gap: 0 }}>
+                <div
+                  ref={stripRef}
+                  style={{ display: 'flex', overflowX: 'auto', alignItems: 'center', paddingBottom: 12, WebkitOverflowScrolling: 'touch', gap: 0, touchAction: dragIdx != null ? 'none' : 'pan-x' }}
+                >
                   {photos.map((_, idx) => (
-                    <div key={idx} style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+                    <div key={idx} data-photoidx={idx} style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
                       <div style={{ position: 'relative' }}>
                         <img
                           src={previews[idx]}
-                          style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, display: 'block', cursor: 'pointer' }}
-                          onClick={() => setLightboxUrl(previews[idx])}
+                          draggable={false}
+                          style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, display: 'block', cursor: dragIdx != null ? 'grabbing' : 'grab', opacity: dragIdx === idx ? 0.35 : 1, touchAction: 'none', userSelect: 'none' }}
+                          onPointerDown={e => onPhotoPointerDown(e, idx)}
                           onMouseEnter={e => handleMouseEnter(e, previews[idx])}
                           onMouseLeave={() => setHoverInfo(null)}
-                          onTouchStart={() => handleTouchStart(previews[idx])}
-                          onTouchEnd={handleTouchEnd}
-                          onTouchMove={handleTouchEnd}
                         />
                         <button
                           onClick={() => removePhoto(idx)}
@@ -728,6 +859,13 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
           </div>
         </>}
       </div>
+
+      {/* 拖曳中跟隨指標的浮動縮圖 */}
+      {ghost && (
+        <div style={{ position: 'fixed', left: ghost.x, top: ghost.y, zIndex: 10001, pointerEvents: 'none', transform: 'translate(-50%, -50%) scale(1.08)', opacity: 0.92 }}>
+          <img src={ghost.url} style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, boxShadow: '0 6px 22px rgba(0,0,0,0.4)', display: 'block' }} />
+        </div>
+      )}
 
       {/* Hover 大圖（桌面） */}
       {hoverInfo && (
