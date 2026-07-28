@@ -4,12 +4,13 @@ import { getCurrencySymbol } from '../constants/currency'
 import { useAuth } from '../hooks/useAuth'
 import CustomSelect from './CustomSelect'
 
-// 取得 store 成員（profiles + user_store_roles）
+// 取得 store 管理員（profiles + user_store_roles，排除一般消費者）
 async function fetchStoreMembers(storeId) {
   const { data: roles } = await supabase
     .from('user_store_roles')
     .select('user_id, role')
     .eq('store_id', storeId)
+    .in('role', ['super_admin', 'admin', 'editor'])
   if (!roles || roles.length === 0) return []
   const { data: profiles } = await supabase
     .from('profiles')
