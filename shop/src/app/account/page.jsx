@@ -4,13 +4,20 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '../../lib/supabase'
 import { getStoreId } from '../../lib/store'
-import { useI18n, useUser } from '../layout'
+import { useI18n, useUser, useCart } from '../layout'
+import { canAppendToOrder, formatDeadline, appendInfoFor } from '../../lib/append'
 
 export default function AccountPage() {
   const { lang } = useI18n()
   const { user, loading: userLoading } = useUser()
+  const { startAppend } = useCart()
   const router = useRouter()
   const zh = lang === 'zh'
+
+  function goAppend(o) {
+    startAppend(appendInfoFor(o))
+    router.push('/products')
+  }
 
   const [profile, setProfile] = useState({ name: '', phone: '', line_id: '', line_user_id: '' })
   const [editProfile, setEditProfile] = useState(false)
@@ -258,7 +265,9 @@ export default function AccountPage() {
         )}
 
         {orders.map(o => (
-          <OrderCard key={o.id} order={o} zh={zh} onClick={() => setSelectedOrder(o)} />
+          <OrderCard key={o.id} order={o} zh={zh} lang={lang}
+            onClick={() => setSelectedOrder(o)}
+            onAppend={() => goAppend(o)} />
         ))}
       </section>
 
@@ -282,27 +291,60 @@ function statusColor(s) {
   return 'var(--text-3)'
 }
 
-function OrderCard({ order: o, zh, onClick }) {
+// 付款狀態由已收金額對應付金額推導，所以有「待補款 / 待退款」兩種中間態
+function paymentLabel(o, zh) {
+  const balance = Number(o.total_amount || 0) - Number(o.paid_amount || 0)
+  if (o.payment_status === '已付清') return { text: zh ? '已付清' : 'Paid', color: 'var(--green)' }
+  if (o.payment_status === '部分付款') {
+    return { text: zh ? `待補 NT$${balance.toLocaleString()}` : `NT$${balance.toLocaleString()} due`, color: 'var(--amber)' }
+  }
+  if (o.payment_status === '待退款') {
+    return { text: zh ? `待退款 NT$${Math.abs(balance).toLocaleString()}` : `Refund NT$${Math.abs(balance).toLocaleString()}`, color: 'var(--green)' }
+  }
+  return { text: zh ? '待付款' : 'Pending payment', color: undefined }
+}
+
+function OrderCard({ order: o, zh, lang, onClick, onAppend }) {
+  const pay = paymentLabel(o, zh)
+  const appendable = canAppendToOrder(o)
+
   return (
-    <div className="account-order-card" onClick={onClick}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
-        <div>
-          <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 4 }}>
-            #{o.id?.toString().slice(-6)} · {new Date(o.created_at).toLocaleDateString('zh-TW')}
+    <div className="account-order-card">
+      <div onClick={onClick} style={{ cursor: 'pointer' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 4 }}>
+              #{o.id?.toString().slice(-6)} · {new Date(o.created_at).toLocaleDateString('zh-TW')}
+            </div>
+            <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.4 }}>{o.items}</div>
           </div>
-          <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.4 }}>{o.items}</div>
+          <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 14 }}>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>NT${Number(o.total_amount || 0).toLocaleString()}</div>
+            <div style={{ fontSize: 12, color: statusColor(o.status), marginTop: 3, fontWeight: 500 }}>{o.status}</div>
+          </div>
         </div>
-        <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 14 }}>
-          <div style={{ fontSize: 15, fontWeight: 700 }}>NT${Number(o.total_amount || 0).toLocaleString()}</div>
-          <div style={{ fontSize: 12, color: statusColor(o.status), marginTop: 3, fontWeight: 500 }}>{o.status}</div>
+        <div style={{ fontSize: 12, color: 'var(--text-3)', display: 'flex', justifyContent: 'space-between' }}>
+          <span style={{ color: pay.color }}>{pay.text}</span>
+          <span>{zh ? '點擊查看明細 →' : 'View details →'}</span>
         </div>
       </div>
-      <div style={{ fontSize: 12, color: 'var(--text-3)', display: 'flex', justifyContent: 'space-between' }}>
-        <span style={{ color: o.payment_status === '已付清' ? 'var(--green)' : undefined }}>
-          {o.payment_status === '已付清' ? (zh ? '已付清' : 'Paid') : (zh ? '待付款' : 'Pending payment')}
-        </span>
-        <span>{zh ? '點擊查看明細 →' : 'View details →'}</span>
-      </div>
+
+      {appendable && (
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid var(--border)' }}>
+          <button onClick={onAppend} style={{
+            width: '100%', padding: '9px 0', borderRadius: 10,
+            border: '0.5px solid var(--text-1, #111)', background: 'transparent',
+            fontSize: 13, fontWeight: 600, cursor: 'pointer', color: 'inherit',
+          }}>
+            {zh ? '＋ 加購到這筆訂單' : '＋ Add items to this order'}
+          </button>
+          <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6, textAlign: 'center' }}>
+            {zh
+              ? `可加購至 ${formatDeadline(o.append_deadline, lang)}，與本單一起出貨、運費不重複收`
+              : `Until ${formatDeadline(o.append_deadline, lang)} · ships together, no extra shipping`}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -340,14 +382,20 @@ function OrderDetailModal({ order: o, zh, onClose, onCancel, cancelling }) {
         )}
         <div className="modal-row">
           <span className="modal-label">{zh ? '付款狀態' : 'Payment'}</span>
-          <span className="modal-value" style={{ color: o.payment_status === '已付清' ? 'var(--green)' : undefined }}>
-            {o.payment_status}
+          <span className="modal-value" style={{ color: paymentLabel(o, zh).color }}>
+            {paymentLabel(o, zh).text}
           </span>
         </div>
         <div className="modal-row">
           <span className="modal-label">{zh ? '總金額' : 'Total'}</span>
           <span className="modal-value" style={{ fontWeight: 700, fontSize: 16 }}>NT${Number(o.total_amount || 0).toLocaleString()}</span>
         </div>
+        {Number(o.paid_amount || 0) > 0 && Number(o.paid_amount) !== Number(o.total_amount) && (
+          <div className="modal-row">
+            <span className="modal-label">{zh ? '已收金額' : 'Paid'}</span>
+            <span className="modal-value">NT${Number(o.paid_amount).toLocaleString()}</span>
+          </div>
+        )}
 
         <hr style={{ border: 'none', borderTop: '0.5px solid var(--border)', margin: '14px 0' }} />
 

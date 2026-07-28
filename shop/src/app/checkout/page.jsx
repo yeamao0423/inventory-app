@@ -8,9 +8,12 @@ import { useI18n, useCart, useUser } from '../layout'
 
 export default function CheckoutPage() {
   const { t, lang } = useI18n()
-  const { cart, clearCart } = useCart()
+  const { cart, clearCart, appendTo, cancelAppend, hydrated } = useCart()
   const { user } = useUser()
   const router = useRouter()
+  // 加購模式：購物車要併進既有訂單，不建新單也不重填收件資料
+  const isAppend = !!appendTo?.token
+  const [appendOrder, setAppendOrder] = useState(null)
   const [form, setForm] = useState({ name: '', phone: '', email: '', store_name: '', store_number: '', line_id: '', remittance_last5: '', note: '' })
   const [errors, setErrors] = useState({})
   const [submitting, setSubmitting] = useState(false)
@@ -20,6 +23,16 @@ export default function CheckoutPage() {
   useEffect(() => {
     getStore().then(setStore).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    if (!isAppend) return
+    supabase.rpc('get_consumer_order', { p_token: appendTo.token })
+      .then(({ data }) => setAppendOrder(data))
+  }, [isAppend, appendTo?.token])
+
+  useEffect(() => {
+    if (hydrated && cart.length === 0 && !submitting) router.push('/cart')
+  }, [hydrated, cart.length, submitting])
 
   // Meta Pixel：進入結帳事件（購物車就緒後發一次）
   const checkoutTracked = useRef(false)
@@ -68,6 +81,53 @@ export default function CheckoutPage() {
   const discountAmount = couponPreview?.discount_amount || 0
   const total = subtotal - discountAmount + shippingFee
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  // ── 加購金額試算：與 DB 的 append_to_order 用同一組規則 ──
+  // 合併後小計重新對免運門檻，所以「加購跨過門檻」會把原本收的運費退掉。
+  const originalItems = Array.isArray(appendOrder?.items_json) ? appendOrder.items_json : []
+  const originalSubtotal = originalItems
+    .filter(i => (i.status ?? 'active') !== 'cancelled')
+    .reduce((s, i) => s + Number(i.price || 0) * Number(i.qty || 0), 0)
+  const mergedSubtotal = originalSubtotal + subtotal
+  const appendShippingFee = mergedSubtotal >= FREE_SHIPPING_THRESHOLD ? 0 : SHIPPING_FEE
+  const appendNewTotal = mergedSubtotal - Number(appendOrder?.discount_amount || 0) + appendShippingFee
+  const appendPaid = Number(appendOrder?.paid_amount || 0)
+  const appendBalanceDue = appendNewTotal - appendPaid
+  const prevShippingFee = Number(appendOrder?.shipping_fee || 0)
+
+  async function submitAppend() {
+    if (cart.length === 0) return
+    setSubmitting(true)
+
+    const { data, error } = await supabase.rpc('append_to_order', {
+      p_token: appendTo.token,
+      p_items_json: cart,
+    })
+
+    if (error || !data?.ok) {
+      alert(data?.error || error?.message || t('common.error'))
+      setSubmitting(false)
+      return
+    }
+
+    trackPixel('Purchase', {
+      content_ids: cart.map(i => String(i.id)),
+      num_items: cart.reduce((s, i) => s + i.qty, 0),
+      value: Number(data.new_total) - Number(data.previous_total),
+      currency: 'TWD',
+    }, { eventID: `${appendTo.token}-append-${Date.now()}` })
+
+    // 加購通知信（不阻斷流程，失敗靜默處理）
+    fetch('/api/send-order-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: appendTo.token, lang, mode: 'append' }),
+    }).catch(err => console.error('Email send failed:', err))
+
+    clearCart()
+    cancelAppend()
+    router.push(`/order/${appendTo.token}`)
+  }
 
   // 優惠碼預覽（read-only 查詢，不扣額度）
   async function applyCoupon() {
@@ -230,9 +290,136 @@ export default function CheckoutPage() {
     router.push(`/order/${orderToken}`)
   }
 
-  if (cart.length === 0 && !submitting) {
-    if (typeof window !== 'undefined') router.push('/cart')
-    return null
+  // 導向必須等 localStorage 讀入後才判斷，否則重新整理結帳頁會因為
+  // cart 還是初始空陣列而被踢回購物車；導向本身也要在 render 之外做。
+  if (!hydrated) return null
+  if (cart.length === 0 && !submitting) return null
+
+  // ── 加購模式：不重填收件資料，只確認金額差額 ──
+  if (isAppend) {
+    const zh = lang === 'zh'
+    const row = (label, value, style = {}) => (
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 8, ...style }}>
+        <span>{label}</span><span>{value}</span>
+      </div>
+    )
+
+    return (
+      <div style={{ padding: '40px 0', maxWidth: 560, margin: '0 auto' }}>
+        <h1 className="form-title">
+          {zh ? `加購到訂單 #${appendTo.orderNo}` : `Add to order #${appendTo.orderNo}`}
+        </h1>
+
+        {!appendOrder ? (
+          <div style={{ color: 'var(--text-3)', padding: '30px 0' }}>{zh ? '載入中…' : 'Loading…'}</div>
+        ) : !appendOrder.can_append ? (
+          <div className="order-summary-card">
+            <div style={{ fontSize: 14, lineHeight: 1.8 }}>
+              {zh
+                ? '這筆訂單已經無法加購了 —— 可能是加購時間已截止，或老闆已經開始採購。'
+                : 'This order can no longer be modified — the window has closed or purchasing has started.'}
+            </div>
+            <button className="btn-primary" style={{ marginTop: 16 }}
+              onClick={() => { cancelAppend(); router.push('/cart') }}>
+              {zh ? '改為建立新訂單' : 'Create a new order instead'}
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="order-summary-card">
+              <div className="order-summary-title">{zh ? '加購商品' : 'Items to add'}</div>
+              {cart.map(item => (
+                <div className="order-summary-item" key={`${item.id}-${item.variantLabel || ''}`}>
+                  <div className="order-summary-item-name">
+                    {item.name}
+                    {item.variantLabel && (
+                      <div style={{ fontSize: 12, color: 'var(--text-3)' }}>{item.variantLabel}</div>
+                    )}
+                    <div style={{ fontSize: 12, color: 'var(--text-3)' }}>× {item.qty}</div>
+                  </div>
+                  <div className="order-summary-item-price">NT${(item.price * item.qty).toLocaleString()}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="order-summary-card" style={{ marginTop: 16 }}>
+              <div className="order-summary-title">{zh ? '金額變化' : 'Amount changes'}</div>
+              {row(zh ? '原訂單金額' : 'Current order', `NT$${Number(appendOrder.total_amount || 0).toLocaleString()}`,
+                { color: 'var(--text-2)' })}
+              {row(zh ? '加購商品' : 'Items added', `+NT$${subtotal.toLocaleString()}`, { color: 'var(--text-2)' })}
+
+              <hr className="order-summary-divider" />
+
+              {prevShippingFee !== appendShippingFee ? (
+                row(
+                  zh ? '運費' : 'Shipping',
+                  <span>
+                    <span style={{ textDecoration: 'line-through', color: 'var(--text-3)' }}>NT${prevShippingFee}</span>
+                    {' → '}
+                    <span style={{ color: '#1a7a3c', fontWeight: 600 }}>
+                      {appendShippingFee === 0 ? (zh ? '免運' : 'Free') : `NT$${appendShippingFee}`}
+                    </span>
+                  </span>,
+                  { color: 'var(--text-2)' },
+                )
+              ) : (
+                row(zh ? '運費' : 'Shipping',
+                  appendShippingFee === 0 ? (zh ? '免運費' : 'Free') : `NT$${appendShippingFee}`,
+                  { color: 'var(--text-2)' })
+              )}
+
+              {Number(appendOrder.discount_amount) > 0 && row(
+                zh ? '優惠券折抵' : 'Coupon',
+                `-NT$${Number(appendOrder.discount_amount).toLocaleString()}`,
+                { color: '#1a7a3c' },
+              )}
+
+              <div className="order-summary-total">
+                <span>{zh ? '加購後應付' : 'New total'}</span>
+                <span>NT${appendNewTotal.toLocaleString()}</span>
+              </div>
+
+              {appendPaid > 0 && (
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid var(--border)' }}>
+                  {row(zh ? '已收' : 'Already paid', `NT$${appendPaid.toLocaleString()}`, { color: 'var(--text-2)' })}
+                  {row(
+                    appendBalanceDue >= 0 ? (zh ? '需補匯' : 'Balance due') : (zh ? '待退款' : 'Refund due'),
+                    `NT$${Math.abs(appendBalanceDue).toLocaleString()}`,
+                    { fontWeight: 700, fontSize: 16, marginBottom: 0 },
+                  )}
+                </div>
+              )}
+
+              {prevShippingFee > 0 && appendShippingFee === 0 && (
+                <div style={{ marginTop: 10, fontSize: 12, color: '#1a7a3c', lineHeight: 1.6 }}>
+                  {zh
+                    ? `加購後已達免運門檻，原本的 NT$${prevShippingFee} 運費已為你退掉。`
+                    : `You've reached free shipping — the NT$${prevShippingFee} shipping fee has been removed.`}
+                </div>
+              )}
+
+              <div style={{ marginTop: 14, fontSize: 12, color: 'var(--text-3)', lineHeight: 1.7 }}>
+                {zh
+                  ? '收件資訊與付款方式沿用原訂單，不需要重新填寫。加購商品會與原訂單一起出貨。'
+                  : 'Shipping details carry over from the original order. Added items ship together.'}
+              </div>
+            </div>
+
+            <button className="btn-primary" onClick={submitAppend} disabled={submitting} style={{ marginTop: 16 }}>
+              {submitting ? t('checkout.submitting') : (zh ? '確認加購' : 'Confirm')}
+            </button>
+            <button
+              onClick={() => { cancelAppend(); router.push('/cart') }}
+              style={{
+                width: '100%', marginTop: 10, padding: '12px 0', background: 'none',
+                border: 'none', color: 'var(--text-3)', fontSize: 13, cursor: 'pointer',
+              }}>
+              {zh ? '取消加購，改為建立新訂單' : 'Cancel and create a new order'}
+            </button>
+          </>
+        )}
+      </div>
+    )
   }
 
   return (

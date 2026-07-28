@@ -11,6 +11,7 @@ import { buildCollageBlob, canShareFile, downloadBlob } from '../lib/shareImage'
 import { revalidateShop } from '../lib/revalidateShop'
 import { toTwdCost, calcMargin, getEffectivePrices, getEffectiveCosts, calcMarginRange, fmtRange, fmtMarginRate, fmtMarginAmount } from '../lib/pricing'
 import { cmpNum, cmpStr, cmpDate } from '../lib/sortUtils'
+import { utcToLocal, localToISO } from '../lib/datetime'
 import { Pill } from '../components/MenuPopover'
 import ListToolbar from '../components/ListToolbar'
 import TaxonomyManager from '../components/TaxonomyManager'
@@ -702,20 +703,6 @@ const smallBtn = {
   padding: '5px 12px', borderRadius: 8, fontSize: 12, fontWeight: 600,
   background: 'var(--surface)', border: '0.5px solid var(--border)',
   cursor: 'pointer', transition: 'all .15s',
-}
-
-// Convert UTC ISO string to local datetime-local value (YYYY-MM-DDTHH:mm)
-function utcToLocal(isoStr) {
-  if (!isoStr) return ''
-  const d = new Date(isoStr)
-  const pad = n => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
-// Convert datetime-local value to ISO string with timezone
-function localToISO(localStr) {
-  if (!localStr) return null
-  return new Date(localStr).toISOString()
 }
 
 function CopyBtn({ text }) {

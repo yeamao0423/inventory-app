@@ -4,6 +4,7 @@ import { useAuth } from '../hooks/useAuth'
 import { compressImage } from '../lib/imageUtils'
 import { SHARE_VARS, DEFAULT_SHARE_TEMPLATE, resolveShopBaseUrl } from '../lib/socialShare'
 import { revalidateShop } from '../lib/revalidateShop'
+import { utcToLocal, localToISO } from '../lib/datetime'
 
 // 店家設定（僅店主）：把過去寫死在程式裡的營運參數搬進 stores.settings
 // 新店主首次進入（settings 為空）時作為開店精靈使用
@@ -30,6 +31,8 @@ export default function SettingsPage() {
   const [error, setError] = useState('')
   const [uploadingLogo, setUploadingLogo] = useState(false)
   const [cacheState, setCacheState] = useState('idle') // idle | clearing | done
+  // 加購截止「指定時間」模式的快選：直接沿用現有團的收單時間，省得手打
+  const [recentEnds, setRecentEnds] = useState([])
 
   const isFirstSetup = store && Object.keys(store.settings ?? {}).length === 0
 
@@ -38,6 +41,21 @@ export default function SettingsPage() {
     setStoreName(store.name ?? '')
     setForm(prev => ({ ...prev, ...(store.settings ?? {}) }))
   }, [store])
+
+  useEffect(() => {
+    if (!storeId) return
+    supabase
+      .from('storefront_products')
+      .select('collection_end')
+      .eq('store_id', storeId)
+      .not('collection_end', 'is', null)
+      .gt('collection_end', new Date().toISOString())
+      .order('collection_end', { ascending: false })
+      .limit(20)
+      .then(({ data }) => {
+        setRecentEnds([...new Set((data ?? []).map(r => r.collection_end))].slice(0, 5))
+      })
+  }, [storeId])
 
   const set = (key) => (e) => {
     const v = e.target.value
@@ -129,6 +147,11 @@ export default function SettingsPage() {
     </div>
   )
 
+  const appendMode = form.append_mode || 'off'
+  // 指定時間過期後不需要特別處理：算出來的死線已成過去，加購自然關閉
+  const appendExpired = appendMode === 'absolute'
+    && form.append_until && new Date(form.append_until) < new Date()
+
   return (
     <div className="page">
       <div className="ph">
@@ -201,6 +224,82 @@ export default function SettingsPage() {
             <input className="form-input" type="number" placeholder="3800"
               value={form.free_shipping_threshold ?? ''} onChange={set('free_shipping_threshold')} />
           </div>
+        </div>
+
+        <div className="sec">加購設定</div>
+        <div className="card" style={{ padding: 16 }}>
+          <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 14, lineHeight: 1.7 }}>
+            開放後，消費者可在截止前把新商品追加到已下單的訂單，與原訂單一起出貨、運費只收一次。
+            若加購後跨過免運門檻，系統會自動退掉原本收的運費。
+          </div>
+
+          {[
+            { v: 'off', label: '不開放加購' },
+            { v: 'relative', label: '結單後一段時間內可加購' },
+            { v: 'absolute', label: '加購截止於指定時間' },
+          ].map(o => (
+            <label key={o.v} style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              fontSize: 14, marginBottom: 8, cursor: 'pointer',
+            }}>
+              <input type="radio" name="append_mode" value={o.v}
+                checked={appendMode === o.v}
+                onChange={() => { setForm(prev => ({ ...prev, append_mode: o.v })); setSaved(false) }} />
+              {o.label}
+            </label>
+          ))}
+
+          {appendMode === 'relative' && (
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: '0.5px solid var(--border)' }}>
+              <label className="form-label">結單後可加購時數</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input className="form-input" type="number" min="0" placeholder="24"
+                  style={{ width: 110 }}
+                  value={form.append_hours ?? ''} onChange={set('append_hours')} />
+                <span style={{ fontSize: 14, color: 'var(--text-2)' }}>小時</span>
+              </div>
+              <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-3)', lineHeight: 1.7 }}>
+                從訂單內「最晚」的收單截止時間起算 —— 這張單本來就要等最晚那團到齊才能出貨。
+                填 0 表示一結單就停止加購。商品若沒設收單截止（純現貨），則從下單時間起算。
+              </div>
+            </div>
+          )}
+
+          {appendMode === 'absolute' && (
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: '0.5px solid var(--border)' }}>
+              <label className="form-label">加購截止時間</label>
+              <input className="form-input" type="datetime-local"
+                value={utcToLocal(form.append_until)}
+                onChange={e => {
+                  setForm(prev => ({ ...prev, append_until: localToISO(e.target.value) }))
+                  setSaved(false)
+                }} />
+
+              {recentEnds.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8, alignItems: 'center' }}>
+                  <span style={{ fontSize: 12, color: 'var(--text-3)' }}>沿用收單時間：</span>
+                  {recentEnds.map(iso => (
+                    <button key={iso} type="button"
+                      onClick={() => { setForm(prev => ({ ...prev, append_until: iso })); setSaved(false) }}
+                      style={{
+                        padding: '3px 9px', borderRadius: 7, border: '0.5px solid var(--border)',
+                        background: 'var(--surface)', fontSize: 12, cursor: 'pointer',
+                      }}>
+                      {new Date(iso).toLocaleString('zh-TW', {
+                        month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+                      })}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <div style={{ marginTop: 8, fontSize: 12, color: appendExpired ? 'var(--red)' : 'var(--text-3)', lineHeight: 1.7 }}>
+                {appendExpired
+                  ? '此時間已過，目前等同不開放加購。開新團時記得更新，或改用「結單後一段時間」讓它自動跟著每團走。'
+                  : '所有訂單共用這個截止時間。開新團時要記得手動更新。'}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="sec">匯款資訊（顯示於消費者訂單確認信）</div>

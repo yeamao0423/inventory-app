@@ -1,17 +1,25 @@
 'use client'
 import { useEffect, useState } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '../../../lib/supabase'
 import { getStore } from '../../../lib/store'
-import { useI18n } from '../../layout'
+import { useI18n, useCart } from '../../layout'
+import { formatDeadline, appendInfoFor } from '../../../lib/append'
 
 export default function OrderSuccessPage() {
   // 路由參數雖名為 id，實為不可猜的 public_token（見 20250031 migration）。
   const { id: token } = useParams()
   const { t, lang } = useI18n()
+  const { startAppend } = useCart()
+  const router = useRouter()
   const [order, setOrder] = useState(null)
   const [store, setStore] = useState(null)
+
+  function goAppend() {
+    startAppend(appendInfoFor(order, token))
+    router.push('/products')
+  }
 
   useEffect(() => {
     supabase.rpc('get_consumer_order', { p_token: token })
@@ -128,6 +136,38 @@ export default function OrderSuccessPage() {
             <span>{t('cart.total')}</span>
             <span>NT${Number(order.total_amount || 0).toLocaleString()}</span>
           </div>
+          {Number(order.paid_amount) > 0 && Number(order.balance_due) !== 0 && (
+            <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between', fontSize: 14, color: Number(order.balance_due) > 0 ? 'var(--amber, #b45309)' : '#1a7a3c' }}>
+              <span>{Number(order.balance_due) > 0
+                ? (lang === 'zh' ? '尚需補匯' : 'Balance due')
+                : (lang === 'zh' ? '待退款' : 'Refund due')}</span>
+              <span>NT${Math.abs(Number(order.balance_due)).toLocaleString()}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 加購入口：老闆尚未開始採購、且還在加購窗口內才出現 */}
+      {order?.can_append && (
+        <div style={{
+          background: 'var(--surface)', border: '0.5px solid var(--border)',
+          borderRadius: 14, padding: 20, marginBottom: 20, textAlign: 'left',
+        }}>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>
+            {lang === 'zh' ? '還想再買點什麼？' : 'Want to add more?'}
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7, marginBottom: 12 }}>
+            {lang === 'zh'
+              ? <>可加購至 <strong>{formatDeadline(order.append_deadline, lang)}</strong>，加購商品會與本單一起出貨，運費不會重複計算。</>
+              : <>You can add items until <strong>{formatDeadline(order.append_deadline, lang)}</strong>. They ship together with this order — no extra shipping.</>}
+          </div>
+          <button onClick={goAppend} style={{
+            width: '100%', padding: '11px 0', borderRadius: 10,
+            border: '0.5px solid var(--text-1, #111)', background: 'transparent',
+            fontSize: 14, fontWeight: 600, cursor: 'pointer', color: 'inherit',
+          }}>
+            {lang === 'zh' ? '＋ 加購到這筆訂單' : '＋ Add items to this order'}
+          </button>
         </div>
       )}
 

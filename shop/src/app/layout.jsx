@@ -21,7 +21,14 @@ const I18nContext = createContext({ t: (k) => k, lang: 'zh', setLang: () => {} }
 export function useI18n() { return useContext(I18nContext) }
 
 // ── Cart Context ───────────────────────────
-export const CartContext = createContext({ cart: [], addItem: () => {}, removeItem: () => {}, clearCart: () => {} })
+export const CartContext = createContext({
+  cart: [], addItem: () => {}, removeItem: () => {}, clearCart: () => {},
+  // 加購模式：購物車綁定到某張既有訂單，結帳時走 append_to_order 而非 place_order
+  appendTo: null, startAppend: () => {}, cancelAppend: () => {},
+  // localStorage 是否已讀入。在此之前 cart/appendTo 都還是初始值，
+  // 依它們做導向或分支會誤判（例如把加購結帳當成新訂單結帳）
+  hydrated: false,
+})
 export function useCart() { return useContext(CartContext) }
 
 // ── User Context ───────────────────────────
@@ -33,6 +40,9 @@ export default function RootLayout({ children }) {
   const [lang, setLang] = useState('zh')
   const [msgs, setMsgs] = useState(messages.zh)
   const [cart, setCart] = useState([])
+  // { token, orderNo, deadline } — 有值時購物車是在「加購到既有訂單」
+  const [appendTo, setAppendTo] = useState(null)
+  const [hydrated, setHydrated] = useState(false)
   const [toast, setToast] = useState('')
   const [user, setUser] = useState(null)
   const [userLoading, setUserLoading] = useState(true)
@@ -108,7 +118,23 @@ export default function RootLayout({ children }) {
     setMsgs(messages[saved] || messages.zh)
     const savedCart = localStorage.getItem('cart')
     if (savedCart) setCart(JSON.parse(savedCart))
+    const savedAppend = localStorage.getItem('appendTo')
+    if (savedAppend) {
+      try {
+        const info = JSON.parse(savedAppend)
+        // 死線已過就不要繼續掛著，否則使用者挑完商品才在結帳被擋
+        if (!info?.deadline || new Date(info.deadline) > new Date()) setAppendTo(info)
+        else localStorage.removeItem('appendTo')
+      } catch { localStorage.removeItem('appendTo') }
+    }
+    setHydrated(true)
   }, [])
+
+  useEffect(() => {
+    if (!hydrated) return   // 尚未讀入前不要用初始值覆寫已存的加購狀態
+    if (appendTo) localStorage.setItem('appendTo', JSON.stringify(appendTo))
+    else localStorage.removeItem('appendTo')
+  }, [appendTo, hydrated])
 
   useEffect(() => {
     setMsgs(messages[lang] || messages.zh)
@@ -116,8 +142,9 @@ export default function RootLayout({ children }) {
   }, [lang])
 
   useEffect(() => {
+    if (!hydrated) return   // 讀入前 cart 還是空陣列，寫出去會蓋掉使用者原本的購物車
     localStorage.setItem('cart', JSON.stringify(cart))
-  }, [cart])
+  }, [cart, hydrated])
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -160,6 +187,12 @@ export default function RootLayout({ children }) {
 
   function clearCart() { setCart([]) }
 
+  function startAppend(info) {
+    setAppendTo(info)
+    showToast(lang === 'zh' ? '已進入加購模式，選好商品後一起結算' : 'Adding to your existing order')
+  }
+  function cancelAppend() { setAppendTo(null) }
+
   function showToast(msg) {
     setToast(msg)
     setTimeout(() => setToast(''), 2500)
@@ -177,7 +210,7 @@ export default function RootLayout({ children }) {
       <body>
         <UserContext.Provider value={{ user, loading: userLoading }}>
           <I18nContext.Provider value={{ t, lang, setLang }}>
-            <CartContext.Provider value={{ cart, addItem, removeItem, clearCart }}>
+            <CartContext.Provider value={{ cart, addItem, removeItem, clearCart, appendTo, startAppend, cancelAppend, hydrated }}>
               <nav className="nav">
                 <div className="nav-inner">
                   <Link href="/" className="nav-logo">
@@ -214,6 +247,28 @@ export default function RootLayout({ children }) {
                   </div>
                 </div>
               </nav>
+
+              {/* 加購模式提示列：讓使用者隨時知道現在挑的東西會併進哪張訂單 */}
+              {appendTo && (
+                <div style={{
+                  background: 'var(--text-1, #111)', color: '#fff',
+                  padding: '9px 16px', fontSize: 13,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  gap: 12, flexWrap: 'wrap',
+                }}>
+                  <span>
+                    {lang === 'zh'
+                      ? <>加購中：訂單 <strong>#{appendTo.orderNo}</strong> — 選好商品後一起結算，運費不重複收</>
+                      : <>Adding to order <strong>#{appendTo.orderNo}</strong> — checkout together, no extra shipping</>}
+                  </span>
+                  <button onClick={cancelAppend} style={{
+                    background: 'transparent', color: '#fff', textDecoration: 'underline',
+                    border: 'none', cursor: 'pointer', fontSize: 13, padding: 0,
+                  }}>
+                    {lang === 'zh' ? '取消加購' : 'Cancel'}
+                  </button>
+                </div>
+              )}
 
               {/* 手機版漢堡抽屜：分類專區（兩層）＋會員＋語言切換。桌機由 CSS 隱藏。 */}
               <div className={`drawer-overlay${menuOpen ? ' show' : ''}`} onClick={() => setMenuOpen(false)} />

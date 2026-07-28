@@ -14,8 +14,10 @@ const SERVICE_KEY = process.env.SUPABASE_SECRET_KEY
 // 收件人一律用 DB 的 email。攻擊者無有效 token 無法觸發，也無法指定收件人或注入內容。
 // P0-2：所有帶入 HTML 的 DB/使用者文字一律經 esc() 跳脫。
 export async function POST(request) {
-  const { token, lang } = await request.json().catch(() => ({}))
+  // mode: 'new'（預設，下單確認）| 'append'（加購後的訂單更新通知）
+  const { token, lang, mode } = await request.json().catch(() => ({}))
   const zh = lang !== 'en'
+  const isAppend = mode === 'append'
 
   if (!token) {
     return NextResponse.json({ error: 'Missing token' }, { status: 400 })
@@ -29,7 +31,7 @@ export async function POST(request) {
   const admin = createClient(SUPA_URL, SERVICE_KEY, { auth: { persistSession: false } })
   const { data: row, error: fetchErr } = await admin
     .from('consumer_orders')
-    .select('id, store_id, customer_name, email, phone, address, store_name, store_number, line_id, remittance_last5, note, items_json, total_amount, discount_amount, coupon_id')
+    .select('id, store_id, customer_name, email, phone, address, store_name, store_number, line_id, remittance_last5, note, items_json, total_amount, discount_amount, coupon_id, append_deadline, paid_amount, status')
     .eq('public_token', token)
     .maybeSingle()
 
@@ -67,9 +69,55 @@ export async function POST(request) {
   const storeName = brand.name
 
   const orderNo = order.id?.toString().slice(-6)
-  const subject = zh
-    ? `【${storeName}】訂單確認 #${orderNo} — 感謝您的訂購！`
-    : `${storeName} · Order Confirmed #${orderNo} — Thank you!`
+  const subject = isAppend
+    ? (zh ? `【${storeName}】訂單已更新 #${orderNo} — 加購商品已加入`
+          : `${storeName} · Order Updated #${orderNo} — Items added`)
+    : (zh ? `【${storeName}】訂單確認 #${orderNo} — 感謝您的訂購！`
+          : `${storeName} · Order Confirmed #${orderNo} — Thank you!`)
+
+  // 加購窗口：時間閘門 + 狀態煞車，與 append_to_order 同一組規則。
+  // 伺服器端格式化一定要指定時區，否則會輸出 UTC 時間。
+  const canAppend = ['待確認', '處理中'].includes(row.status)
+    && row.append_deadline && new Date(row.append_deadline) > new Date()
+  const deadlineText = row.append_deadline
+    ? new Date(row.append_deadline).toLocaleString(zh ? 'zh-TW' : 'en-US', {
+        timeZone: 'Asia/Taipei',
+        month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+      })
+    : null
+
+  const paid = Number(row.paid_amount) || 0
+  const balanceDue = total - paid
+
+  // 已收過款才需要講「補匯差額」；否則照原本的付款提醒即可
+  const balanceHtml = paid > 0 && balanceDue !== 0 ? `
+          <table width="100%" cellpadding="0" cellspacing="0" style="margin:-16px 0 24px;">
+            <tr>
+              <td style="padding:6px 0;font-size:14px;color:#888;">${zh ? '已收金額' : 'Already paid'}</td>
+              <td style="padding:6px 0;text-align:right;font-size:14px;color:#888;">NT$${paid.toLocaleString()}</td>
+            </tr>
+            <tr>
+              <td style="padding:6px 0;font-size:15px;font-weight:700;color:${balanceDue > 0 ? '#8a5c00' : '#1a7a3a'};">
+                ${balanceDue > 0 ? (zh ? '尚需補匯' : 'Balance due') : (zh ? '待退款' : 'Refund due')}
+              </td>
+              <td style="padding:6px 0;text-align:right;font-size:17px;font-weight:700;color:${balanceDue > 0 ? '#8a5c00' : '#1a7a3a'};">
+                NT$${Math.abs(balanceDue).toLocaleString()}
+              </td>
+            </tr>
+          </table>` : ''
+
+  // 加購提示：把「還能加購到什麼時候」講清楚，這是下單後最常被問的事
+  const appendHtml = canAppend ? `
+          <div style="background:#f4f4f0;border-radius:12px;padding:16px 20px;margin-bottom:24px;">
+            <div style="font-size:14px;font-weight:700;color:#1a1a1a;margin-bottom:6px;">
+              ${zh ? '還想再買點什麼？' : 'Want to add more?'}
+            </div>
+            <div style="font-size:14px;color:#555;line-height:1.7;">
+              ${zh
+                ? `可於 <strong>${deadlineText}</strong> 前繼續加購，加購商品會與本單一起寄出，<strong>運費不會重複計算</strong>。`
+                : `You can add items until <strong>${deadlineText}</strong>. They ship together with this order — <strong>no extra shipping</strong>.`}
+            </div>
+          </div>` : ''
 
   const itemsRows = (items || []).map(item => `
     <tr>
@@ -139,7 +187,9 @@ export async function POST(request) {
         <tr><td style="background:#1a1a1a;border-radius:16px 16px 0 0;padding:28px 32px;text-align:center;">
           <div style="font-size:22px;font-weight:700;color:#fff;letter-spacing:-0.5px;">${esc(storeName)}</div>
           <div style="font-size:14px;color:rgba(255,255,255,0.6);margin-top:6px;">
-            ${zh ? '感謝您的訂購！' : 'Thank you for your order!'}
+            ${isAppend
+              ? (zh ? '加購商品已加入您的訂單' : 'Items added to your order')
+              : (zh ? '感謝您的訂購！' : 'Thank you for your order!')}
           </div>
         </td></tr>
 
@@ -191,7 +241,8 @@ export async function POST(request) {
               </td>
             </tr>
           </table>
-
+${balanceHtml}
+${appendHtml}
           <!-- Shipping info -->
           <div style="font-size:13px;font-weight:600;color:#999;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;">
             ${zh ? '收件資訊' : 'Pickup Info'}
@@ -285,8 +336,8 @@ export async function POST(request) {
     <tr><td align="center">
       <table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;">
         <tr><td style="background:#1a1a1a;border-radius:16px 16px 0 0;padding:24px 32px;text-align:center;">
-          <div style="font-size:20px;font-weight:700;color:#fff;">📦 新訂單通知</div>
-          <div style="font-size:14px;color:rgba(255,255,255,0.6);margin-top:4px;">訂單 #${orderNo}</div>
+          <div style="font-size:20px;font-weight:700;color:#fff;">${isAppend ? '➕ 訂單加購通知' : '📦 新訂單通知'}</div>
+          <div style="font-size:14px;color:rgba(255,255,255,0.6);margin-top:4px;">訂單 #${orderNo}${isAppend ? '（含加購後全部品項）' : ''}</div>
         </td></tr>
         <tr><td style="background:#fff;padding:28px 32px;border-left:0.5px solid #e8e8e0;border-right:0.5px solid #e8e8e0;">
 
@@ -340,7 +391,9 @@ export async function POST(request) {
     resend.emails.send({
       from: `${storeName} <no-reply@daigogotw.com>`,
       to: storeNotifyTo,
-      subject: `📦【${storeName}】新訂單 #${orderNo} — ${order.name}（NT$${total.toLocaleString()}）`,
+      subject: isAppend
+        ? `➕【${storeName}】訂單 #${orderNo} 加購 — ${order.name}（更新後 NT$${total.toLocaleString()}）`
+        : `📦【${storeName}】新訂單 #${orderNo} — ${order.name}（NT$${total.toLocaleString()}）`,
       html: notifyHtml,
     }).catch(err => console.error('Store notify error:', err))
   } else {

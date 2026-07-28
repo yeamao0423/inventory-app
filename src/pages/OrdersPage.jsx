@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
@@ -782,6 +782,15 @@ function consumerStatusBadge(s) {
   return <span className="badge badge-low">待確認</span>
 }
 
+// payment_status 由 paid_amount 對 total_amount 推導（見 20250052 migration），
+// 加購或取消品項改變金額時會自動落到「部分付款」或「待退款」
+function paymentBadge(s) {
+  if (s === '已付清')   return <span className="badge badge-ok">已付清</span>
+  if (s === '部分付款') return <span className="badge badge-warn">待補款</span>
+  if (s === '待退款')   return <span className="badge badge-warn" style={{ color: 'var(--red)' }}>待退款</span>
+  return <span className="badge badge-low">未付</span>
+}
+
 function ConsumerOrderCard({ order: o, onTap }) {
   return (
     <div className="card" onClick={onTap} style={{ cursor: 'pointer' }}>
@@ -791,9 +800,7 @@ function ConsumerOrderCard({ order: o, onTap }) {
             <span className="fw600 fs15">{o.customer_name}</span>
             <div style={{ display: 'flex', gap: 6 }}>
               {consumerStatusBadge(o.status)}
-              {o.payment_status === '已付清'
-                ? <span className="badge badge-ok">已付清</span>
-                : <span className="badge badge-low">未付</span>}
+              {paymentBadge(o.payment_status)}
             </div>
           </div>
           <div className="muted fs12 mt8">#{o.id?.toString().slice(-6)} · {o.items}</div>
@@ -866,14 +873,32 @@ function ProcurementItemCard({ item, onPreview }) {
   )
 }
 
-const FREE_SHIPPING_THRESHOLD = 3800
-const DEFAULT_SHIPPING_FEE = 60
 const notifyBtn = { padding: '8px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }
 
 function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
+  const { storeId, store } = useAuth()
+  // 運費規則以店家設定為準，與 append_to_order（商城加購）用同一組數字，
+  // 否則同一筆訂單在後台與商城會算出不同運費
+  const FREE_SHIPPING_THRESHOLD = store?.settings?.free_shipping_threshold ?? 3800
+  const DEFAULT_SHIPPING_FEE = store?.settings?.shipping_fee ?? 60
+
   const [status, setStatus] = useState(o.status || '待確認')
-  const [payStatus, setPayStatus] = useState(o.payment_status || '未付')
   const [saving, setSaving] = useState(false)
+
+  // 收付款明細：payment_status 不再手動指定，由已收金額對應付金額推導
+  const [payments, setPayments] = useState([])
+  const [payInput, setPayInput] = useState('')
+  const [payNote, setPayNote] = useState('')
+  const [payBusy, setPayBusy] = useState(false)
+
+  const loadPayments = useCallback(async () => {
+    const { data } = await supabase
+      .from('order_payments').select('*').eq('order_id', o.id).order('id')
+    setPayments(data || [])
+  }, [o.id])
+  useEffect(() => { loadPayments() }, [loadPayments])
+
+  const paidAmount = payments.reduce((s, p) => s + (Number(p.amount) || 0), 0)
 
   // 從 items_json 初始化，已有 status: 'cancelled' 的保留取消狀態
   const [itemStatuses, setItemStatuses] = useState(
@@ -912,7 +937,6 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
   }
 
   // 加購商品：商品庫選擇器
-  const { storeId } = useAuth()
   const [addProducts, setAddProducts] = useState([])
   const [addVariants, setAddVariants] = useState({})
   const [addSpMap, setAddSpMap] = useState({})
@@ -1019,6 +1043,8 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
   const meetsThreshold = activeSubtotal >= FREE_SHIPPING_THRESHOLD
   const effectiveShippingFee = !hasAnyChange ? shippingFee : (meetsThreshold ? 0 : shippingFee)
   const newTotal = activeSubtotal + effectiveShippingFee
+  // 正 = 消費者要補匯、負 = 要退款給消費者
+  const balanceDue = newTotal - paidAmount
 
   const hasItems = itemStatuses.length > 0
 
@@ -1105,50 +1131,57 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
     alert('訂單修改通知已寄出')
   }
 
+  // 登記一筆收款或退款。付款狀態不再手動選，由這些金額加總推導出來。
+  async function addPayment(kind) {
+    const amt = Math.abs(Number(payInput))
+    if (!amt || Number.isNaN(amt)) { alert('請輸入金額'); return }
+    setPayBusy(true)
+    const { error } = await supabase.from('order_payments').insert({
+      store_id: o.store_id ?? storeId,
+      order_id: o.id,
+      amount: kind === 'refund' ? -amt : amt,
+      method: 'remittance',
+      note: payNote.trim() || null,
+    })
+    setPayBusy(false)
+    if (error) { alert('登記失敗：' + error.message); return }
+    setPayInput(''); setPayNote('')
+    await loadPayments()
+    onSaved()
+  }
+
+  async function removePayment(id) {
+    if (!window.confirm('確定刪除這筆收付款紀錄？')) return
+    setPayBusy(true)
+    const { error } = await supabase.from('order_payments').delete().eq('id', id)
+    setPayBusy(false)
+    if (error) { alert('刪除失敗：' + error.message); return }
+    await loadPayments()
+    onSaved()
+  }
+
   async function save() {
     const active = itemStatuses.filter(i => !i._cancelled)
     const cancelled = itemStatuses.filter(i => i._cancelled)
     const qtyReduced = active.some(i => i.qty < i._originalQty)
 
-    // ── 庫存驗證（僅加購品項）──
+    setSaving(true)
+
+    // ── 加購品項：驗庫存並實際扣除 ──
+    // 舊版只查詢比對、從不扣庫存，同一批貨被多張訂單加購就會超賣。
+    // 交給 RPC 在單一交易裡「驗 + 扣」，庫存不足直接中止儲存。
     const addedItems = active.filter(i => i._added && i.id)
     if (addedItems.length > 0) {
-      setSaving(true)
-
-      // 分為有規格、無規格兩批查詢
-      const withVariant = addedItems.filter(i => i.variantId)
-      const noVariant   = addedItems.filter(i => !i.variantId)
-
-      const checks = await Promise.all([
-        withVariant.length > 0
-          ? supabase.from('product_variants').select('id, stock').in('id', withVariant.map(i => i.variantId))
-          : Promise.resolve({ data: [] }),
-        noVariant.length > 0
-          ? supabase.from('products').select('id, name, quantity').in('id', noVariant.map(i => i.id))
-          : Promise.resolve({ data: [] }),
-      ])
-
-      const variantStockMap = Object.fromEntries((checks[0].data || []).map(v => [v.id, v.stock]))
-      const productStockMap = Object.fromEntries((checks[1].data || []).map(p => [p.id, { name: p.name, stock: p.quantity }]))
-
-      const failed = []
-      for (const item of withVariant) {
-        const stock = variantStockMap[item.variantId] ?? 0
-        if (item.qty > stock) failed.push(`${item.name}（${item.variantLabel || '無規格'}）：需要 ${item.qty} 件，庫存剩 ${stock} 件`)
-      }
-      for (const item of noVariant) {
-        const stock = productStockMap[item.id]?.stock ?? 0
-        if (item.qty > stock) failed.push(`${item.name}：需要 ${item.qty} 件，庫存剩 ${stock} 件`)
-      }
-
-      if (failed.length > 0) {
-        alert('加購商品庫存不足，無法儲存：\n\n' + failed.join('\n'))
+      const { data: stockRes, error: stockErr } = await supabase.rpc('deduct_items_stock', {
+        p_store_id: storeId,
+        p_items_json: addedItems.map(({ _cancelled, _added, _originalQty, _stock, ...item }) => item),
+      })
+      if (stockErr || !stockRes?.ok) {
+        alert('加購商品無法扣庫存：\n\n' + (stockRes?.error || stockErr?.message))
         setSaving(false)
         return
       }
     }
-
-    setSaving(true)
 
     // 判斷 fulfillment_type
     let fulfillment_type = o.fulfillment_type || null
@@ -1168,9 +1201,10 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
       status: _cancelled ? 'cancelled' : 'active',
     }))
 
+    // payment_status 不在此寫入：它由 paid_amount 對 total_amount 推導，
+    // 這裡改了 total_amount，trigger 會自動把付款狀態調成待補款或待退款
     await supabase.from('consumer_orders').update({
       status,
-      payment_status: payStatus,
       items_json: updatedItemsJson,
       shipping_fee: effectiveShippingFee,
       total_amount: updatedTotal,
@@ -1179,7 +1213,7 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
     }).eq('id', o.id)
 
     // 半自動出貨通知：已收款 + 狀態改為已出貨 → 詢問是否寄出貨通知
-    if (status === '已出貨' && payStatus === '已付清') {
+    if (status === '已出貨' && paidAmount >= updatedTotal && updatedTotal > 0) {
       if (window.confirm('訂單已標記為「已出貨」且「已收款」，是否寄出出貨通知 Email 給消費者？')) {
         await triggerStatusEmail(buildEmailPayload('shipped'))
       }
@@ -1570,28 +1604,82 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
 
       {canEdit && (
         <>
+          <div className="sec" style={{ marginTop: 0 }}>收款</div>
+          <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+            <div className="card-row row-sb">
+              <span className="muted fs13">應付</span>
+              <span className="fs13 fw600">NT${newTotal.toLocaleString()}</span>
+            </div>
+            <div className="card-row row-sb">
+              <span className="muted fs13">已收</span>
+              <span className="fs13">NT${paidAmount.toLocaleString()}</span>
+            </div>
+            {balanceDue !== 0 && (
+              <div className="card-row row-sb">
+                <span className="fs13 fw600" style={{ color: balanceDue > 0 ? 'var(--red)' : 'var(--green)' }}>
+                  {balanceDue > 0 ? '待補款' : '待退款'}
+                </span>
+                <span className="fs13 fw600" style={{ color: balanceDue > 0 ? 'var(--red)' : 'var(--green)' }}>
+                  NT${Math.abs(balanceDue).toLocaleString()}
+                </span>
+              </div>
+            )}
+
+            {payments.length > 0 && (
+              <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid var(--border)' }}>
+                {payments.map(p => (
+                  <div key={p.id} className="row-sb" style={{ padding: '4px 0', gap: 8 }}>
+                    <span className="muted fs12" style={{ flex: 1, minWidth: 0 }}>
+                      {new Date(p.created_at).toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit' })}
+                      {p.note ? ` · ${p.note}` : ''}
+                    </span>
+                    <span className="fs12 fw600" style={{ color: Number(p.amount) < 0 ? 'var(--green)' : 'inherit' }}>
+                      {Number(p.amount) < 0 ? '−' : '+'}NT${Math.abs(Number(p.amount)).toLocaleString()}
+                    </span>
+                    <button onClick={() => removePayment(p.id)} disabled={payBusy}
+                      style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', fontSize: 15, lineHeight: 1 }}>
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid var(--border)' }}>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <input className="form-input" type="number" style={{ flex: 1, fontSize: 13 }}
+                  placeholder={balanceDue > 0 ? `待補 ${balanceDue}` : '金額'}
+                  value={payInput} onChange={e => setPayInput(e.target.value)} />
+                <input className="form-input" style={{ flex: 1.4, fontSize: 13 }}
+                  placeholder="備註（選填）"
+                  value={payNote} onChange={e => setPayNote(e.target.value)} />
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={() => addPayment('payment')} disabled={payBusy}
+                  style={{ ...notifyBtn, flex: 1, background: '#e8f7ee', color: '#1a7a3a', border: '0.5px solid #c5e8d2' }}>
+                  登記收款
+                </button>
+                <button onClick={() => addPayment('refund')} disabled={payBusy}
+                  style={{ ...notifyBtn, flex: 1, background: 'var(--bg)', color: 'var(--text-2)', border: '0.5px solid var(--border)' }}>
+                  登記退款
+                </button>
+              </div>
+              <div className="muted fs12" style={{ marginTop: 6 }}>
+                付款狀態由「已收」對「應付」自動判定，不需手動切換。
+              </div>
+            </div>
+          </div>
+
           <div className="sec" style={{ marginTop: 0 }}>更新狀態</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
-            <div>
-              <label className="form-label fs12">訂單狀態</label>
-              <CustomSelect
-                label={status}
-                value={status}
-                options={['待確認', '處理中', '已購買', '已出貨', '完成', '已取消'].map(s => ({ value: s, label: s }))}
-                onChange={v => v && setStatus(v)}
-                allowClear={false}
-              />
-            </div>
-            <div>
-              <label className="form-label fs12">付款狀態</label>
-              <CustomSelect
-                label={payStatus}
-                value={payStatus}
-                options={['未付', '已付清'].map(s => ({ value: s, label: s }))}
-                onChange={v => v && setPayStatus(v)}
-                allowClear={false}
-              />
-            </div>
+          <div style={{ marginBottom: 14 }}>
+            <label className="form-label fs12">訂單狀態</label>
+            <CustomSelect
+              label={status}
+              value={status}
+              options={['待確認', '處理中', '已購買', '已出貨', '完成', '已取消'].map(s => ({ value: s, label: s }))}
+              onChange={v => v && setStatus(v)}
+              allowClear={false}
+            />
           </div>
           {(status === '已出貨' || status === '完成') && (
             <div style={{ marginBottom: 14 }}>
@@ -1711,7 +1799,7 @@ function AddOrderSheet({ onClose, onSaved }) {
     })
 
     // 同時建立 consumer_orders 以便採購彙整計算
-    await supabase.from('consumer_orders').insert({
+    const { data: co } = await supabase.from('consumer_orders').insert({
       store_id: storeId,
       customer_name: form.customer,
       phone: form.phone || null,
@@ -1721,10 +1809,18 @@ function AddOrderSheet({ onClose, onSaved }) {
       items: itemsStr,
       items_json: itemsJson,
       total_amount: total || null,
-      payment_status: payStatus === '已付清' ? '已付清' : '未付',
       status: '待確認',
       note: form.note,
-    })
+    }).select('id').single()
+
+    // 收到的訂金要落成一筆收款紀錄；payment_status 由金額推導，
+    // 直接寫欄位會被 trigger 覆蓋成「未付」
+    if (co?.id && deposit > 0) {
+      await supabase.from('order_payments').insert({
+        store_id: storeId, order_id: co.id, amount: deposit,
+        method: 'cash', note: '自建訂單訂金',
+      })
+    }
 
     setSaving(false)
     onSaved()
