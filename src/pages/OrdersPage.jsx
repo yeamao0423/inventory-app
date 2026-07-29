@@ -811,7 +811,7 @@ function ConsumerOrderCard({ order: o, onTap }) {
         <div className="card-row row-sb" style={{ background: 'var(--bg)' }}>
           <div>
             <span className="muted fs12">總額 </span>
-            <span className="fw600">NT${(Number(o.total_amount) - Number(o.discount_amount || 0)).toLocaleString()}</span>
+            <span className="fw600">NT${Number(o.total_amount).toLocaleString()}</span>
             {Number(o.discount_amount) > 0 && (
               <span className="fs12" style={{ color: 'var(--green)', marginLeft: 6 }}>已折 NT${Number(o.discount_amount).toLocaleString()}</span>
             )}
@@ -890,6 +890,14 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
   const [payInput, setPayInput] = useState('')
   const [payNote, setPayNote] = useState('')
   const [payBusy, setPayBusy] = useState(false)
+  // 登記收款/退款：點開後帶入建議金額（有待補款/待退款時自動預填），可自行覆蓋
+  const [payAction, setPayAction] = useState(null) // null | 'in' | 'out'
+
+  // 折讓金額：total_amount 在資料庫裡存的是「小計+運費-折讓」後的淨額（見 place_order），
+  // 有優惠券時折讓由優惠券機制管理（鎖住不可編輯，避免疊加）；沒有優惠券則開放手動輸入議價/服務補償折讓。
+  // 失焦即時寫回 DB，確保之後點「已付款/部分付款」快捷鍵時，付款狀態 trigger 算的 total_amount 已經是最新值。
+  const [discountAmount, setDiscountAmount] = useState(Number(o.discount_amount) || 0)
+  const [discountBusy, setDiscountBusy] = useState(false)
 
   const loadPayments = useCallback(async () => {
     const { data } = await supabase
@@ -1042,11 +1050,58 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
   const hasAnyChange = hasAnyCancel || hasQtyChange || hasAddedItems
   const meetsThreshold = activeSubtotal >= FREE_SHIPPING_THRESHOLD
   const effectiveShippingFee = !hasAnyChange ? shippingFee : (meetsThreshold ? 0 : shippingFee)
-  const newTotal = activeSubtotal + effectiveShippingFee
+  // 折扣前金額（小計+運費，尚未扣折讓）
+  const preDiscountTotal = activeSubtotal + effectiveShippingFee
+  // 應付＝折扣前金額扣掉折讓，跟 place_order/append_to_order 存進 total_amount 的淨額算法一致
+  const newTotal = Math.max(0, preDiscountTotal - discountAmount)
   // 正 = 消費者要補匯、負 = 要退款給消費者
   const balanceDue = newTotal - paidAmount
+  // 即時推導付款狀態，邏輯對齊 sync_payment_status（DB trigger）：
+  // 已付清的訂單如果只是退款（total 沒變），狀態鎖住不退回部分付款；
+  // 加購讓 total 變大才會真的落到部分付款
+  const wasFullyPaid = o.payment_status === '已付清'
+  const totalUnchanged = newTotal === (Number(o.total_amount) || 0)
+  const lockedAsPaid = wasFullyPaid && totalUnchanged && paidAmount < newTotal
+  const derivedPaymentStatus = lockedAsPaid ? '已付清' :
+    paidAmount <= 0 ? '未付' :
+    paidAmount < newTotal ? '部分付款' :
+    paidAmount === newTotal ? '已付清' : '待退款'
+
+  // 收款卡片頂部狀態色塊的顏色與白話說明
+  const heroInfo =
+    lockedAsPaid ? {
+      bg: 'var(--green-bg)', color: 'var(--green)', title: '已付清',
+      sub: `已收 NT$${paidAmount.toLocaleString()}（已鎖定，退款不會退回部分付款）`,
+    } :
+    derivedPaymentStatus === '已付清' ? {
+      bg: 'var(--green-bg)', color: 'var(--green)', title: '已付清', sub: '已收足額，無需再收款',
+    } :
+    derivedPaymentStatus === '部分付款' ? {
+      bg: 'var(--amber-bg)', color: 'var(--amber)', title: '部分付款',
+      sub: `還差 NT$${balanceDue.toLocaleString()}，記得跟消費者收款`,
+    } :
+    derivedPaymentStatus === '待退款' ? {
+      bg: 'var(--red-bg)', color: 'var(--red)', title: '待退款',
+      sub: `多收了 NT$${Math.abs(balanceDue).toLocaleString()}，記得退給消費者`,
+    } : {
+      bg: 'var(--bg)', color: 'var(--text-2)', title: '未付款', sub: '尚未收到款項',
+    }
 
   const hasItems = itemStatuses.length > 0
+
+  // 折讓金額失焦即存：只更新 discount_amount / total_amount 這兩欄，
+  // 不動品項與狀態，避免跟下面整批儲存的 save() 互相覆蓋、也讓快捷收款按鈕能立刻用到最新應付金額
+  async function applyDiscount() {
+    if (o.coupon_id) return // 有優惠券時折讓鎖住，由優惠券機制管理
+    const amt = Math.max(0, Number(discountAmount) || 0)
+    setDiscountBusy(true)
+    const { error } = await supabase.from('consumer_orders')
+      .update({ discount_amount: amt, total_amount: Math.max(0, preDiscountTotal - amt) })
+      .eq('id', o.id)
+    setDiscountBusy(false)
+    if (error) { alert('更新折讓失敗：' + error.message); return }
+    onSaved()
+  }
 
   async function triggerStatusEmail({ activeItems, cancelledItems, shippingFee, newTotal, fulfillment_type, trackingNumber }) {
     try {
@@ -1132,22 +1187,41 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
   }
 
   // 登記一筆收款或退款。付款狀態不再手動選，由這些金額加總推導出來。
-  async function addPayment(kind) {
-    const amt = Math.abs(Number(payInput))
-    if (!amt || Number.isNaN(amt)) { alert('請輸入金額'); return }
+  async function addPayment(kind, amount = payInput, note = payNote) {
+    const amt = Math.abs(Number(amount))
+    if (!amt || Number.isNaN(amt)) { alert('請輸入金額'); return false }
     setPayBusy(true)
     const { error } = await supabase.from('order_payments').insert({
       store_id: o.store_id ?? storeId,
       order_id: o.id,
       amount: kind === 'refund' ? -amt : amt,
       method: 'remittance',
-      note: payNote.trim() || null,
+      note: note?.trim() || null,
     })
     setPayBusy(false)
-    if (error) { alert('登記失敗：' + error.message); return }
+    if (error) { alert('登記失敗：' + error.message); return false }
     setPayInput(''); setPayNote('')
     await loadPayments()
     onSaved()
+    return true
+  }
+
+  function openPayAction(kind) {
+    setPayAction(kind)
+    setPayNote('')
+    if (kind === 'in') setPayInput(balanceDue > 0 ? String(balanceDue) : '')
+    else setPayInput(balanceDue < 0 ? String(Math.abs(balanceDue)) : '')
+  }
+
+  function cancelPayAction() {
+    setPayAction(null)
+    setPayInput('')
+    setPayNote('')
+  }
+
+  async function confirmPayAction() {
+    const ok = await addPayment(payAction === 'out' ? 'refund' : 'payment')
+    if (ok) setPayAction(null)
   }
 
   async function removePayment(id) {
@@ -1203,11 +1277,14 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
 
     // payment_status 不在此寫入：它由 paid_amount 對 total_amount 推導，
     // 這裡改了 total_amount，trigger 會自動把付款狀態調成待補款或待退款
+    // total_amount 已經扣過 discount_amount（見 newTotal 算法），跟 place_order/append_to_order 的淨額慣例一致，
+    // 避免品項/狀態編輯把折讓洗掉
     await supabase.from('consumer_orders').update({
       status,
       items_json: updatedItemsJson,
       shipping_fee: effectiveShippingFee,
       total_amount: updatedTotal,
+      discount_amount: discountAmount,
       fulfillment_type,
       tracking_number: trackingNumber || null,
     }).eq('id', o.id)
@@ -1246,18 +1323,18 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
           <span className="fs13">{new Date(o.created_at).toLocaleString('zh-TW')}</span>
         </div>
         <div className="card-row row-sb">
-          <span className="muted fs13">{o.coupon_id && Number(o.discount_amount) > 0 ? '折扣前金額' : '總金額'}</span>
-          <span className="fw600">NT${Number(hasAnyChange ? newTotal : (o.total_amount || 0)).toLocaleString()}</span>
+          <span className="muted fs13">{discountAmount > 0 ? '折扣前金額' : '總金額'}</span>
+          <span className="fw600">NT${Number(hasAnyChange ? preDiscountTotal : (Number(o.total_amount || 0) + Number(o.discount_amount || 0))).toLocaleString()}</span>
         </div>
-        {o.coupon_id && Number(o.discount_amount) > 0 && (
+        {discountAmount > 0 && (
           <>
             <div className="card-row row-sb">
-              <span className="muted fs13">優惠券折抵</span>
-              <span className="fs13" style={{ color: 'var(--green)' }}>-NT${Number(o.discount_amount || 0).toLocaleString()}</span>
+              <span className="muted fs13">{o.coupon_id ? '優惠券折抵' : '折讓金額'}</span>
+              <span className="fs13" style={{ color: 'var(--green)' }}>-NT${discountAmount.toLocaleString()}</span>
             </div>
             <div className="card-row row-sb" style={{ borderTop: '0.5px solid var(--border)', marginTop: 4, paddingTop: 8 }}>
               <span className="fw600 fs13">實付金額</span>
-              <span className="fw600">NT${(Number(hasAnyChange ? newTotal : (o.total_amount || 0)) - Number(o.discount_amount || 0)).toLocaleString()}</span>
+              <span className="fw600">NT${Number(hasAnyChange ? newTotal : (o.total_amount || 0)).toLocaleString()}</span>
             </div>
           </>
         )}
@@ -1589,10 +1666,10 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
               </span>
             </div>
           )}
-          {o.coupon_id && Number(o.discount_amount) > 0 && (
+          {discountAmount > 0 && (
             <div className="card-row row-sb">
-              <span className="muted fs13" style={{ color: 'var(--green)' }}>優惠券折抵</span>
-              <span className="fs13" style={{ color: 'var(--green)' }}>-NT${Number(o.discount_amount).toLocaleString()}</span>
+              <span className="muted fs13" style={{ color: 'var(--green)' }}>{o.coupon_id ? '優惠券折抵' : '折讓金額'}</span>
+              <span className="fs13" style={{ color: 'var(--green)' }}>-NT${discountAmount.toLocaleString()}</span>
             </div>
           )}
           <div className="card-row row-sb" style={{ borderTop: '1.5px solid var(--text)', paddingTop: 10 }}>
@@ -1605,66 +1682,99 @@ function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
       {canEdit && (
         <>
           <div className="sec" style={{ marginTop: 0 }}>收款</div>
-          <div className="card" style={{ padding: 14, marginBottom: 14 }}>
-            <div className="card-row row-sb">
-              <span className="muted fs13">應付</span>
-              <span className="fs13 fw600">NT${newTotal.toLocaleString()}</span>
+          <div className="card" style={{ marginBottom: 14, overflow: 'hidden' }}>
+            {/* 狀態色塊：一眼看出目前狀態＋該做什麼，不可點擊（狀態由金額自動推導） */}
+            <div style={{ padding: 14, background: heroInfo.bg }}>
+              <div className="fw600" style={{ color: heroInfo.color, fontSize: 15 }}>{heroInfo.title}</div>
+              <div className="fs12" style={{ color: 'var(--text-2)', marginTop: 2 }}>{heroInfo.sub}</div>
             </div>
-            <div className="card-row row-sb">
-              <span className="muted fs13">已收</span>
-              <span className="fs13">NT${paidAmount.toLocaleString()}</span>
-            </div>
-            {balanceDue !== 0 && (
+
+            <div style={{ padding: 14 }}>
               <div className="card-row row-sb">
-                <span className="fs13 fw600" style={{ color: balanceDue > 0 ? 'var(--red)' : 'var(--green)' }}>
-                  {balanceDue > 0 ? '待補款' : '待退款'}
-                </span>
-                <span className="fs13 fw600" style={{ color: balanceDue > 0 ? 'var(--red)' : 'var(--green)' }}>
-                  NT${Math.abs(balanceDue).toLocaleString()}
-                </span>
+                <span className="muted fs13">折讓金額{o.coupon_id ? '（優惠券，鎖定）' : '（議價／服務補償）'}</span>
+                {o.coupon_id ? (
+                  <span className="fs13">NT${discountAmount.toLocaleString()}</span>
+                ) : (
+                  <input className="form-input" type="number" min={0}
+                    style={{ width: 100, fontSize: 13, textAlign: 'right' }}
+                    value={discountAmount || ''} placeholder="0" disabled={discountBusy}
+                    onChange={e => setDiscountAmount(Math.max(0, Number(e.target.value) || 0))}
+                    onBlur={applyDiscount} />
+                )}
               </div>
-            )}
+              <div className="card-row row-sb">
+                <span className="muted fs13">應付</span>
+                <span className="fs13 fw600">NT${newTotal.toLocaleString()}</span>
+              </div>
+              <div className="card-row row-sb">
+                <span className="muted fs13">已收</span>
+                <span className="fs13">NT${paidAmount.toLocaleString()}</span>
+              </div>
+              {balanceDue !== 0 && !lockedAsPaid && (
+                <div className="card-row row-sb">
+                  <span className="fs13 fw600">差額</span>
+                  <span className="fs13 fw600" style={{ color: balanceDue > 0 ? 'var(--amber)' : 'var(--red)' }}>
+                    {balanceDue > 0 ? '+' : '−'}NT${Math.abs(balanceDue).toLocaleString()}
+                    {balanceDue > 0 ? ' 待收' : ' 待退'}
+                  </span>
+                </div>
+              )}
 
-            {payments.length > 0 && (
-              <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid var(--border)' }}>
-                {payments.map(p => (
-                  <div key={p.id} className="row-sb" style={{ padding: '4px 0', gap: 8 }}>
-                    <span className="muted fs12" style={{ flex: 1, minWidth: 0 }}>
-                      {new Date(p.created_at).toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit' })}
-                      {p.note ? ` · ${p.note}` : ''}
-                    </span>
-                    <span className="fs12 fw600" style={{ color: Number(p.amount) < 0 ? 'var(--green)' : 'inherit' }}>
-                      {Number(p.amount) < 0 ? '−' : '+'}NT${Math.abs(Number(p.amount)).toLocaleString()}
-                    </span>
-                    <button onClick={() => removePayment(p.id)} disabled={payBusy}
-                      style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', fontSize: 15, lineHeight: 1 }}>
-                      ×
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
+              {payments.length > 0 && (
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid var(--border)' }}>
+                  {payments.map(p => (
+                    <div key={p.id} className="row-sb" style={{ padding: '4px 0', gap: 8 }}>
+                      <span className="muted fs12" style={{ flex: 1, minWidth: 0 }}>
+                        {new Date(p.created_at).toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit' })}
+                        {p.note ? ` · ${p.note}` : ''}
+                      </span>
+                      <span className="fs12 fw600" style={{ color: Number(p.amount) < 0 ? 'var(--red)' : 'var(--green)' }}>
+                        {Number(p.amount) < 0 ? '−' : '+'}NT${Math.abs(Number(p.amount)).toLocaleString()}
+                      </span>
+                      <button onClick={() => removePayment(p.id)} disabled={payBusy}
+                        style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', fontSize: 15, lineHeight: 1 }}>
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
 
-            <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid var(--border)' }}>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                <input className="form-input" type="number" style={{ flex: 1, fontSize: 13 }}
-                  placeholder={balanceDue > 0 ? `待補 ${balanceDue}` : '金額'}
-                  value={payInput} onChange={e => setPayInput(e.target.value)} />
-                <input className="form-input" style={{ flex: 1.4, fontSize: 13 }}
-                  placeholder="備註（選填）"
-                  value={payNote} onChange={e => setPayNote(e.target.value)} />
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button onClick={() => addPayment('payment')} disabled={payBusy}
+              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                <button onClick={() => openPayAction('in')} disabled={payBusy || discountBusy}
                   style={{ ...notifyBtn, flex: 1, background: '#e8f7ee', color: '#1a7a3a', border: '0.5px solid #c5e8d2' }}>
                   登記收款
                 </button>
-                <button onClick={() => addPayment('refund')} disabled={payBusy}
+                <button onClick={() => openPayAction('out')} disabled={payBusy || discountBusy}
                   style={{ ...notifyBtn, flex: 1, background: 'var(--bg)', color: 'var(--text-2)', border: '0.5px solid var(--border)' }}>
                   登記退款
                 </button>
               </div>
-              <div className="muted fs12" style={{ marginTop: 6 }}>
+
+              {payAction && (
+                <div style={{ background: 'var(--bg)', borderRadius: 10, padding: 10, marginTop: 10, border: '0.5px solid var(--border)' }}>
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                    <input className="form-input" type="number" style={{ flex: 1, fontSize: 13 }}
+                      autoFocus placeholder="金額"
+                      value={payInput} onChange={e => setPayInput(e.target.value)} />
+                    <input className="form-input" style={{ flex: 1.4, fontSize: 13 }}
+                      placeholder="備註（選填）"
+                      value={payNote} onChange={e => setPayNote(e.target.value)} />
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={cancelPayAction} disabled={payBusy}
+                      style={{ ...notifyBtn, flex: 1, background: 'var(--surface)', color: 'var(--text-2)', border: '0.5px solid var(--border)' }}>
+                      取消
+                    </button>
+                    <button onClick={confirmPayAction} disabled={payBusy || discountBusy}
+                      style={{ ...notifyBtn, flex: 1, background: 'var(--text)', color: 'var(--bg)' }}>
+                      確認{payAction === 'out' ? '退款' : '收款'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="muted fs12" style={{ marginTop: 10 }}>
                 付款狀態由「已收」對「應付」自動判定，不需手動切換。
               </div>
             </div>
