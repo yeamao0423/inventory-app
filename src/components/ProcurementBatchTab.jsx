@@ -166,7 +166,7 @@ export default function ProcurementBatchTab() {
             <div className="card-row">
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div className="row-sb">
-                  <span className="fw600 fs14">#{batch.id} · {batch.source || '未設定來源'}</span>
+                  <span className="fw600 fs14">#{batch.id} · {batch.source || '手動建立'}</span>
                   <span style={{ fontSize: 12, padding: '2px 10px', borderRadius: 12, background: st.color + '18', color: st.color, fontWeight: 600 }}>
                     {st.text}
                   </span>
@@ -319,7 +319,7 @@ function BatchDetailSheet({ batch, members, memberMap, rates, onClose, onSaved }
   const isSettled = batch.status === 'settled'
 
   return (
-    <Sheet title={`批次 #${batch.id} — ${batch.source || '未設定來源'}`} onClose={onClose}>
+    <Sheet title={`批次 #${batch.id} — ${batch.source || '手動建立'}`} onClose={onClose}>
       {/* 批次資訊 */}
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="card-row row-sb">
@@ -688,16 +688,22 @@ function expandItemsToRows(items) {
 export function CreateBatchSheet({ source, items, onClose, onSaved }) {
   const { storeId } = useAuth()
   const [members, setMembers] = useState([])
+  const [trips, setTrips] = useState([])
+  const [tripId, setTripId] = useState(null)
   const [batchDate, setBatchDate] = useState(new Date().toISOString().slice(0, 10))
   const [buyerId, setBuyerId] = useState(null)
   const [managerId, setManagerId] = useState(null)
   const [note, setNote] = useState('')
   const [rows, setRows] = useState(() => expandItemsToRows(items))
   const [saving, setSaving] = useState(false)
+  const [showPicker, setShowPicker] = useState(false)
 
   useEffect(() => {
     if (!storeId) return
     fetchStoreMembers(storeId).then(m => setMembers(m))
+    supabase.from('trips').select('id, destination, depart_date, return_date')
+      .eq('store_id', storeId).order('depart_date', { ascending: false })
+      .then(({ data }) => setTrips(data || []))
   }, [storeId])
 
   const toggleRow = (idx) => {
@@ -712,11 +718,40 @@ export function CreateBatchSheet({ source, items, onClose, onSaved }) {
     ))
   }
 
+  const updateRowCost = (idx, newCost) => {
+    setRows(prev => prev.map((r, i) => i === idx ? { ...r, cost: newCost } : r))
+  }
+
+  const removeRow = (idx) => {
+    setRows(prev => prev.filter((_, i) => i !== idx))
+  }
+
+  function addManualRow(prod, variant, valueMap) {
+    const vLabel = variant
+      ? Object.values(variant.options || {}).map(id => valueMap[id]).filter(Boolean).join(' / ')
+      : null
+    // 成本軸：variant.variant_cost ?? products.cost（跟商品頁一致），幣別在商品層
+    const cost = variant?.variant_cost ?? prod.cost ?? 0
+    setRows(prev => [...prev, {
+      _key: `manual-${prod.id}-${variant?.id ?? 'novariant'}-${prev.length}`,
+      _checked: true,
+      productId: prod.id,
+      name: prod.name,
+      sku: prod.sku,
+      variantLabel: vLabel,
+      variantId: variant?.id || null,
+      maxQty: 999999,
+      qty: 1,
+      cost: Number(cost) || 0,
+      currency: prod.currency || 'TWD',
+    }])
+    setShowPicker(false)
+  }
+
   const checkedRows = rows.filter(r => r._checked && r.qty > 0)
 
   async function createBatch() {
     if (!buyerId) return alert('請選擇付款人')
-    if (checkedRows.length === 0) return alert('請至少選擇一個品項')
     setSaving(true)
 
     const { data: batch, error } = await supabase.from('procurement_batches').insert({
@@ -727,6 +762,7 @@ export function CreateBatchSheet({ source, items, onClose, onSaved }) {
       note: note.trim() || null,
       store_id: storeId,
       status: 'done',
+      trip_id: tripId || null,
     }).select().single()
 
     if (error || !batch) {
@@ -790,10 +826,32 @@ export function CreateBatchSheet({ source, items, onClose, onSaved }) {
         </div>
       </div>
 
-      <div className="sec" style={{ marginTop: 0 }}>採購品項</div>
+      <div className="form-group" style={{ marginBottom: 16 }}>
+        <label className="form-label">掛行程（選填）</label>
+        <CustomSelect
+          label={trips.find(t => t.id === tripId)
+            ? `${trips.find(t => t.id === tripId).destination}（${trips.find(t => t.id === tripId).depart_date} ~ ${trips.find(t => t.id === tripId).return_date}）`
+            : '不掛行程'}
+          value={tripId}
+          options={trips.map(t => ({ value: t.id, label: `${t.destination}（${t.depart_date} ~ ${t.return_date}）` }))}
+          onChange={v => setTripId(v)}
+        />
+      </div>
+
+      <div className="row-sb" style={{ marginTop: 0 }}>
+        <div className="sec" style={{ margin: 0 }}>採購品項</div>
+        <button
+          onClick={() => setShowPicker(true)}
+          style={{
+            padding: '4px 10px', borderRadius: 8, border: '1px solid var(--border)',
+            background: 'var(--card)', color: 'var(--text)', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+          }}
+        >+ 手動加商品</button>
+      </div>
+      {rows.length === 0 && <div className="empty" style={{ padding: '20px 0' }}>尚無品項，可手動加入商品</div>}
       {rows.map((row, idx) => (
         <div key={row._key} className="card" style={{ marginBottom: 6, opacity: row._checked ? 1 : 0.35 }}>
-          <div className="card-row" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div className="card-row" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             {/* 勾選 */}
             <span
               style={{ fontSize: 18, cursor: 'pointer', flexShrink: 0 }}
@@ -803,37 +861,187 @@ export function CreateBatchSheet({ source, items, onClose, onSaved }) {
             </span>
             {/* 品名 + 規格 */}
             <div style={{ flex: 1, minWidth: 0 }} onClick={() => toggleRow(idx)}>
-              <div className="fs13 fw600">{row.name}</div>
+              <div className="fs13 fw600" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.name}</div>
               {row.variantLabel && <div className="muted fs12">{row.variantLabel}</div>}
               {row.sku && !row.variantLabel && <div className="muted fs12">{row.sku}</div>}
             </div>
             {/* 數量調整 */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-              <span className="muted fs12">×</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
               <button
                 style={{
-                  width: 24, height: 24, borderRadius: 6, border: '1px solid var(--border)',
-                  background: 'var(--bg)', cursor: 'pointer', fontSize: 14, padding: 0,
+                  width: 22, height: 22, borderRadius: 6, border: '1px solid var(--border)',
+                  background: 'var(--bg)', cursor: 'pointer', fontSize: 13, padding: 0,
                 }}
                 onClick={() => updateRowQty(idx, row.qty - 1)}
               >-</button>
-              <span className="fw600 fs13" style={{ minWidth: 20, textAlign: 'center' }}>{row.qty}</span>
+              <span className="fw600 fs13" style={{ minWidth: 18, textAlign: 'center' }}>{row.qty}</span>
               <button
                 style={{
-                  width: 24, height: 24, borderRadius: 6, border: '1px solid var(--border)',
-                  background: 'var(--bg)', cursor: 'pointer', fontSize: 14, padding: 0,
+                  width: 22, height: 22, borderRadius: 6, border: '1px solid var(--border)',
+                  background: 'var(--bg)', cursor: 'pointer', fontSize: 13, padding: 0,
                 }}
                 onClick={() => updateRowQty(idx, row.qty + 1)}
               >+</button>
             </div>
+            {/* 單價 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+              <span className="muted fs11">{row.currency || 'TWD'}</span>
+              <input
+                type="number"
+                value={row.cost ?? 0}
+                onChange={e => updateRowCost(idx, e.target.value === '' ? 0 : Number(e.target.value))}
+                style={{
+                  width: 84, padding: '4px 6px', borderRadius: 8,
+                  border: '1px solid var(--border)', fontSize: 13,
+                  background: 'var(--card)', color: 'var(--text)', boxSizing: 'border-box',
+                }}
+              />
+            </div>
+            {/* 移除 */}
+            <button
+              onClick={() => removeRow(idx)}
+              style={{
+                flexShrink: 0, background: 'none', border: 'none',
+                color: 'var(--red, #ef4444)', fontSize: 16, cursor: 'pointer', padding: 0, lineHeight: 1,
+              }}
+            >×</button>
           </div>
         </div>
       ))}
 
       <button className="btn" onClick={createBatch} disabled={saving} style={{ marginTop: 12 }}>
-        {saving ? '建立中…' : `建立批次（${checkedRows.length} 項, ${checkedRows.reduce((s, r) => s + r.qty, 0)} 件）`}
+        {saving
+          ? '建立中…'
+          : checkedRows.length === 0
+            ? '建立空批次'
+            : `建立批次（${checkedRows.length} 項, ${checkedRows.reduce((s, r) => s + r.qty, 0)} 件）`}
       </button>
+
+      {showPicker && (
+        <ManualProductPicker onPick={addManualRow} onClose={() => setShowPicker(false)} />
+      )}
     </Sheet>
+  )
+}
+
+/* ─── 手動加商品選擇器 ──────────────────────── */
+function ManualProductPicker({ onPick, onClose }) {
+  const { storeId } = useAuth()
+  const [products, setProducts] = useState([])
+  const [variantsByProduct, setVariantsByProduct] = useState({})
+  const [valueMap, setValueMap] = useState({})
+  const [search, setSearch] = useState('')
+  const [brandFilter, setBrandFilter] = useState(null)
+  const [selectedProd, setSelectedProd] = useState(null)
+
+  useEffect(() => {
+    if (!storeId) return
+    Promise.all([
+      supabase.from('products').select('id, name, sku, source, cost, currency').eq('store_id', storeId),
+      supabase.from('product_variants').select('*').eq('store_id', storeId),
+      supabase.from('variant_option_values').select('id, value'),
+    ]).then(([{ data: prods }, { data: vars }, { data: vals }]) => {
+      setProducts(prods || [])
+      const vMap = {}
+      ;(vars || []).forEach(v => { if (!vMap[v.product_id]) vMap[v.product_id] = []; vMap[v.product_id].push(v) })
+      setVariantsByProduct(vMap)
+      const vm = {}
+      ;(vals || []).forEach(v => { vm[v.id] = v.value })
+      setValueMap(vm)
+    })
+  }, [storeId])
+
+  const brands = [...new Set(products.map(p => p.source).filter(Boolean))].sort()
+
+  const filtered = products.filter(p => {
+    if (brandFilter && p.source !== brandFilter) return false
+    const term = search.trim().toLowerCase()
+    if (!term) return true
+    return p.name.toLowerCase().includes(term) || (p.sku || '').toLowerCase().includes(term)
+  })
+
+  function selectProduct(prod) {
+    const variants = variantsByProduct[prod.id]
+    if (!variants || variants.length === 0) {
+      onPick(prod, null, valueMap)
+    } else {
+      setSelectedProd(prod)
+    }
+  }
+
+  return (
+    <div className="sheet-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="sheet">
+        <div className="sheet-handle" />
+        <div className="row-sb" style={{ marginBottom: 20 }}>
+          <div className="sheet-title" style={{ margin: 0 }}>
+            {selectedProd ? `選擇規格 — ${selectedProd.name}` : '選擇商品'}
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: 'var(--text-3)' }}>×</button>
+        </div>
+
+        {!selectedProd && (
+          <>
+            <input
+              className="form-input"
+              placeholder="搜尋商品名稱或 SKU"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              style={{ marginBottom: 10 }}
+            />
+            {brands.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                <CustomSelect
+                  label={brandFilter || '全部品牌'}
+                  value={brandFilter}
+                  options={brands.map(b => ({ value: b, label: b }))}
+                  onChange={v => setBrandFilter(v)}
+                />
+              </div>
+            )}
+            <div className="muted fs12" style={{ marginBottom: 8 }}>符合 {filtered.length} 項商品</div>
+            {filtered.length === 0 && <div className="empty">找不到商品</div>}
+            {filtered.map(p => (
+              <div
+                key={p.id}
+                className="card"
+                style={{ marginBottom: 6, cursor: 'pointer' }}
+                onClick={() => selectProduct(p)}
+              >
+                <div className="card-row">
+                  <div className="fs13 fw600">{p.name}</div>
+                  <div className="muted fs12">{[p.source, p.sku].filter(Boolean).join(' · ')}</div>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+
+        {selectedProd && (
+          <>
+            <button
+              onClick={() => setSelectedProd(null)}
+              style={{ background: 'none', border: 'none', color: 'var(--text-2)', fontSize: 13, cursor: 'pointer', marginBottom: 10 }}
+            >‹ 返回商品清單</button>
+            {(variantsByProduct[selectedProd.id] || []).map(v => {
+              const label = Object.values(v.options || {}).map(id => valueMap[id]).filter(Boolean).join(' / ')
+              return (
+                <div
+                  key={v.id}
+                  className="card"
+                  style={{ marginBottom: 6, cursor: 'pointer' }}
+                  onClick={() => onPick(selectedProd, v, valueMap)}
+                >
+                  <div className="card-row">
+                    <div className="fs13 fw600">{label || `規格 #${v.id}`}</div>
+                  </div>
+                </div>
+              )
+            })}
+          </>
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -974,7 +1182,7 @@ function ExportBatchSheet({ batches, memberMap, onClose }) {
             <div className="card-row" onClick={() => toggleCheck(b.id)} style={{ cursor: 'pointer', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
               <span style={{ fontSize: 16, flexShrink: 0 }}>{isChecked ? '☑' : '☐'}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div className="fs13 fw600">#{b.id} · {b.source || '未設定來源'}</div>
+                <div className="fs13 fw600">#{b.id} · {b.source || '手動建立'}</div>
                 <div className="muted fs12">{b.batch_date} · {stLabel} · {(b.procurement_items || []).length} 品項</div>
               </div>
             </div>

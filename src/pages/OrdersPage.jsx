@@ -554,6 +554,18 @@ export default function OrdersPage() {
 
         return (
           <>
+            {/* 手動建立進貨批次：不依賴待採購品項，隨時可開 */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 14 }}>
+              <button
+                onClick={() => setCreateBatchData({ source: null, items: [] })}
+                style={{
+                  padding: '6px 14px', borderRadius: 20,
+                  border: '1px solid var(--border)', background: 'var(--card)',
+                  fontSize: 13, fontWeight: 600, cursor: 'pointer', color: 'var(--text)',
+                }}
+              >+ 手動建立進貨批次</button>
+            </div>
+
             {isEmpty ? (
               <div className="empty">目前沒有待採購的品項</div>
             ) : (

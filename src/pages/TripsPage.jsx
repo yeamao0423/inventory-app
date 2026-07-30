@@ -13,6 +13,7 @@ const FIXED_CATEGORIES = [
 export default function TripsPage() {
   const { profile, storeId } = useAuth()
   const [trips, setTrips] = useState([])
+  const [procurementCostByTrip, setProcurementCostByTrip] = useState({})
   const [loading, setLoading] = useState(true)
   const [sheet, setSheet] = useState(null) // null | 'add' | trip obj (for editing)
   const [reportTrip, setReportTrip] = useState(null) // trip obj to show report
@@ -30,6 +31,34 @@ export default function TripsPage() {
       .eq('store_id', storeId)
       .order('depart_date', { ascending: false })
     setTrips(data || [])
+
+    const tripIds = (data || []).map(t => t.id)
+    if (tripIds.length > 0) {
+      const [{ data: batches }, { data: rates }] = await Promise.all([
+        supabase.from('procurement_batches')
+          .select('trip_id, procurement_items(unit_cost, currency, quantity, actual_qty, status)')
+          .eq('store_id', storeId).in('trip_id', tripIds),
+        supabase.from('exchange_rates').select('*'),
+      ])
+      const rateMap = {}
+      ;(rates || []).forEach(r => { rateMap[r.currency] = Number(r.rate) })
+      const costMap = {}
+      ;(batches || []).forEach(batch => {
+        const items = batch.procurement_items || []
+        const batchCost = items.reduce((s, item) => {
+          if (item.status === 'missed') return s
+          const qty = item.actual_qty ?? item.quantity
+          const cost = (Number(item.unit_cost) || 0) * qty
+          const cur = item.currency || 'TWD'
+          return s + (cur === 'TWD' ? cost : cost * (rateMap[cur] || 0))
+        }, 0)
+        costMap[batch.trip_id] = (costMap[batch.trip_id] || 0) + batchCost
+      })
+      setProcurementCostByTrip(costMap)
+    } else {
+      setProcurementCostByTrip({})
+    }
+
     setLoading(false)
   }
 
@@ -115,6 +144,14 @@ export default function TripsPage() {
                     ${totalExpense(trip).toLocaleString()}
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-3)' }}>總費用</div>
+                  {procurementCostByTrip[trip.id] > 0 && (
+                    <>
+                      <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-2)', marginTop: 4 }}>
+                        ${Math.round(procurementCostByTrip[trip.id]).toLocaleString()}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>進貨成本</div>
+                    </>
+                  )}
                 </div>
               </div>
               {trip.note && (
@@ -165,7 +202,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
   async function fetchReportData() {
     setLoading(true)
 
-    const [{ data: orders }, { data: products }, { data: spProducts }, { data: rates }, { data: allOrders }, { data: images }] = await Promise.all([
+    const [{ data: orders }, { data: products }, { data: spProducts }, { data: rates }, { data: allOrders }, { data: images }, { data: procurementBatches }] = await Promise.all([
       supabase.from('consumer_orders').select('*')
         .eq('store_id', storeId)
         .gte('created_at', trip.depart_date)
@@ -180,6 +217,8 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
         .lt('created_at', trip.depart_date)
         .neq('status', '已取消'),
       supabase.from('product_images').select('product_id, url, sort_order').order('sort_order', { ascending: true }),
+      supabase.from('procurement_batches').select('id, procurement_items(unit_cost, currency, quantity, actual_qty, status)')
+        .eq('store_id', storeId).eq('trip_id', trip.id),
     ])
 
     const imageMap = {}
@@ -203,6 +242,19 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
     const totalRevenue = tripOrders.reduce((s, o) => s + Number(o.total_amount || 0), 0)
     const shippingRevenue = tripOrders.reduce((s, o) => s + Number(o.shipping_fee || 0), 0)
     const tripExpenseTotal = (trip.trip_expenses || []).reduce((s, e) => s + Number(e.amount || 0), 0)
+
+    // 本趟進貨成本：純呈現用，不併入淨利計算
+    const procurementCost = (procurementBatches || []).reduce((sum, batch) => {
+      const items = batch.procurement_items || []
+      const batchCost = items.reduce((s, item) => {
+        if (item.status === 'missed') return s
+        const qty = item.actual_qty ?? item.quantity
+        const cost = (Number(item.unit_cost) || 0) * qty
+        const cur = item.currency || 'TWD'
+        return s + (cur === 'TWD' ? cost : cost * (rateMap[cur] || 0))
+      }, 0)
+      return sum + batchCost
+    }, 0)
 
     // Product aggregation
     const productAgg = {}
@@ -291,6 +343,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
       totalProductCost,
       grossProfit,
       tripExpenseTotal,
+      procurementCost,
       shippingRevenue,
       netProfit,
       netMargin,
@@ -457,6 +510,11 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
                 <div style={mCard}>
                   <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 4 }}>運費收入</div>
                   <div style={{ fontSize: 20, fontWeight: 700 }}>${data.shippingRevenue.toLocaleString()}</div>
+                </div>
+                <div style={mCard}>
+                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 4 }}>本趟進貨成本</div>
+                  <div style={{ fontSize: 20, fontWeight: 700 }}>${Math.round(data.procurementCost).toLocaleString()}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>不計入淨利</div>
                 </div>
               </div>
             </div>
