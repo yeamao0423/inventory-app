@@ -5,7 +5,7 @@ import { useAuth } from '../hooks/useAuth'
 import CustomSelect from './CustomSelect'
 
 // 取得 store 管理員（profiles + user_store_roles，排除一般消費者）
-async function fetchStoreMembers(storeId) {
+export async function fetchStoreMembers(storeId) {
   const { data: roles } = await supabase
     .from('user_store_roles')
     .select('user_id, role')
@@ -29,6 +29,7 @@ export default function ProcurementBatchTab() {
   const { storeId } = useAuth()
   const [batches, setBatches] = useState([])
   const [members, setMembers] = useState([])
+  const [tripMap, setTripMap] = useState({})
   const [rates, setRates] = useState({})
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('unsettled') // 'unsettled' | 'settled' | 'all'
@@ -44,13 +45,17 @@ export default function ProcurementBatchTab() {
 
   async function fetchAll(silent = false) {
     if (!silent) setLoading(true)
-    const [b, m, { data: r }] = await Promise.all([
+    const [b, m, { data: r }, { data: t }] = await Promise.all([
       supabase.from('procurement_batches').select('*, procurement_items(*, products:product_id(name, sku), variants:variant_id(options))').eq('store_id', storeId).order('created_at', { ascending: false }),
       fetchStoreMembers(storeId),
       supabase.from('exchange_rates').select('*'),
+      supabase.from('trips').select('id, destination').eq('store_id', storeId),
     ])
     setBatches(b.data || [])
     setMembers(m)
+    const tm = {}
+    ;(t || []).forEach(x => { tm[x.id] = x.destination })
+    setTripMap(tm)
     const rm = {}
     ;(r || []).forEach(x => { rm[x.currency] = Number(x.rate) })
     setRates(rm)
@@ -179,6 +184,9 @@ export default function ProcurementBatchTab() {
                   負責人: {memberMap[batch.manager_id]?.name || '未指定'}
                   {' · '}付款人: {memberMap[batch.buyer_id]?.name || '未指定'}
                 </div>
+                <div className="muted fs12">
+                  行程: {tripMap[batch.trip_id] || '未掛行程'}
+                </div>
                 {batch.inventory_synced && (
                   <span style={{ fontSize: 11, color: 'var(--green)', marginTop: 2, display: 'inline-block' }}>已入庫</span>
                 )}
@@ -237,11 +245,37 @@ export default function ProcurementBatchTab() {
 
 /* ─── 批次詳情 Sheet ──────────────────────── */
 function BatchDetailSheet({ batch, members, memberMap, rates, onClose, onSaved }) {
+  const { storeId } = useAuth()
   const [items, setItems] = useState(
     (batch.procurement_items || []).map(item => ({ ...item }))
   )
   const [saving, setSaving] = useState(false)
   const [showSyncSheet, setShowSyncSheet] = useState(false)
+  const [trips, setTrips] = useState([])
+  const [tripId, setTripId] = useState(batch.trip_id || null)
+  const [savingTrip, setSavingTrip] = useState(false)
+
+  useEffect(() => {
+    if (!storeId) return
+    supabase.from('trips').select('id, destination, depart_date, return_date')
+      .eq('store_id', storeId).order('depart_date', { ascending: false })
+      .then(({ data }) => setTrips(data || []))
+  }, [storeId])
+
+  // 掛行程改了就即時存，不跟品項的儲存綁在一起
+  async function changeTrip(v) {
+    const next = v || null
+    setTripId(next)
+    setSavingTrip(true)
+    const { error } = await supabase.from('procurement_batches').update({ trip_id: next }).eq('id', batch.id)
+    setSavingTrip(false)
+    if (error) {
+      setTripId(batch.trip_id || null)
+      alert('掛行程失敗：' + error.message)
+      return
+    }
+    onSaved(true)
+  }
 
   // 計算結算摘要（按付款人）
   const settlement = {}
@@ -340,6 +374,24 @@ function BatchDetailSheet({ batch, members, memberMap, rates, onClose, onSaved }
             {isSettled ? '已結清' : '未結清'}
           </span>
         </div>
+        <div className="card-row row-sb">
+          <span className="muted fs13">掛行程{savingTrip && ' …'}</span>
+          <div style={{ minWidth: 190 }}>
+            <CustomSelect
+              label="不掛行程"
+              value={tripId}
+              options={trips.map(t => ({ value: t.id, label: `${t.destination}（${t.depart_date} ~ ${t.return_date}）` }))}
+              onChange={changeTrip}
+            />
+          </div>
+        </div>
+        {isSettled && (
+          <div className="card-row">
+            <span className="muted fs12">
+              此批次已結清，掛上行程只會計入該趟的進貨成本，不會再列入拆賬的代墊返還。
+            </span>
+          </div>
+        )}
         {batch.note && (
           <div className="card-row"><span className="muted fs13">備註：{batch.note}</span></div>
         )}
@@ -829,9 +881,7 @@ export function CreateBatchSheet({ source, items, onClose, onSaved }) {
       <div className="form-group" style={{ marginBottom: 16 }}>
         <label className="form-label">掛行程（選填）</label>
         <CustomSelect
-          label={trips.find(t => t.id === tripId)
-            ? `${trips.find(t => t.id === tripId).destination}（${trips.find(t => t.id === tripId).depart_date} ~ ${trips.find(t => t.id === tripId).return_date}）`
-            : '不掛行程'}
+          label="不掛行程"
           value={tripId}
           options={trips.map(t => ({ value: t.id, label: `${t.destination}（${t.depart_date} ~ ${t.return_date}）` }))}
           onChange={v => setTripId(v)}

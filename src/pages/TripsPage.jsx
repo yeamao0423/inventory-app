@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
 import { SUPPORTED_CURRENCIES } from '../constants/currency'
 import { useAuth } from '../hooks/useAuth'
+import { fetchStoreMembers } from '../components/ProcurementBatchTab'
 
 const FIXED_CATEGORIES = [
   { key: 'flight',    label: '機票' },
@@ -183,6 +184,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
   const [savingCost, setSavingCost] = useState(null)
   const [detailSheet, setDetailSheet] = useState(null) // null | 'products' | 'customers'
   const [selectedProduct, setSelectedProduct] = useState(null) // product obj for detail popup
+  const [showSettleSheet, setShowSettleSheet] = useState(false)
   const [activeSlide, setActiveSlide] = useState(0)
   const carouselRef = useRef(null)
   const SLIDE_COUNT = 3
@@ -202,7 +204,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
   async function fetchReportData() {
     setLoading(true)
 
-    const [{ data: orders }, { data: products }, { data: spProducts }, { data: rates }, { data: allOrders }, { data: images }, { data: procurementBatches }] = await Promise.all([
+    const [{ data: orders }, { data: products }, { data: spProducts }, { data: rates }, { data: allOrders }, { data: images }, { data: procurementBatches }, { data: settlement }, { data: participants }, members] = await Promise.all([
       supabase.from('consumer_orders').select('*')
         .eq('store_id', storeId)
         .gte('created_at', trip.depart_date)
@@ -217,8 +219,12 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
         .lt('created_at', trip.depart_date)
         .neq('status', '已取消'),
       supabase.from('product_images').select('product_id, url, sort_order').order('sort_order', { ascending: true }),
-      supabase.from('procurement_batches').select('id, procurement_items(unit_cost, currency, quantity, actual_qty, status)')
+      supabase.from('procurement_batches').select('id, status, buyer_id, procurement_items(unit_cost, currency, quantity, actual_qty, status, paid_by)')
         .eq('store_id', storeId).eq('trip_id', trip.id),
+      supabase.from('trip_settlements').select('*, trip_settlement_lines(*)')
+        .eq('trip_id', trip.id).eq('status', 'active').maybeSingle(),
+      supabase.from('trip_participants').select('user_id, share_pct').eq('trip_id', trip.id),
+      fetchStoreMembers(storeId),
     ])
 
     const imageMap = {}
@@ -255,6 +261,31 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
       }, 0)
       return sum + batchCost
     }, 0)
+
+    // 本趟未結清的代墊：按付款人歸戶（品項有指定付款人就用品項的，否則落回批次預設）
+    // 只算真的買到的品項，pending / missed 都還沒付錢出去
+    const unsettledBatches = (procurementBatches || []).filter(b => b.status !== 'settled')
+    const advanceByPayer = {}
+    unsettledBatches.forEach(batch => {
+      ;(batch.procurement_items || []).forEach(item => {
+        if (item.status === 'pending' || item.status === 'missed') return
+        const payerId = item.paid_by || batch.buyer_id
+        if (!payerId) return
+        const qty = item.actual_qty ?? item.quantity
+        const cost = (Number(item.unit_cost) || 0) * qty
+        const cur = item.currency || 'TWD'
+        advanceByPayer[payerId] = (advanceByPayer[payerId] || 0) + (cur === 'TWD' ? cost : cost * (rateMap[cur] || 0))
+      })
+    })
+
+    // 墊錢的人不一定還在後台成員名單裡，補查 profile 才不會顯示成「未知」
+    const memberList = members || []
+    const missingPayerIds = Object.keys(advanceByPayer).filter(id => !memberList.some(m => m.id === id))
+    let extraMembers = []
+    if (missingPayerIds.length > 0) {
+      const { data: extra } = await supabase.from('profiles').select('id, name, email').in('id', missingPayerIds)
+      extraMembers = (extra || []).map(p => ({ ...p, role: null }))
+    }
 
     // Product aggregation
     const productAgg = {}
@@ -354,6 +385,11 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
       newCount,
       returnCount,
       avgOrderValue,
+      advanceByPayer,
+      unsettledBatchCount: unsettledBatches.length,
+      members: [...memberList, ...extraMembers],
+      participants: participants || [],
+      settlement: settlement || null,
     })
     setLoading(false)
   }
@@ -556,6 +592,38 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
             ))}
           </div>
 
+          {/* ── Section: 拆賬 ── */}
+          <div style={sectionTitle}>拆賬</div>
+          {data.settlement ? (
+            <SettlementResult settlement={data.settlement} onChanged={fetchReportData} />
+          ) : (
+            <div style={{ background: 'var(--card)', borderRadius: 12, padding: 16, border: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 6 }}>
+                <span style={{ color: 'var(--text-3)' }}>可分配淨利</span>
+                <span style={{ fontWeight: 700, color: data.netProfit >= 0 ? '#16a34a' : '#e53e3e' }}>
+                  ${Math.round(data.netProfit).toLocaleString()}
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 6 }}>
+                <span style={{ color: 'var(--text-3)' }}>待結清批次</span>
+                <span style={{ fontWeight: 600 }}>{data.unsettledBatchCount} 批</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 14 }}>
+                <span style={{ color: 'var(--text-3)' }}>待還代墊</span>
+                <span style={{ fontWeight: 600 }}>
+                  ${Math.round(Object.values(data.advanceByPayer).reduce((s, v) => s + v, 0)).toLocaleString()}
+                </span>
+              </div>
+              <button
+                onClick={() => setShowSettleSheet(true)}
+                style={{
+                  width: '100%', padding: '11px 0', borderRadius: 8, border: 'none',
+                  background: 'var(--text)', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer',
+                }}
+              >開始拆賬</button>
+            </div>
+          )}
+
           {/* ── Section 2: Product Performance (top 5) ── */}
           <div style={{ ...sectionTitle, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span>商品表現</span>
@@ -635,6 +703,16 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
             </div>
           </div>
         </>
+      )}
+
+      {/* ── 拆賬 Sheet ── */}
+      {showSettleSheet && data && (
+        <SettleSheet
+          trip={trip}
+          data={data}
+          onClose={() => setShowSettleSheet(false)}
+          onSaved={() => { setShowSettleSheet(false); fetchReportData() }}
+        />
       )}
 
       {/* ── Detail Sheets ── */}
@@ -773,6 +851,329 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
             </div>
           </div>
         </div>
+      )}
+    </div>
+  )
+}
+
+// ─── 拆賬 ────────────────────────────────────────────────────────
+
+// 參與者平均分配；除不盡的零頭補在最後一位，讓合計剛好 100
+function evenSplit(rows) {
+  const included = rows.filter(r => r.included)
+  if (included.length === 0) return rows.map(r => ({ ...r, share_pct: 0 }))
+  const each = Math.floor(100 / included.length * 1000) / 1000
+  let assigned = 0
+  let seen = 0
+  return rows.map(r => {
+    if (!r.included) return { ...r, share_pct: 0 }
+    seen++
+    if (seen === included.length) return { ...r, share_pct: Math.round((100 - assigned) * 1000) / 1000 }
+    assigned += each
+    return { ...r, share_pct: each }
+  })
+}
+
+function SettleSheet({ trip, data, onClose, onSaved }) {
+  const netProfit = Math.round(data.netProfit)
+  const advance = data.advanceByPayer || {}
+  const [note, setNote] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const [rows, setRows] = useState(() => {
+    const saved = {}
+    ;(data.participants || []).forEach(p => { saved[p.user_id] = Number(p.share_pct) })
+    const hasSaved = Object.keys(saved).length > 0
+    const base = (data.members || []).map(m => ({
+      user_id: m.id,
+      name: m.name || m.email || '未命名',
+      included: hasSaved ? saved[m.id] !== undefined : true,
+      share_pct: hasSaved ? (saved[m.id] ?? 0) : 0,
+    }))
+    // 沒設定過就預設全員平均，之後可以個別調整
+    return hasSaved ? base : evenSplit(base)
+  })
+
+  function toggle(userId) {
+    setRows(prev => evenSplit(prev.map(r => r.user_id === userId ? { ...r, included: !r.included } : r)))
+  }
+
+  function setShare(userId, val) {
+    setRows(prev => prev.map(r => r.user_id === userId ? { ...r, share_pct: val } : r))
+  }
+
+  // 沒分潤但有代墊的人也要列出來 —— 錢一樣要還他
+  const visible = rows.filter(r => r.included || (advance[r.user_id] || 0) > 0)
+  const lines = visible.map(r => {
+    const pct = r.included ? Number(r.share_pct) || 0 : 0
+    const profitShare = netProfit > 0 ? Math.round(netProfit * pct / 100) : 0
+    const reimbursement = Math.round(advance[r.user_id] || 0)
+    return {
+      user_id: r.user_id,
+      user_name: r.name,
+      share_pct: pct,
+      profit_share: profitShare,
+      reimbursement,
+      payout: profitShare + reimbursement,
+    }
+  })
+
+  const totalPct = rows.filter(r => r.included).reduce((s, r) => s + (Number(r.share_pct) || 0), 0)
+  const totalPayout = lines.reduce((s, l) => s + l.payout, 0)
+  const distributed = lines.reduce((s, l) => s + l.profit_share, 0)
+  const storeKeep = netProfit - distributed
+
+  async function submit() {
+    const msg = [
+      `本趟淨利 $${netProfit.toLocaleString()}`,
+      `共發出 $${totalPayout.toLocaleString()} 給 ${lines.length} 人`,
+      `並將 ${data.unsettledBatchCount} 批進貨一次標記已結清`,
+      '',
+      '確定完成拆賬？',
+    ].join('\n')
+    if (!window.confirm(msg)) return
+
+    setSaving(true)
+    const { error } = await supabase.rpc('settle_trip', {
+      p_trip_id: trip.id,
+      p_revenue: Math.round(data.totalRevenue),
+      p_product_cost: Math.round(data.totalProductCost),
+      p_trip_expense: Math.round(data.tripExpenseTotal),
+      p_net_profit: netProfit,
+      p_lines: lines,
+      p_note: note || null,
+    })
+    if (error) {
+      setSaving(false)
+      alert('拆賬失敗：' + error.message)
+      return
+    }
+    // 記住這趟誰參加、比例多少，下次同一趟重算時直接帶回來
+    await supabase.from('trip_participants').delete().eq('trip_id', trip.id)
+    const included = rows.filter(r => r.included)
+    if (included.length > 0) {
+      await supabase.from('trip_participants').insert(included.map(r => ({
+        trip_id: trip.id,
+        user_id: r.user_id,
+        share_pct: Number(r.share_pct) || 0,
+      })))
+    }
+    setSaving(false)
+    onSaved()
+  }
+
+  const calcRow = (label, value, opts = {}) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, padding: '5px 0', ...opts.style }}>
+      <span style={{ color: opts.strong ? 'var(--text)' : 'var(--text-3)', fontWeight: opts.strong ? 700 : 400 }}>{label}</span>
+      <span style={{ fontWeight: opts.strong ? 700 : 500, color: opts.color }}>{value}</span>
+    </div>
+  )
+
+  return (
+    <div className="sheet-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="sheet" style={{ maxHeight: '90dvh' }}>
+        <div className="sheet-handle" />
+        <div className="row-sb" style={{ marginBottom: 16 }}>
+          <div className="sheet-title" style={{ margin: 0 }}>拆賬 — {trip.destination}</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: 'var(--text-3)' }}>×</button>
+        </div>
+
+        <div style={{ overflowY: 'auto', flex: 1 }}>
+          {data.noCostCount > 0 && (
+            <div style={{
+              background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 10,
+              padding: '10px 14px', marginBottom: 14, fontSize: 13, color: '#92400e',
+            }}>
+              有 {data.noCostCount} 件商品沒填成本，淨利會被高估、分出去的錢會比實際賺的多。建議先回報告補完成本再拆。
+            </div>
+          )}
+
+          {/* 淨利驗算 */}
+          <div style={{ background: 'var(--card)', borderRadius: 12, padding: '12px 16px', border: '1px solid var(--border)', marginBottom: 16 }}>
+            {calcRow('訂單營收', `$${Math.round(data.totalRevenue).toLocaleString()}`)}
+            {calcRow('商品成本', `− $${Math.round(data.totalProductCost).toLocaleString()}`)}
+            {calcRow('行程費用', `− $${Math.round(data.tripExpenseTotal).toLocaleString()}`)}
+            <div style={{ borderTop: '1px solid var(--border)', margin: '6px 0' }} />
+            {calcRow('淨利', `$${netProfit.toLocaleString()}`, { strong: true, color: netProfit >= 0 ? '#16a34a' : '#e53e3e' })}
+          </div>
+
+          {netProfit < 0 && (
+            <div style={{
+              background: '#fee2e2', border: '1px solid #ef4444', borderRadius: 10,
+              padding: '10px 14px', marginBottom: 14, fontSize: 13, color: '#991b1b',
+            }}>
+              本趟虧損 ${Math.abs(netProfit).toLocaleString()}，由店家承擔。分潤一律為 0，代墊款照樣全額退還。
+            </div>
+          )}
+
+          {/* 參與者與比例 */}
+          <div className="row-sb" style={{ marginBottom: 8 }}>
+            <div style={{ fontSize: 14, fontWeight: 700 }}>工作人員與比例</div>
+            <button
+              onClick={() => setRows(prev => evenSplit(prev))}
+              style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer', color: 'var(--text-2)' }}
+            >平均分配</button>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10 }}>
+            比例合計目前 {totalPct.toFixed(1)}%，沒分配到的 ${Math.round(Math.max(storeKeep, 0)).toLocaleString()} 由店家保留。
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+            {rows.map(r => {
+              const adv = Math.round(advance[r.user_id] || 0)
+              if (!r.included && adv === 0) return null
+              const line = lines.find(l => l.user_id === r.user_id)
+              return (
+                <div key={r.user_id} style={{
+                  background: 'var(--card)', borderRadius: 10, padding: '10px 14px',
+                  border: '1px solid var(--border)', opacity: r.included || adv > 0 ? 1 : 0.5,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                    <input
+                      type="checkbox"
+                      checked={r.included}
+                      onChange={() => toggle(r.user_id)}
+                      style={{ width: 18, height: 18, cursor: 'pointer', flexShrink: 0 }}
+                    />
+                    <span style={{ fontSize: 14, fontWeight: 600, flex: 1 }}>{r.name}</span>
+                    {r.included && (
+                      <>
+                        <input
+                          type="number"
+                          inputMode="decimal"
+                          value={r.share_pct}
+                          onChange={e => setShare(r.user_id, e.target.value)}
+                          style={{ width: 72, padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--bg)', textAlign: 'right' }}
+                        />
+                        <span style={{ fontSize: 13, color: 'var(--text-3)' }}>%</span>
+                      </>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: 14, fontSize: 13, color: 'var(--text-2)', flexWrap: 'wrap', paddingLeft: 28 }}>
+                    <span>分潤 ${(line?.profit_share || 0).toLocaleString()}</span>
+                    <span>代墊 ${adv.toLocaleString()}</span>
+                    <span style={{ fontWeight: 700, color: 'var(--text)' }}>實拿 ${(line?.payout || 0).toLocaleString()}</span>
+                  </div>
+                  {!r.included && adv > 0 && (
+                    <div style={{ fontSize: 12, color: 'var(--text-3)', paddingLeft: 28, marginTop: 4 }}>
+                      不參與分潤，只退還代墊
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+
+          {/* 備註 */}
+          <input
+            value={note}
+            onChange={e => setNote(e.target.value)}
+            placeholder="拆賬備註（選填）"
+            style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--bg)', boxSizing: 'border-box', marginBottom: 16 }}
+          />
+        </div>
+
+        {/* 總計與送出 */}
+        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 15, fontWeight: 700, marginBottom: 4 }}>
+            <span>合計發出</span>
+            <span>${totalPayout.toLocaleString()}</span>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 12 }}>
+            分潤 ${distributed.toLocaleString()} ＋ 代墊返還 ${(totalPayout - distributed).toLocaleString()}
+            ・送出後會把本趟 {data.unsettledBatchCount} 批進貨一次標記已結清
+          </div>
+          <button
+            onClick={submit}
+            disabled={saving || lines.length === 0}
+            style={{
+              width: '100%', padding: '12px 0', borderRadius: 8, border: 'none',
+              background: lines.length === 0 ? 'var(--border)' : 'var(--text)',
+              color: '#fff', fontSize: 15, fontWeight: 700, cursor: lines.length === 0 ? 'default' : 'pointer',
+            }}
+          >{saving ? '處理中…' : '完成拆賬'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SettlementResult({ settlement, onChanged }) {
+  const [busy, setBusy] = useState(false)
+  const lines = [...(settlement.trip_settlement_lines || [])].sort((a, b) => b.payout - a.payout)
+  const totalPaid = lines.filter(l => l.paid).reduce((s, l) => s + Number(l.payout), 0)
+
+  async function togglePaid(line) {
+    setBusy(true)
+    await supabase.from('trip_settlement_lines').update({ paid: !line.paid }).eq('id', line.id)
+    setBusy(false)
+    onChanged()
+  }
+
+  async function voidSettlement() {
+    if (!window.confirm('作廢這張拆賬單？本趟批次會退回未結清狀態，可以重新拆一次。')) return
+    setBusy(true)
+    const { error } = await supabase.rpc('void_trip_settlement', { p_settlement_id: settlement.id })
+    setBusy(false)
+    if (error) { alert('作廢失敗：' + error.message); return }
+    onChanged()
+  }
+
+  return (
+    <div style={{ background: 'var(--card)', borderRadius: 12, padding: 16, border: '1px solid var(--border)' }}>
+      <div className="row-sb" style={{ marginBottom: 12 }}>
+        <span style={{ fontSize: 13, color: 'var(--text-3)' }}>
+          已於 {new Date(settlement.settled_at).toLocaleDateString('zh-TW')} 完成拆賬
+        </span>
+        <span style={{ fontSize: 12, background: '#dcfce7', color: '#166534', padding: '2px 8px', borderRadius: 4, fontWeight: 600 }}>
+          已拆賬
+        </span>
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--text-3)', marginBottom: 12 }}>
+        <span>當時淨利 ${Number(settlement.net_profit).toLocaleString()}</span>
+        <span>合計發出 ${Number(settlement.total_payout).toLocaleString()}</span>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
+        {lines.map(l => (
+          <div key={l.id} style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: '9px 12px', borderRadius: 8, border: '1px solid var(--border)',
+            background: l.paid ? 'var(--bg)' : 'transparent',
+          }}>
+            <input
+              type="checkbox"
+              checked={l.paid}
+              disabled={busy}
+              onChange={() => togglePaid(l)}
+              style={{ width: 18, height: 18, cursor: 'pointer', flexShrink: 0 }}
+            />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, textDecoration: l.paid ? 'line-through' : 'none', color: l.paid ? 'var(--text-3)' : 'var(--text)' }}>
+                {l.user_name || '未知'}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                分潤 ${Number(l.profit_share).toLocaleString()}（{Number(l.share_pct)}%）＋ 代墊 ${Number(l.reimbursement).toLocaleString()}
+              </div>
+            </div>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>${Number(l.payout).toLocaleString()}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ fontSize: 12, color: 'var(--text-3)' }}>
+          已付 ${totalPaid.toLocaleString()} / ${Number(settlement.total_payout).toLocaleString()}
+        </span>
+        <button
+          onClick={voidSettlement}
+          disabled={busy}
+          style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer', color: '#e53e3e' }}
+        >作廢重算</button>
+      </div>
+      {settlement.note && (
+        <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 10 }}>備註：{settlement.note}</div>
       )}
     </div>
   )
