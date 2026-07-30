@@ -1,17 +1,16 @@
 import { useState, useEffect } from 'react'
-import { supabase } from '../lib/supabase'
-import { SUPPORTED_CURRENCIES } from '../constants/currency'
-import { useAuth } from '../hooks/useAuth'
-import CustomSelect from '../components/CustomSelect'
-import { buildCatOptions } from '../lib/catOptions'
-import { compressImage, uploadImages, deleteProductStorage, removeImageByUrl } from '../lib/imageUtils'
-import { revalidateShop } from '../lib/revalidateShop'
-import { toTwdCost, getEffectivePrices, getEffectiveCosts, getRawCosts, calcMarginRange, fmtRange, fmtMarginRate, fmtMarginAmount } from '../lib/pricing'
-import { cmpNum, cmpStr, cmpDate } from '../lib/sortUtils'
-import { Pill } from '../components/MenuPopover'
-import ListToolbar from '../components/ListToolbar'
-import QuickListSheet from '../components/QuickListSheet'
-import BulkListSheet from '../components/BulkListSheet'
+import { supabase } from '../../lib/supabase'
+import { SUPPORTED_CURRENCIES } from '../../constants/currency'
+import { useAuth } from '../../hooks/useAuth'
+import { useProductRefresh } from '../../hooks/useProductRefresh'
+import CustomSelect from '../../components/CustomSelect'
+import { buildCatOptions } from '../../lib/catOptions'
+import { compressImage, uploadImages, deleteProductStorage, removeImageByUrl } from '../../lib/imageUtils'
+import { revalidateShop } from '../../lib/revalidateShop'
+import { toTwdCost, getEffectivePrices, getEffectiveCosts, getRawCosts, calcMarginRange, fmtRange, fmtMarginRate, fmtMarginAmount } from '../../lib/pricing'
+import { cmpNum, cmpStr, cmpDate } from '../../lib/sortUtils'
+import { Pill } from '../../components/MenuPopover'
+import ListToolbar from '../../components/ListToolbar'
 
 const LOW = 5
 
@@ -87,8 +86,10 @@ function resolveVariantLabel(options, optionTypes) {
   }).filter(Boolean).join(' / ')
 }
 
-export default function InventoryPage() {
-  const { profile, signOut, can, storeId } = useAuth()
+// 「商品」入口的庫存分頁（頁首與快速／批量上架按鈕在 ProductsPage 與全域置頂欄）
+export default function InventoryTab() {
+  const { can, storeId } = useAuth()
+  const { version } = useProductRefresh()
   const [products, setProducts] = useState([])
   const [search, setSearch] = useState('')
   const [filterSource, setFilterSource] = useState('')
@@ -100,12 +101,11 @@ export default function InventoryPage() {
   const [optionTypes, setOptionTypes] = useState([])
   const [exchangeRates, setExchangeRates] = useState({})
   const [sheet, setSheet] = useState(null)   // null | product obj
-  const [quickList, setQuickList] = useState(false)
-  const [bulkList, setBulkList] = useState(false)
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(1)
 
-  useEffect(() => { if (!storeId) return; fetchProducts(); fetchCategories(); fetchOptionTypes(); fetchRates() }, [storeId])
+  // version：置頂欄上架完成後的重抓訊號
+  useEffect(() => { if (!storeId) return; fetchProducts(); fetchCategories(); fetchOptionTypes(); fetchRates() }, [storeId, version])
 
   // 商品編輯後：重載後台清單 + 通知商城清快取（store tag 涵蓋列表/詳情/店家資訊）。
   // 集中在此一處，所有編輯器的 onSaved 都會經過（DRY）。revalidateShop 靜默失敗，不擋後台。
@@ -168,51 +168,7 @@ export default function InventoryPage() {
   const existingSources = [...new Set(products.map(p => p.source).filter(Boolean))].sort()
 
   return (
-    <div className="page">
-      <div className="ph">
-        <div>
-          <div className="ph-title">庫存總覽</div>
-          <div className="ph-sub">
-            {profile?.name || '成員'}
-          </div>
-        </div>
-        <div style={{display:'flex',gap:8,alignItems:'center'}}>
-          {can('add') && (
-            <>
-              <button
-                onClick={() => setQuickList(true)}
-                style={{
-                  padding:'6px 12px',borderRadius:20,fontSize:12,fontWeight:600,
-                  background:'var(--text)',color:'#fff',border:'none',cursor:'pointer',
-                  whiteSpace:'nowrap',
-                }}
-              >快速上架</button>
-              <div style={{ position: 'relative', display: 'inline-flex' }}>
-                <button
-                  onClick={() => setBulkList(true)}
-                  style={{
-                    padding:'6px 12px',borderRadius:20,fontSize:12,fontWeight:600,
-                    background:'var(--surface)',color:'var(--text)',border:'1px solid var(--border)',cursor:'pointer',
-                    whiteSpace:'nowrap',
-                  }}
-                >批量上架</button>
-                <span style={{
-                  position: 'absolute', top: -6, right: -6,
-                  fontSize: 9, fontWeight: 700, lineHeight: 1,
-                  padding: '2px 5px', borderRadius: 6,
-                  background: 'var(--amber, #e67e22)', color: '#fff',
-                  whiteSpace: 'nowrap', pointerEvents: 'none',
-                }}>試用</span>
-              </div>
-            </>
-          )}
-          <button
-            onClick={signOut}
-            style={{background:'none',border:'none',fontSize:13,color:'var(--text-3)',cursor:'pointer',padding:'6px 0'}}
-          >登出</button>
-        </div>
-      </div>
-
+    <>
       <div className="stats">
         <div className="stat">
           <div className="stat-val">{products.length}</div>
@@ -321,21 +277,7 @@ export default function InventoryPage() {
           exchangeRates={exchangeRates}
         />
       )}
-      {quickList && (
-        <QuickListSheet
-          onClose={() => setQuickList(false)}
-          onSaved={handleSaved}
-          existingSources={existingSources}
-        />
-      )}
-      {bulkList && (
-        <BulkListSheet
-          onClose={() => setBulkList(false)}
-          onSaved={handleSaved}
-          existingSources={existingSources}
-        />
-      )}
-    </div>
+    </>
   )
 }
 

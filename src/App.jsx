@@ -2,9 +2,8 @@ import { useEffect, useState } from 'react'
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from './hooks/useAuth'
 import LoginPage from './pages/LoginPage'
-import InventoryPage from './pages/InventoryPage'
+import ProductsPage from './pages/ProductsPage'
 import OrdersPage from './pages/OrdersPage'
-import StorefrontPage from './pages/StorefrontPage'
 import UsersPage from './pages/UsersPage'
 import TripsPage from './pages/TripsPage'
 import CouponsPage from './pages/CouponsPage'
@@ -14,6 +13,8 @@ import SettingsPage from './pages/SettingsPage'
 import StaticPagesPage from './pages/StaticPagesPage'
 import MembersPage from './pages/MembersPage'
 import MemberLevelsPage from './pages/MemberLevelsPage'
+import TopBar from './components/TopBar'
+import { ProductRefreshProvider } from './hooks/useProductRefresh'
 import MarketingLayout from './marketing/MarketingLayout'
 import LandingPage from './marketing/LandingPage'
 import PricingPage from './marketing/PricingPage'
@@ -22,9 +23,9 @@ import ProhibitedItemsPage from './marketing/ProhibitedItemsPage'
 
 // group: 'more' 的項目收進底部「更多」彈出選單，其餘留在底部主列（核心日常項）
 const allTabs = [
-  { path: '/',           label: '庫存',  icon: BoxIcon, storeOnly: true },
+  // 庫存／商城／分類管理吃的是同一批商品資料，合成單一「商品」入口，內部再分頁
+  { path: '/products',   label: '商品',  icon: BoxIcon, storeOnly: true },
   { path: '/orders',     label: '訂單',  icon: ReceiptIcon, storeOnly: true },
-  { path: '/storefront', label: '商城',  icon: ShopIcon, storeOnly: true },
   { path: '/trips',      label: '行程',  icon: TripIcon, superOnly: true },
   { path: '/coupons',    label: '優惠券', icon: CouponIcon, storeOnly: true, group: 'more' },
   { path: '/members',    label: '會員',  icon: MemberIcon, adminOnly: true, group: 'more' },
@@ -119,8 +120,10 @@ export default function App() {
   const showWelcome = isFirstSetup && !welcomeDismissed && location.pathname !== '/settings'
 
   return (
+    <ProductRefreshProvider>
     <div className="app">
       <div className="main">
+      <TopBar />
       {showWelcome && (
         <div style={{
           margin: '12px 16px 0', padding: '12px 14px', borderRadius: 12,
@@ -129,7 +132,7 @@ export default function App() {
           <div style={{ flex: 1, lineHeight: 1.5 }}>
             <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--blue)' }}>🎉 歡迎開店！</div>
             <div style={{ fontSize: 12.5, color: 'var(--blue)' }}>
-              可直接到「庫存」建立商品。出貨單寄件人等資訊待要匯出出貨單時再到「設定」填即可。
+              可直接用右上角「快速上架」建立商品。出貨單寄件人等資訊待要匯出出貨單時再到「設定」填即可。
             </div>
           </div>
           <button className="btn" onClick={() => navigate('/settings')}
@@ -144,9 +147,11 @@ export default function App() {
       )}
 
       <Routes>
-        <Route path="/"           element={<InventoryPage />} />
+        <Route path="/products"   element={<ProductsPage />} />
+        {/* 舊路徑：庫存在根目錄、商城獨立一頁，一律導到新的「商品」入口 */}
+        <Route path="/"           element={<Navigate to="/products" replace />} />
+        <Route path="/storefront" element={<Navigate to="/products?tab=listings" replace />} />
         <Route path="/orders"     element={<OrdersPage />} />
-        <Route path="/storefront" element={<StorefrontPage />} />
         <Route path="/coupons"    element={<CouponsPage />} />
         <Route path="/members"    element={<MembersPage />} />
         <Route path="/levels"     element={<MemberLevelsPage />} />
@@ -156,8 +161,8 @@ export default function App() {
         <Route path="/pages"      element={<StaticPagesPage />} />
         <Route path="/platform"   element={<PlatformPage />} />
         <Route path="/invite"     element={<InvitePage />} />
-        {/* 登入後若仍停在 /login 或官網路由（/pricing、/contact…），導回根目錄 */}
-        <Route path="*"           element={<Navigate to="/" replace />} />
+        {/* 登入後若仍停在 /login 或官網路由（/pricing、/contact…），導回商品頁 */}
+        <Route path="*"           element={<Navigate to="/products" replace />} />
       </Routes>
       </div>
 
@@ -220,6 +225,7 @@ export default function App() {
         </>
       )}
     </div>
+    </ProductRefreshProvider>
   )
 }
 
@@ -235,9 +241,6 @@ function BagIcon({ size = 24 }) {
 }
 function ReceiptIcon() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 012-2h2a2 2 0 012 2M9 5h6m-3 4v6m-2-3h4"/></svg>
-}
-function ShopIcon() {
-  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l1-5h16l1 5"/><path d="M3 9a2 2 0 004 0 2 2 0 004 0 2 2 0 004 0 2 2 0 004 0M5 20h14a1 1 0 001-1v-7H4v7a1 1 0 001 1z"/></svg>
 }
 function CouponIcon() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M2 9V6a2 2 0 012-2h16a2 2 0 012 2v3"/><path d="M2 15v3a2 2 0 002 2h16a2 2 0 002-2v-3"/><path d="M22 9a3 3 0 01-3 3 3 3 0 013 3"/><path d="M2 9a3 3 0 003 3 3 3 0 00-3 3"/><line x1="9" y1="9" x2="9" y2="9.01"/><line x1="9" y1="12" x2="9" y2="12.01"/><line x1="9" y1="15" x2="9" y2="15.01"/></svg>

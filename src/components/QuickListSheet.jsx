@@ -46,6 +46,8 @@ async function toAiImage(file, fullRes) {
 
 export default function QuickListSheet({ onClose, onSaved, existingSources = [] }) {
   const { storeId } = useAuth()
+  // 從全域置頂欄開啟時沒有父層可傳來源清單，自己補查一次
+  const [sources, setSources] = useState(existingSources)
   const [step, setStep] = useState(0)
   const [saving, setSaving] = useState(false)
 
@@ -122,6 +124,13 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
     })
   }, [])
 
+  useEffect(() => {
+    if (!storeId || existingSources.length) return
+    supabase.from('products').select('source').eq('store_id', storeId).then(({ data }) => {
+      setSources([...new Set((data || []).map(r => r.source).filter(Boolean))].sort())
+    })
+  }, [storeId])
+
   function onImagesChange(e) {
     const files = Array.from(e.target.files)
     if (!files.length) return
@@ -172,7 +181,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
           images,
           categories: categories.map(c => c.name),
           tags: allTags.map(t => t.name),
-          sources: existingSources,  // 品牌白名單：命中就不花搜尋驗證
+          sources,  // 品牌白名單：命中就不花搜尋驗證
         },
       })
       // 非 2xx 時 supabase-js 把回應放在 error.context（前例：ContactPage）
@@ -571,7 +580,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
                   label="— 選擇來源 —"
                   value={source || null}
                   options={[
-                    ...existingSources.map(s => ({ value: s, label: s })),
+                    ...sources.map(s => ({ value: s, label: s })),
                     { value: '__custom__', label: '＋ 自訂來源' },
                   ]}
                   onChange={v => {
@@ -583,7 +592,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
               ) : (
                 <div style={{ display: 'flex', gap: 8 }}>
                   <input className="form-input" style={{ flex: 1 }} placeholder="例：UNIQLO、GU" value={source} onChange={e => setSource(e.target.value)} />
-                  {existingSources.length > 0 && (
+                  {sources.length > 0 && (
                     <button type="button" className="btn btn-outline" style={{ width: 'auto', padding: '0 14px', fontSize: 13 }}
                       onClick={() => setSourceSelectMode(true)}>選擇</button>
                   )}

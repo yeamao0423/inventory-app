@@ -1,20 +1,20 @@
 import { useState, useEffect } from 'react'
-import { supabase } from '../lib/supabase'
-import { useAuth } from '../hooks/useAuth'
-import CustomSelect from '../components/CustomSelect'
-import { buildCatOptions } from '../lib/catOptions'
+import { supabase } from '../../lib/supabase'
+import { useAuth } from '../../hooks/useAuth'
+import { useProductRefresh } from '../../hooks/useProductRefresh'
+import CustomSelect from '../../components/CustomSelect'
+import { buildCatOptions } from '../../lib/catOptions'
 import {
   PLATFORMS, DEFAULT_SHARE_TEMPLATE, renderTemplate, buildShareUrl,
   buildProductUrl, resolveShopBaseUrl,
-} from '../lib/socialShare'
-import { buildCollageBlob, canShareFile, downloadBlob } from '../lib/shareImage'
-import { revalidateShop } from '../lib/revalidateShop'
-import { toTwdCost, calcMargin, getEffectivePrices, getEffectiveCosts, calcMarginRange, fmtRange, fmtMarginRate, fmtMarginAmount } from '../lib/pricing'
-import { cmpNum, cmpStr, cmpDate } from '../lib/sortUtils'
-import { utcToLocal, localToISO } from '../lib/datetime'
-import { Pill } from '../components/MenuPopover'
-import ListToolbar from '../components/ListToolbar'
-import TaxonomyManager from '../components/TaxonomyManager'
+} from '../../lib/socialShare'
+import { buildCollageBlob, canShareFile, downloadBlob } from '../../lib/shareImage'
+import { revalidateShop } from '../../lib/revalidateShop'
+import { toTwdCost, calcMargin, getEffectivePrices, getEffectiveCosts, calcMarginRange, fmtRange, fmtMarginRate, fmtMarginAmount } from '../../lib/pricing'
+import { cmpNum, cmpStr, cmpDate } from '../../lib/sortUtils'
+import { utcToLocal, localToISO } from '../../lib/datetime'
+import { Pill } from '../../components/MenuPopover'
+import ListToolbar from '../../components/ListToolbar'
 
 // 商城排序選項（預設＝第一項：上架 新→舊）
 const STORE_SORT = [
@@ -41,11 +41,12 @@ function storeSortComparator(sort) {
   }
 }
 
-export default function StorefrontPage() {
+// 「商品」入口的商城分頁（頁首與分頁切換在 ProductsPage）
+export default function StorefrontTab() {
   const { can, storeId, store } = useAuth()
+  const { version } = useProductRefresh()
   // 改動商品後通知商城清快取（store tag 涵蓋列表＋所有商品詳情）
   const syncShop = () => revalidateShop({ storeId, slug: store?.slug })
-  const [tab, setTab] = useState('listings')   // listings | taxonomy
   const [listings, setListings] = useState([])
   const [products, setProducts] = useState([])
   const [categories, setCategories] = useState([])
@@ -73,27 +74,25 @@ export default function StorefrontPage() {
         setExchangeRates(map)
       })
   }, [storeId])
+  // version：置頂欄上架完成後的重抓訊號
   useEffect(() => {
     if (!storeId) return
     fetchAll()
-  }, [tab, storeId])
+  }, [storeId, version])
 
   async function fetchAll() {
     setLoading(true)
-    if (tab === 'listings') {
-      const [{ data: sp }, { data: pr }, { data: cats }, { data: tgs }] = await Promise.all([
-        supabase.from('storefront_products').select('*, products(*, product_images(id, url, sort_order), categories(id, name), product_tags(tag_id), product_variants(variant_price, sale_price, stock, variant_cost))').eq('store_id', storeId).order('sort_order'),
-        supabase.from('products').select('id, name, sku, cost, currency').eq('store_id', storeId).order('name'),
-        supabase.from('categories').select('id, name, parent_id').eq('store_id', storeId).order('sort_order').order('name'),
-        supabase.from('tags').select('id, name').eq('store_id', storeId).order('sort_order').order('name'),
-      ])
-      setListings(sp || [])
-      setCategories(cats || [])
-      setTags(tgs || [])
-      const listed = new Set((sp || []).map(s => s.product_id))
-      setProducts((pr || []).filter(p => !listed.has(p.id)))
-    }
-    // taxonomy 分頁的資料由 TaxonomyManager 元件自理
+    const [{ data: sp }, { data: pr }, { data: cats }, { data: tgs }] = await Promise.all([
+      supabase.from('storefront_products').select('*, products(*, product_images(id, url, sort_order), categories(id, name), product_tags(tag_id), product_variants(variant_price, sale_price, stock, variant_cost))').eq('store_id', storeId).order('sort_order'),
+      supabase.from('products').select('id, name, sku, cost, currency').eq('store_id', storeId).order('name'),
+      supabase.from('categories').select('id, name, parent_id').eq('store_id', storeId).order('sort_order').order('name'),
+      supabase.from('tags').select('id, name').eq('store_id', storeId).order('sort_order').order('name'),
+    ])
+    setListings(sp || [])
+    setCategories(cats || [])
+    setTags(tgs || [])
+    const listed = new Set((sp || []).map(s => s.product_id))
+    setProducts((pr || []).filter(p => !listed.has(p.id)))
     setLoading(false)
   }
 
@@ -156,39 +155,9 @@ export default function StorefrontPage() {
 
 
   return (
-    <div className="page">
-      <div className="ph">
-        <div>
-          <div className="ph-title">商城管理</div>
-          <div className="ph-sub">前台上架設定</div>
-        </div>
-        {tab === 'listings' && can('add') && (
-          <button className="icon-btn" onClick={() => setSheet('add')} title="上架商品">+</button>
-        )}
-      </div>
-
-      {/* Tab switcher */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        {[
-          { key: 'listings', label: '商城商品' },
-          { key: 'taxonomy', label: '分類/標籤/規格' },
-        ].map(t => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            style={{
-              flex: 1, padding: '9px 0', borderRadius: 10, border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600,
-              background: tab === t.key ? 'var(--text)' : 'var(--card)',
-              color: tab === t.key ? '#fff' : 'var(--text-2)',
-            }}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Search & filters (only on listings tab) */}
-      {tab === 'listings' && (() => {
+    <>
+      {/* Search & filters */}
+      {(() => {
         const statusFilters = [
           { key: 'all', label: '全部' },
           { key: 'published', label: '上架中' },
@@ -266,6 +235,9 @@ export default function StorefrontPage() {
                   </>
                 ),
               }}
+              actions={can('add') ? (
+                <button className="icon-btn" onClick={() => setSheet('add')} title="上架商品">+</button>
+              ) : null}
             />
           </>
         )
@@ -273,8 +245,7 @@ export default function StorefrontPage() {
 
       {loading && <div className="empty">載入中…</div>}
 
-      {/* Listings tab */}
-      {!loading && tab === 'listings' && (() => {
+      {!loading && (() => {
         const filtered = listings.filter(item => {
           // Status filter
           if (filter === 'published' && !(item.published && !item.sold_out)) return false
@@ -305,7 +276,7 @@ export default function StorefrontPage() {
         return (
         <>
           {paged.length === 0 && (
-            <div className="empty">{listings.length === 0 ? '尚未上架任何商品，點右上角 + 開始上架' : '沒有符合篩選條件的商品'}</div>
+            <div className="empty">{listings.length === 0 ? '尚未上架任何商品，點搜尋列右側 + 開始上架' : '沒有符合篩選條件的商品'}</div>
           )}
           <div className="card-grid">
           {paged.map(item => {
@@ -452,9 +423,6 @@ export default function StorefrontPage() {
         )
       })()}
 
-      {/* Taxonomy tab：分類/標籤/規格 管理（資料與 UI 由 TaxonomyManager 自理） */}
-      {tab === 'taxonomy' && <TaxonomyManager storeId={storeId} can={can} syncShop={syncShop} />}
-
       {/* Collection end prompt */}
       {collectionPrompt && (
         <div className="sheet-overlay" onClick={e => e.target === e.currentTarget && setCollectionPrompt(null)}>
@@ -497,7 +465,7 @@ export default function StorefrontPage() {
       {shareItem && (
         <ShareSheet item={shareItem} store={store} onClose={() => setShareItem(null)} />
       )}
-    </div>
+    </>
   )
 }
 

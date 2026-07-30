@@ -56,8 +56,65 @@ html, body, #root {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: calc(var(--safe-top) + 16px) 16px 16px;
+  padding: 16px;   /* 安全區間距改由置頂欄 .topbar 吸收 */
   -webkit-overflow-scrolling: touch;
+}
+
+/* ── 全域置頂欄 ───────────────────────────── */
+.topbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: calc(var(--safe-top) + 10px) 16px 10px;
+  border-bottom: 0.5px solid var(--border);
+  background: rgba(255,255,255,0.92);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  z-index: 90;
+}
+/* 店名可被右側動作擠壓，長店名以 … 收尾 */
+.topbar-brand {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+.topbar-brand span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topbar-brand img { height: 22px; width: auto; border-radius: 6px; object-fit: cover; }
+.topbar-btn {
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.topbar-btn-primary { background: var(--text); color: #fff; border: none; }
+.topbar-badge {
+  position: absolute;
+  top: -6px; right: -6px;
+  font-size: 9px; font-weight: 700; line-height: 1;
+  padding: 2px 5px; border-radius: 6px;
+  background: var(--amber, #e67e22); color: #fff;
+  white-space: nowrap; pointer-events: none;
+}
+.topbar-signout {
+  background: none; border: none;
+  font-size: 13px; color: var(--text-3);
+  cursor: pointer; padding: 6px 0;
+  white-space: nowrap;
 }
 
 /* ── Tab Bar ──────────────────────────────── */
@@ -334,6 +391,10 @@ html, body, #root {
 
 @media (min-width: 768px) {
   .app { max-width: none; flex-direction: row; }
+
+  /* 桌機側欄已有品牌，置頂欄只留右側動作 */
+  .topbar-brand { display: none; }
+  .topbar { justify-content: flex-end; padding: 14px 20px; }
 
   /* 底部 tabbar → 左側 sidebar */
   .tabbar {

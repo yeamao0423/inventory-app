@@ -70,6 +70,8 @@ function blankDraft(groupSize) {
 
 export default function BulkListSheet({ onClose, onSaved, existingSources = [] }) {
   const { storeId } = useAuth()
+  // 從全域置頂欄開啟時沒有父層可傳來源清單，自己補查一次
+  const [sources, setSources] = useState(existingSources)
 
   const [photos, setPhotos] = useState([])
   const [previews, setPreviews] = useState([])
@@ -130,6 +132,13 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
         }))]
         setRecentEnds(unique.slice(0, 5))
       }
+    })
+  }, [storeId])
+
+  useEffect(() => {
+    if (!storeId || existingSources.length) return
+    supabase.from('products').select('source').eq('store_id', storeId).then(({ data }) => {
+      setSources([...new Set((data || []).map(r => r.source).filter(Boolean))].sort())
     })
   }, [storeId])
 
@@ -247,7 +256,7 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
           images,
           categories: cats.map(c => c.name),
           tags: tgs.map(t => t.name),
-          sources: existingSources,
+          sources,
         },
       })
       let payload = data
@@ -818,7 +827,7 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
                 optionTypes={optionTypes}
                 onOptionTypesChange={setOptionTypes}
                 sellingMode={sellingMode}
-                existingSources={existingSources}
+                existingSources={sources}
                 onUpdate={updates => updateDraft(i, updates)}
                 onRerunAi={() => runAiForGroup(i, reviewGroups[i], draft.aiSelected, draft.aiOnly, categories, allTags)}
                 onApplySuggestedAs={field => {

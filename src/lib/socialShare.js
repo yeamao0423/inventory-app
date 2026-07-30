@@ -1,4 +1,4 @@
-// 社群分享：純函式，零依賴。供 StorefrontPage 的分享面板與 SettingsPage 的模板設定共用。
+// 社群分享：純函式，零依賴。供商品頁商城分頁的分享面板與 SettingsPage 的模板設定共用。
 
 // 平台根網域（無自訂網域時的子網域退回值）；可用 env 覆寫，需與商城端 PLATFORM_DOMAINS 一致。
 export const ROOT_DOMAIN = import.meta.env.VITE_PLATFORM_ROOT_DOMAIN || 'daigogotw.com'
