@@ -2500,7 +2500,8 @@ function ExportRevenueSheet({ onClose }) {
       setLoading(false)
       if (error || !data) { setPreview(null); return }
       const sum = key => data.reduce((s, r) => s + Number(r[key] || 0), 0)
-      setPreview({ count: data.length, revenue: sum('total_amount'), cost: sum('total_cost'), profit: sum('profit') })
+      // 營收看淨營收（不含運費、已扣折扣），跟行程報告同一個口徑
+      setPreview({ count: data.length, revenue: sum('net_sales'), cost: sum('total_cost'), profit: sum('profit') })
     }, 400)
     return () => { alive = false; clearTimeout(t) }
   }, [statuses, payStatuses, idFrom, idTo, dateFrom, dateTo, storeId])
@@ -2526,24 +2527,28 @@ function ExportRevenueSheet({ onClose }) {
   function buildOrdersCSV(data) {
     const rows = [
       ['訂單編號', '訂單時間', '下單人', 'Email', '電話', '末五碼', '訂單狀態', '付款狀態',
-       '件數', '商品小計', '折扣金額', '運費', '訂單總金額', '訂單總成本(TWD)', '訂單利潤', '毛利率(%)', '物流追蹤碼'].join(','),
+       '件數', '商品小計', '折扣金額', '淨營收', '運費收入', '物流成本', '運費損益',
+       '訂單總金額', '商品成本(TWD)', '商品毛利', '毛利率(%)', '物流追蹤碼'].join(','),
     ]
     data.forEach(r => {
       rows.push([
         r.order_id, fmtTime(r.created_at), esc(r.customer_name), esc(r.email), esc(r.phone),
         esc(r.remittance_last5), r.status, r.payment_status,
-        r.item_count, r.subtotal, r.discount_amount, r.shipping_fee ?? '',
+        r.item_count, r.subtotal, r.discount_amount, r.net_sales,
+        r.shipping_fee ?? '', r.shipping_cost ?? '', r.shipping_net ?? '',
         r.total_amount, r.total_cost, r.profit, r.margin ?? '', esc(r.tracking_number),
       ].join(','))
     })
     const sum = key => data.reduce((s, r) => s + Number(r[key] || 0), 0)
-    const totalRevenue = sum('total_amount')
+    // 毛利率分母用淨營收（不含運費），與行程報告一致
+    const totalNetSales = sum('net_sales')
     const totalProfit = sum('profit')
     rows.push([
       '合計', '', '', '', '', '', '', '',
-      sum('item_count'), sum('subtotal'), sum('discount_amount'), sum('shipping_fee'),
-      totalRevenue, sum('total_cost'), totalProfit,
-      totalRevenue > 0 ? (totalProfit / totalRevenue * 100).toFixed(1) : '', '',
+      sum('item_count'), sum('subtotal'), sum('discount_amount'), totalNetSales,
+      sum('shipping_fee'), sum('shipping_cost'), sum('shipping_net'),
+      sum('total_amount'), sum('total_cost'), totalProfit,
+      totalNetSales > 0 ? (totalProfit / totalNetSales * 100).toFixed(1) : '', '',
     ].join(','))
     return rows
   }
@@ -2551,13 +2556,14 @@ function ExportRevenueSheet({ onClose }) {
   function buildItemsCSV(data) {
     const rows = [
       ['訂單編號', '訂單時間', '訂單狀態', '商品名稱', 'SKU', '規格', '品項狀態',
-       '數量', '售價', '小計', '幣別', '原幣成本', '成本(TWD)', '成本小計', '品項利潤', '備註'].join(','),
+       '數量', '售價', '小計', '分攤折扣', '淨小計', '幣別', '原幣成本', '成本(TWD)', '成本小計', '品項毛利', '備註'].join(','),
     ]
     data.forEach(r => {
       rows.push([
         r.order_id, fmtTime(r.created_at), r.order_status, esc(r.item_name), esc(r.sku),
         esc(r.variant_label), r.item_status === 'cancelled' ? '已取消' : '',
-        r.qty, r.unit_price ?? '', r.subtotal ?? '', r.currency ?? '',
+        r.qty, r.unit_price ?? '', r.subtotal ?? '', r.item_discount ?? '', r.net_subtotal ?? '',
+        r.currency ?? '',
         r.unit_cost_orig ?? '', r.unit_cost_twd ?? '', r.cost_subtotal ?? '', r.item_profit ?? '',
         esc(r.custom_note),
       ].join(','))
@@ -2665,8 +2671,8 @@ function ExportRevenueSheet({ onClose }) {
           {loading ? (
             <div style={{ gridColumn: '1 / -1', textAlign: 'center', color: 'var(--text-3)', fontSize: 13 }}>計算中…</div>
           ) : preview ? (
-            [['訂單數', `${preview.count} 筆`], ['總營收', fmtMoney(preview.revenue)],
-             ['總成本', fmtMoney(preview.cost)], ['總利潤', fmtMoney(preview.profit)]].map(([k, v]) => (
+            [['訂單數', `${preview.count} 筆`], ['淨營收', fmtMoney(preview.revenue)],
+             ['商品成本', fmtMoney(preview.cost)], ['商品毛利', fmtMoney(preview.profit)]].map(([k, v]) => (
               <div key={k}>
                 <div style={{ fontSize: 12, color: 'var(--text-3)' }}>{k}</div>
                 <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>{v}</div>

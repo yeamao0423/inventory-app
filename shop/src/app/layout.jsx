@@ -205,6 +205,13 @@ export default function RootLayout({ children }) {
   const pinCtx = { cats: navCats, brands: navBrands, tags: navTags, lang }
   const navPins = menuItems.filter(i => i.type !== 'group').map(i => resolvePin(i, pinCtx)).filter(Boolean)
 
+  // 頁尾聯絡資訊：金物流（綠界）審核要求商店頁面須揭露聯絡電話與 Email。
+  // 優先取後台「客服聯絡」欄位；店主沒填時退回物流的寄件人資料，確保審核時一定看得到。
+  const contactPhone = store?.settings?.contact_phone || store?.settings?.sender_phone || ''
+  const contactEmail = store?.settings?.contact_email || store?.settings?.sender_email || ''
+  // tel: 只留數字與開頭 +，避免店主填「0912-345-678」或帶空白時連結失效
+  const telHref = contactPhone.replace(/(?!^\+)[^\d]/g, '')
+
   return (
     <html lang={lang === 'zh' ? 'zh-TW' : 'en'}>
       <body>
@@ -365,12 +372,20 @@ export default function RootLayout({ children }) {
                     ))}
                   </div>
                 )}
-                {store?.settings?.sender_email && (
+                {(contactPhone || contactEmail) && (
                   <div style={{ marginBottom: 6 }}>
                     {lang === 'en' ? 'Contact: ' : '聯絡我們：'}
-                    <a href={`mailto:${store.settings.sender_email}`} style={{ color: 'inherit', textDecoration: 'underline' }}>
-                      {store.settings.sender_email}
-                    </a>
+                    {contactPhone && (
+                      <a href={`tel:${telHref}`} style={{ color: 'inherit', textDecoration: 'underline' }}>
+                        {contactPhone}
+                      </a>
+                    )}
+                    {contactPhone && contactEmail && <span style={{ margin: '0 8px' }}>·</span>}
+                    {contactEmail && (
+                      <a href={`mailto:${contactEmail}`} style={{ color: 'inherit', textDecoration: 'underline' }}>
+                        {contactEmail}
+                      </a>
+                    )}
                   </div>
                 )}
                 © 2026 {store?.name || ''}. All rights reserved.

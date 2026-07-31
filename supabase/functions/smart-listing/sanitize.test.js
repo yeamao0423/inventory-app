@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { parseClaudeJson, sanitizeSuggestion, SUPPORTED_CURRENCIES } from './sanitize.ts'
+import { parseClaudeJson, sanitizeSuggestion, SUPPORTED_CURRENCIES, detectImageFormat } from './sanitize.ts'
+
+function b64(bytes) {
+  return Buffer.from(bytes).toString('base64')
+}
 
 const CATS = ['藥妝', '零食', '服飾']
 const TAGS = ['熱銷', '新品', '限量', '日本', '韓國', '現貨']
@@ -179,5 +183,42 @@ describe('SUPPORTED_CURRENCIES', () => {
   it('與前端 src/constants/currency.js 同步（13 種）', async () => {
     const frontend = await import('../../../src/constants/currency.js')
     expect(SUPPORTED_CURRENCIES).toEqual(frontend.SUPPORTED_CURRENCIES)
+  })
+})
+
+describe('detectImageFormat', () => {
+  it('PNG 簽章 → image/png', () => {
+    expect(detectImageFormat(b64([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0]))).toBe('image/png')
+  })
+
+  it('JPEG 簽章 → image/jpeg', () => {
+    expect(detectImageFormat(b64([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]))).toBe('image/jpeg')
+  })
+
+  it('GIF 簽章 → image/gif', () => {
+    expect(detectImageFormat(b64(Array.from('GIF89a').map(c => c.charCodeAt(0)).concat([0, 0, 0, 0, 0, 0, 0, 0, 0, 0])))).toBe('image/gif')
+  })
+
+  it('RIFF/WEBP 簽章 → image/webp', () => {
+    const bytes = Array.from('RIFF').map(c => c.charCodeAt(0))
+      .concat([0, 0, 0, 0])
+      .concat(Array.from('WEBP').map(c => c.charCodeAt(0)))
+    expect(detectImageFormat(b64(bytes))).toBe('image/webp')
+  })
+
+  it('宣稱 webp 但實際位元組是 png → 仍偵測回 image/png（矯正前端誤標）', () => {
+    const pngBytes = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0]
+    expect(detectImageFormat(b64(pngBytes))).not.toBe('image/webp')
+  })
+
+  it('HEIC（ftyp box）等不支援格式 → null', () => {
+    const heicBytes = [0, 0, 0, 0x18].concat(Array.from('ftypheic').map(c => c.charCodeAt(0))).concat([0, 0, 0, 0])
+    expect(detectImageFormat(b64(heicBytes))).toBeNull()
+  })
+
+  it('非字串／過短 → null', () => {
+    expect(detectImageFormat(null)).toBeNull()
+    expect(detectImageFormat(123)).toBeNull()
+    expect(detectImageFormat('abc')).toBeNull()
   })
 })

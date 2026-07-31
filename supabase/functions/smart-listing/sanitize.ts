@@ -38,6 +38,25 @@ function cleanText(v: unknown, max: number): string | null {
   return t.length > max ? t.slice(0, max) : t;
 }
 
+// 從 base64 開頭的 magic bytes 判斷真實圖片格式，不信任前端宣稱的 media_type
+// （webview canvas 編碼失敗時可能靜默退回別的格式，但仍標成原本要求的類型）。
+// 只認 Anthropic 支援的 4 種格式；辨識不出（HEIC 等）就回 null，呼叫端視為不支援格式。
+export function detectImageFormat(base64: unknown): string | null {
+  if (typeof base64 !== "string" || base64.length < 16) return null;
+  let bytes: string;
+  try {
+    bytes = atob(base64.slice(0, 24));
+  } catch {
+    return null;
+  }
+  const b = (i: number) => bytes.charCodeAt(i);
+  if (b(0) === 0x89 && b(1) === 0x50 && b(2) === 0x4e && b(3) === 0x47) return "image/png";
+  if (b(0) === 0xff && b(1) === 0xd8 && b(2) === 0xff) return "image/jpeg";
+  if (bytes.slice(0, 3) === "GIF") return "image/gif";
+  if (bytes.slice(0, 4) === "RIFF" && bytes.slice(8, 12) === "WEBP") return "image/webp";
+  return null;
+}
+
 // Claude 常把 JSON 包在 ```json 圍欄或夾在文字裡 → 擷取第一段 {...} 解析
 export function parseClaudeJson(text: unknown): Record<string, unknown> | null {
   if (typeof text !== "string") return null;

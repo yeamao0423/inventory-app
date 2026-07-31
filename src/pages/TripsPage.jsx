@@ -3,6 +3,18 @@ import { supabase } from '../lib/supabase'
 import { SUPPORTED_CURRENCIES } from '../constants/currency'
 import { useAuth } from '../hooks/useAuth'
 import { fetchStoreMembers } from '../components/ProcurementBatchTab'
+import {
+  taipeiDayStart, taipeiDayEnd, summarizeOrders, computeTripFinance, buildCostSnapshotMap,
+} from '../lib/orderFinance'
+
+// 三張 slide 共用：手機一次滿版一張、可左右滑；桌機由 .trip-carousel 攤平成三欄
+const SLIDE_STYLE = {
+  minWidth: '100%',
+  flexShrink: 0,
+  scrollSnapAlign: 'start',
+  boxSizing: 'border-box',
+  paddingRight: 20,
+}
 
 const FIXED_CATEGORIES = [
   { key: 'flight',    label: '機票' },
@@ -77,6 +89,13 @@ export default function TripsPage() {
     return `${date.getMonth() + 1}/${date.getDate()}`
   }
 
+  // 含頭尾的天數，跟一般人說「去幾天」的算法一致
+  function tripDays(trip) {
+    if (!trip.depart_date || !trip.return_date) return 0
+    const ms = new Date(trip.return_date) - new Date(trip.depart_date)
+    return Math.max(1, Math.round(ms / 86400000) + 1)
+  }
+
   async function deleteTrip(id) {
     if (!window.confirm('確定刪除此行程？所有費用紀錄也會一併刪除。')) return
     await supabase.from('trips').delete().eq('id', id)
@@ -116,48 +135,40 @@ export default function TripsPage() {
       </div>
 
       {loading ? (
-        <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-3)' }}>載入中…</div>
+        <div className="muted" style={{ textAlign: 'center', padding: 40 }}>載入中…</div>
       ) : trips.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-3)' }}>尚無行程，點右上角 + 新增</div>
+        <div className="muted" style={{ textAlign: 'center', padding: 40 }}>尚無行程，點右上角 + 新增</div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div className="card">
           {trips.map(trip => (
             <div
               key={trip.id}
+              className="card-row"
               onClick={() => setReportTrip(trip)}
-              style={{
-                background: 'var(--card)',
-                borderRadius: 12,
-                padding: 16,
-                cursor: 'pointer',
-                border: '1px solid var(--border)',
-              }}
+              style={{ cursor: 'pointer', alignItems: 'flex-start' }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 4 }}>{trip.destination}</div>
-                  <div style={{ fontSize: 13, color: 'var(--text-3)' }}>
-                    {formatDate(trip.depart_date)} — {formatDate(trip.return_date)}
-                  </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="fw600" style={{ fontSize: 15 }}>{trip.destination}</div>
+                <div className="muted fs12 num" style={{ marginTop: 3 }}>
+                  {formatDate(trip.depart_date)} – {formatDate(trip.return_date)}
+                  <span style={{ margin: '0 5px' }}>·</span>
+                  {tripDays(trip)} 天
                 </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontWeight: 600, fontSize: 15, color: 'var(--text)' }}>
-                    ${totalExpense(trip).toLocaleString()}
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--text-3)' }}>總費用</div>
-                  {procurementCostByTrip[trip.id] > 0 && (
-                    <>
-                      <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-2)', marginTop: 4 }}>
-                        ${Math.round(procurementCostByTrip[trip.id]).toLocaleString()}
-                      </div>
-                      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>進貨成本</div>
-                    </>
-                  )}
-                </div>
+                {trip.note && (
+                  <div className="muted fs12" style={{ marginTop: 5 }}>{trip.note}</div>
+                )}
               </div>
-              {trip.note && (
-                <div style={{ fontSize: 13, color: 'var(--text-3)', marginTop: 8 }}>{trip.note}</div>
-              )}
+              <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                <div className="fw600 num" style={{ fontSize: 15 }}>
+                  ${totalExpense(trip).toLocaleString()}
+                </div>
+                <div className="muted" style={{ fontSize: 11, marginTop: 1 }}>行程費用</div>
+                {procurementCostByTrip[trip.id] > 0 && (
+                  <div className="muted fs12 num" style={{ marginTop: 6 }}>
+                    進貨 ${Math.round(procurementCostByTrip[trip.id]).toLocaleString()}
+                  </div>
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -204,19 +215,25 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
   async function fetchReportData() {
     setLoading(true)
 
-    const [{ data: orders }, { data: products }, { data: spProducts }, { data: rates }, { data: allOrders }, { data: images }, { data: procurementBatches }, { data: settlement }, { data: participants }, members] = await Promise.all([
+    // 日界線用台北時區，不能讓 PostgREST 把純日期當成 UTC 午夜
+    // （那會固定漏掉出發日早上 8 點前、多算回國隔天早上 8 點前的訂單）
+    const rangeStart = taipeiDayStart(trip.depart_date)
+    const rangeEnd = taipeiDayEnd(trip.return_date)
+
+    const [{ data: orders }, { data: products }, { data: variants }, { data: spProducts }, { data: rates }, { data: allOrders }, { data: images }, { data: procurementBatches }, { data: settlement }, { data: participants }, members] = await Promise.all([
       supabase.from('consumer_orders').select('*')
         .eq('store_id', storeId)
-        .gte('created_at', trip.depart_date)
-        .lte('created_at', trip.return_date + 'T23:59:59')
+        .gte('created_at', rangeStart)
+        .lte('created_at', rangeEnd)
         .neq('status', '已取消')
         .order('created_at', { ascending: false }),
       supabase.from('products').select('id, name, sku, source, cost, currency').eq('store_id', storeId),
+      supabase.from('product_variants').select('id, variant_cost').eq('store_id', storeId),
       supabase.from('storefront_products').select('product_id, shop_price').eq('store_id', storeId),
       supabase.from('exchange_rates').select('*'),
       supabase.from('consumer_orders').select('email, created_at')
         .eq('store_id', storeId)
-        .lt('created_at', trip.depart_date)
+        .lt('created_at', rangeStart)
         .neq('status', '已取消'),
       supabase.from('product_images').select('product_id, url, sort_order').order('sort_order', { ascending: true }),
       supabase.from('procurement_batches').select('id, status, buyer_id, procurement_items(unit_cost, currency, quantity, actual_qty, status, paid_by)')
@@ -239,14 +256,15 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
     const productMap = {}
     ;(products || []).forEach(p => { productMap[p.id] = p })
 
+    const variantMap = {}
+    ;(variants || []).forEach(v => { variantMap[String(v.id)] = v })
+
     const priceMap = {}
     ;(spProducts || []).forEach(sp => { priceMap[sp.product_id] = Number(sp.shop_price) })
 
     const rateMap = {}
     ;(rates || []).forEach(r => { rateMap[r.currency] = Number(r.rate) })
 
-    const totalRevenue = tripOrders.reduce((s, o) => s + Number(o.total_amount || 0), 0)
-    const shippingRevenue = tripOrders.reduce((s, o) => s + Number(o.shipping_fee || 0), 0)
     const tripExpenseTotal = (trip.trip_expenses || []).reduce((s, e) => s + Number(e.amount || 0), 0)
 
     // 本趟進貨成本：純呈現用，不併入淨利計算
@@ -287,61 +305,37 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
       extraMembers = (extra || []).map(p => ({ ...p, role: null }))
     }
 
-    // Product aggregation
-    const productAgg = {}
-    tripOrders.forEach(order => {
-      const items = Array.isArray(order.items_json) ? order.items_json : []
-      items.forEach(item => {
-        if (item.status === 'cancelled') return
-        const pid = item.id
-        if (!pid) return
-        const prod = productMap[pid]
-        if (!productAgg[pid]) {
-          productAgg[pid] = {
-            name: item.name,
-            sku: prod?.sku || '',
-            source: prod?.source || '',
-            currency: prod?.currency || 'TWD',
-            unitCost: prod?.cost != null ? Number(prod.cost) : null,
-            shopPrice: priceMap[pid] || null,
-            images: imageMap[pid] || [],
-            qty: 0,
-            revenue: 0,
-            cost: 0,
-            hasCost: prod?.cost != null && Number(prod.cost) > 0,
-          }
-        }
-        const qty = Number(item.qty) || 1
-        const price = Number(item.price) || (priceMap[pid] || 0)
-        productAgg[pid].qty += qty
-        productAgg[pid].revenue += price * qty
+    // 成本快照：下單當下凍結的進貨成本，優先於現在的商品設定。
+    // 前端部署跟 migration 套用不會同時發生，表還沒建好時（PostgREST 回 404）
+    // 就安靜退回用現值算，報告照常出得來，只是成本會隨商品設定漂移。
+    const { data: costRows, error: costErr } = tripOrders.length > 0
+      ? await supabase.from('consumer_order_item_costs')
+          .select('order_id, item_index, unit_cost_twd')
+          .in('order_id', tripOrders.map(o => o.id))
+      : { data: [], error: null }
+    const costSnapshots = buildCostSnapshotMap(costRows || [])
+    const snapshotReady = !costErr
 
-        if (prod?.cost) {
-          let costTWD = Number(prod.cost)
-          const cur = prod.currency || 'TWD'
-          if (cur !== 'TWD' && rateMap[cur]) {
-            costTWD = costTWD * rateMap[cur]
-          }
-          productAgg[pid].cost += costTWD * qty
-        }
-      })
-    })
+    // 財務一律走 orderFinance：淨營收不含運費、折扣分攤到品項，
+    // 所以下面商品列表的毛利加總必然等於總毛利
+    const finance = computeTripFinance(
+      summarizeOrders(tripOrders, { productMap, variantMap, rateMap, costSnapshots }),
+      { tripExpense: tripExpenseTotal, procurementCost },
+    )
 
-    const productList = Object.entries(productAgg)
-      .map(([pid, p]) => ({
-        id: pid,
+    // 補上展示欄位（財務數字全部來自 finance，這裡只接名稱/圖片/售價）
+    const productList = finance.products.map(p => {
+      const prod = productMap[p.id]
+      return {
         ...p,
-        profit: p.revenue - p.cost,
-        margin: p.revenue > 0 ? ((p.revenue - p.cost) / p.revenue * 100) : 0,
-      }))
-      .sort((a, b) => b.profit - a.profit)
-
-    const totalProductCost = productList.reduce((s, p) => s + p.cost, 0)
-    const grossProfit = totalRevenue - totalProductCost
-    const netProfit = totalRevenue - totalProductCost - tripExpenseTotal
-    const netMargin = totalRevenue > 0 ? (netProfit / totalRevenue * 100) : 0
-    const noCostCount = productList.filter(p => !p.hasCost).length
-    const productTypeCount = productList.length
+        sku: prod?.sku || '',
+        source: prod?.source || '',
+        currency: prod?.currency || 'TWD',
+        unitCost: prod?.cost != null ? Number(prod.cost) : null,
+        shopPrice: priceMap[p.id] || null,
+        images: imageMap[p.id] || [],
+      }
+    })
 
     // Customer insights
     const customerMap = {}
@@ -366,21 +360,19 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
       }
     })
 
-    const avgOrderValue = tripOrders.length > 0 ? totalRevenue / tripOrders.length : 0
+    // 客單價是客群指標，看的是客戶實際付了多少（含運費），跟財務口徑分開
+    const customerPaidTotal = tripOrders.reduce((s, o) => s + Number(o.total_amount || 0), 0)
+    const avgOrderValue = finance.orderCount > 0 ? customerPaidTotal / finance.orderCount : 0
+
+    // finance.products 已經在上面接好展示欄位成為 productList，不再重複帶出去
+    const { products: _rawProducts, ...financeTotals } = finance
 
     setData({
+      ...financeTotals,
+      snapshotReady,
       orders: tripOrders,
-      totalRevenue,
-      totalProductCost,
-      grossProfit,
-      tripExpenseTotal,
-      procurementCost,
-      shippingRevenue,
-      netProfit,
-      netMargin,
       productList,
-      productTypeCount,
-      noCostCount,
+      productTypeCount: productList.length,
       customers,
       newCount,
       returnCount,
@@ -411,33 +403,6 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
     }
   }
 
-  const mCard = {
-    background: 'var(--card)',
-    borderRadius: 12,
-    padding: '14px 16px',
-    border: '1px solid var(--border)',
-    textAlign: 'center',
-    flex: 1,
-    minWidth: 0,
-  }
-
-  const sectionTitle = {
-    fontSize: 16,
-    fontWeight: 700,
-    marginBottom: 12,
-    marginTop: 24,
-  }
-
-  const cardStyle = {
-    background: 'var(--card)',
-    borderRadius: 12,
-    padding: 14,
-    border: '1px solid var(--border)',
-    textAlign: 'center',
-    flex: 1,
-    minWidth: 0,
-  }
-
   function formatDate(d) {
     if (!d) return ''
     const date = new Date(d)
@@ -448,44 +413,58 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
     <div className="page">
       {/* Header */}
       <div className="ph">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
           <button
             onClick={onBack}
-            style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--text)', padding: 0 }}
+            aria-label="返回行程列表"
+            style={{
+              width: 30, height: 30, borderRadius: '50%', flexShrink: 0,
+              background: 'var(--card)', border: '0.5px solid var(--border)',
+              fontSize: 15, cursor: 'pointer', color: 'var(--text)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              marginTop: 4,
+            }}
           >←</button>
-          <div>
+          <div style={{ minWidth: 0 }}>
             <div className="ph-title">{trip.destination}</div>
-            <div className="ph-sub">{formatDate(trip.depart_date)} — {formatDate(trip.return_date)}</div>
+            <div className="ph-sub num">{formatDate(trip.depart_date)} – {formatDate(trip.return_date)}</div>
           </div>
         </div>
-        <button
-          onClick={onEdit}
-          style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 8, padding: '6px 14px', fontSize: 13, cursor: 'pointer', color: 'var(--text)' }}
-        >編輯</button>
+        <button className="chip-btn" onClick={onEdit} style={{ marginTop: 4 }}>編輯</button>
       </div>
 
       {loading ? (
-        <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-3)' }}>載入報告中…</div>
+        <div className="muted" style={{ textAlign: 'center', padding: 40 }}>載入報告中…</div>
       ) : !data ? (
-        <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-3)' }}>載入失敗</div>
+        <div className="muted" style={{ textAlign: 'center', padding: 40 }}>載入失敗</div>
       ) : (
         <>
           {/* ── Missing cost warning ── */}
           {data.noCostCount > 0 && (
-            <div style={{
-              background: '#fef3c7',
-              border: '1px solid #f59e0b',
-              borderRadius: 10,
-              padding: '10px 14px',
-              marginBottom: 16,
-              fontSize: 13,
-              color: '#92400e',
-            }}>
-              {data.noCostCount} 件商品未設定成本，利潤計算可能不準確（見下方商品列表可直接設定）
+            <div className="notice notice-warn">
+              {data.noCostCount} 件商品未設定成本，目前以 0 元進貨計算，毛利會被高估。
+              可在下方商品列表直接補上。
             </div>
           )}
 
-          {/* ── Slide Carousel ── */}
+          {(!data.snapshotReady || data.unknownShippingCostCount > 0) && (
+            <div className="notice notice-warn">
+              {!data.snapshotReady && (
+                <div>
+                  成本快照尚未啟用（資料庫還沒套 20250057），目前用商品的現值成本計算，
+                  改商品成本或匯率會回頭改動這裡的歷史數字。
+                </div>
+              )}
+              {data.unknownShippingCostCount > 0 && (
+                <div style={{ marginTop: !data.snapshotReady ? 8 : 0 }}>
+                  {data.unknownShippingCostCount} 張訂單沒有物流成本資料（資料庫還沒套 20250058），
+                  運費損益暫時以 0 計算。實際上免運單的物流費是店家自付，補上後盈餘會下降。
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Slide Carousel：核心財務／現金與庫存／客群概覽 ── */}
           <div
             ref={carouselRef}
             onScroll={handleScroll}
@@ -498,84 +477,67 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
               scrollbarWidth: 'none',
             }}
           >
-            {/* Slide 1: 核心財務 */}
-            <div className="trip-slide" style={{ minWidth: '100%', flexShrink: 0, scrollSnapAlign: 'start', boxSizing: 'border-box', paddingRight: 24 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-3)', marginBottom: 10 }}>核心財務</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <div style={mCard}>
-                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 4 }}>總營收</div>
-                  <div style={{ fontSize: 20, fontWeight: 700 }}>${data.totalRevenue.toLocaleString()}</div>
-                </div>
-                <div style={mCard}>
-                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 4 }}>商品成本</div>
-                  <div style={{ fontSize: 20, fontWeight: 700 }}>${Math.round(data.totalProductCost).toLocaleString()}</div>
-                </div>
-                <div style={mCard}>
-                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 4 }}>毛利</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: data.grossProfit >= 0 ? '#16a34a' : '#e53e3e' }}>
-                    ${Math.round(data.grossProfit).toLocaleString()}
-                  </div>
-                </div>
-                <div style={mCard}>
-                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 4 }}>淨利</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: data.netProfit >= 0 ? '#16a34a' : '#e53e3e' }}>
-                    ${Math.round(data.netProfit).toLocaleString()}
-                  </div>
-                </div>
-              </div>
+            {/* Slide 1: 核心財務 —— 一條由上而下的算式，每一步都看得到怎麼來的 */}
+            <div className="trip-slide" style={SLIDE_STYLE}>
+              <FinanceWaterfall data={data} />
             </div>
 
-            {/* Slide 2: 營運指標 */}
-            <div className="trip-slide" style={{ minWidth: '100%', flexShrink: 0, scrollSnapAlign: 'start', boxSizing: 'border-box', paddingRight: 24 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-3)', marginBottom: 10 }}>營運指標</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <div style={mCard}>
-                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 4 }}>淨利率</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: data.netMargin >= 0 ? '#16a34a' : '#e53e3e' }}>
-                    {data.netMargin.toFixed(1)}%
-                  </div>
-                </div>
-                <div style={mCard}>
-                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 4 }}>訂單數</div>
-                  <div style={{ fontSize: 20, fontWeight: 700 }}>{data.orders.length}</div>
-                </div>
-                <div style={mCard}>
-                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 4 }}>行程費用</div>
-                  <div style={{ fontSize: 20, fontWeight: 700 }}>${data.tripExpenseTotal.toLocaleString()}</div>
-                </div>
-                <div style={mCard}>
-                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 4 }}>運費收入</div>
-                  <div style={{ fontSize: 20, fontWeight: 700 }}>${data.shippingRevenue.toLocaleString()}</div>
-                </div>
-                <div style={mCard}>
-                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 4 }}>本趟進貨成本</div>
-                  <div style={{ fontSize: 20, fontWeight: 700 }}>${Math.round(data.procurementCost).toLocaleString()}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>不計入淨利</div>
-                </div>
-              </div>
+            {/* Slide 2: 現金與庫存 */}
+            <div className="trip-slide" style={SLIDE_STYLE}>
+              <MetricCard title="現金與庫存">
+                <MetricRow
+                  label="運費收入"
+                  hint={`實付物流 $${Math.round(data.shippingCost).toLocaleString()}`}
+                  value={`$${Math.round(data.shippingFee).toLocaleString()}`}
+                />
+                <MetricRow
+                  label="免運倒貼"
+                  hint={data.freeShippingCount > 0 ? `${data.freeShippingCount} 張免運單` : '本趟沒有免運單'}
+                  value={`− $${Math.abs(Math.round(Math.min(data.shippingNet, 0))).toLocaleString()}`}
+                  tone={data.shippingNet < 0 ? 'var(--red)' : undefined}
+                />
+                <div className="wf-rule" />
+                <MetricRow
+                  label="尚未收款"
+                  hint="營收已認列但錢還沒進來"
+                  value={`$${Math.round(data.unpaid).toLocaleString()}`}
+                  tone={data.unpaid > 0 ? 'var(--red)' : undefined}
+                />
+                <MetricRow
+                  label="待退客戶"
+                  value={`$${Math.round(data.refundDue).toLocaleString()}`}
+                />
+                <div className="wf-rule" />
+                <MetricRow
+                  label="本趟進貨"
+                  hint="這趟實際買了多少貨"
+                  value={`$${Math.round(data.procurementCost).toLocaleString()}`}
+                />
+                <MetricRow
+                  level="sub"
+                  label={data.retainedInventory >= 0 ? '本趟留存庫存' : '本趟賣掉的舊庫存'}
+                  hint={data.retainedInventory >= 0
+                    ? '買了還沒賣掉，錢付了但不計入這趟成本'
+                    : '賣的是先前批次進的貨，成本已在當時算過'}
+                  value={`$${Math.abs(Math.round(data.retainedInventory)).toLocaleString()}`}
+                />
+              </MetricCard>
             </div>
 
             {/* Slide 3: 客群概覽 */}
-            <div className="trip-slide" style={{ minWidth: '100%', flexShrink: 0, scrollSnapAlign: 'start', boxSizing: 'border-box' }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-3)', marginBottom: 10 }}>客群概覽</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <div style={mCard}>
-                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 4 }}>商品種類</div>
-                  <div style={{ fontSize: 20, fontWeight: 700 }}>{data.productTypeCount}</div>
-                </div>
-                <div style={mCard}>
-                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 4 }}>平均客單價</div>
-                  <div style={{ fontSize: 20, fontWeight: 700 }}>${Math.round(data.avgOrderValue).toLocaleString()}</div>
-                </div>
-                <div style={mCard}>
-                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 4 }}>新客</div>
-                  <div style={{ fontSize: 20, fontWeight: 700 }}>{data.newCount}</div>
-                </div>
-                <div style={mCard}>
-                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 4 }}>回購客</div>
-                  <div style={{ fontSize: 20, fontWeight: 700 }}>{data.returnCount}</div>
-                </div>
-              </div>
+            <div className="trip-slide" style={SLIDE_STYLE}>
+              <MetricCard title="客群概覽">
+                <MetricRow label="訂單數" value={data.orderCount} />
+                <MetricRow label="商品種類" value={data.productTypeCount} />
+                <MetricRow
+                  label="平均客單價"
+                  hint="客戶實付，含運費"
+                  value={`$${Math.round(data.avgOrderValue).toLocaleString()}`}
+                />
+                <div className="wf-rule" />
+                <MetricRow label="新客" value={data.newCount} />
+                <MetricRow label="回購客" value={data.returnCount} />
+              </MetricCard>
             </div>
           </div>
 
@@ -593,113 +555,86 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
           </div>
 
           {/* ── Section: 拆賬 ── */}
-          <div style={sectionTitle}>拆賬</div>
+          <div className="sec">拆賬</div>
           {data.settlement ? (
-            <SettlementResult settlement={data.settlement} onChanged={fetchReportData} />
+            <SettlementResult settlement={data.settlement} data={data} onChanged={fetchReportData} />
           ) : (
-            <div style={{ background: 'var(--card)', borderRadius: 12, padding: 16, border: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 6 }}>
-                <span style={{ color: 'var(--text-3)' }}>可分配淨利</span>
-                <span style={{ fontWeight: 700, color: data.netProfit >= 0 ? '#16a34a' : '#e53e3e' }}>
-                  ${Math.round(data.netProfit).toLocaleString()}
+            <div className="card" style={{ padding: '14px 16px' }}>
+              <div className="row-sb" style={{ marginBottom: 7 }}>
+                <span className="muted fs13">可分配盈餘</span>
+                <span className="fw600 num fs15" style={{ color: data.distributable >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                  ${Math.round(data.distributable).toLocaleString()}
                 </span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 6 }}>
-                <span style={{ color: 'var(--text-3)' }}>待結清批次</span>
-                <span style={{ fontWeight: 600 }}>{data.unsettledBatchCount} 批</span>
+              <div className="row-sb" style={{ marginBottom: 7 }}>
+                <span className="muted fs13">待結清批次</span>
+                <span className="fs13 num">{data.unsettledBatchCount} 批</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 14 }}>
-                <span style={{ color: 'var(--text-3)' }}>待還代墊</span>
-                <span style={{ fontWeight: 600 }}>
+              <div className="row-sb" style={{ marginBottom: 14 }}>
+                <span className="muted fs13">待還代墊</span>
+                <span className="fs13 num">
                   ${Math.round(Object.values(data.advanceByPayer).reduce((s, v) => s + v, 0)).toLocaleString()}
                 </span>
               </div>
-              <button
-                onClick={() => setShowSettleSheet(true)}
-                style={{
-                  width: '100%', padding: '11px 0', borderRadius: 8, border: 'none',
-                  background: 'var(--text)', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer',
-                }}
-              >開始拆賬</button>
+              <button className="btn" style={{ padding: 12, fontSize: 15 }} onClick={() => setShowSettleSheet(true)}>
+                開始拆賬
+              </button>
             </div>
           )}
 
           {/* ── Section 2: Product Performance (top 5) ── */}
-          <div style={{ ...sectionTitle, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div className="sec row-sb">
             <span>商品表現</span>
             {data.productList.length > 5 && (
-              <button onClick={() => setDetailSheet('products')} style={{
-                background: 'none', border: 'none', fontSize: 13, color: 'var(--text-3)', cursor: 'pointer',
-              }}>查看全部 ({data.productList.length}) →</button>
+              <button className="link-btn" onClick={() => setDetailSheet('products')}>
+                全部 {data.productList.length} 件 →
+              </button>
             )}
           </div>
           {data.productList.length === 0 ? (
-            <div style={{ fontSize: 13, color: 'var(--text-3)' }}>此區間無商品銷售紀錄</div>
+            <div className="muted fs13">此區間無商品銷售紀錄</div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div>
               {data.productList.slice(0, 5).map((p, i) => (
                 <ProductRow key={p.id} p={p} i={i} costEdits={costEdits} setCostEdits={setCostEdits} saveCost={saveCost} savingCost={savingCost} onSelect={setSelectedProduct} />
               ))}
-              {data.productList.length > 5 && (
-                <button onClick={() => setDetailSheet('products')} style={{
-                  background: 'none', border: '1px dashed var(--border)', borderRadius: 8, padding: 10,
-                  fontSize: 13, color: 'var(--text-3)', cursor: 'pointer', textAlign: 'center',
-                }}>查看全部 {data.productList.length} 件商品</button>
-              )}
             </div>
           )}
 
           {/* ── Section 3: Customer Insights (top 5) ── */}
           {data.customers.length > 0 && (
             <>
-              <div style={{ ...sectionTitle, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>TOP 客戶</span>
+              <div className="sec row-sb">
+                <span>Top 客戶</span>
                 {data.customers.length > 5 && (
-                  <button onClick={() => setDetailSheet('customers')} style={{
-                    background: 'none', border: 'none', fontSize: 13, color: 'var(--text-3)', cursor: 'pointer',
-                  }}>查看全部 ({data.customers.length}) →</button>
+                  <button className="link-btn" onClick={() => setDetailSheet('customers')}>
+                    全部 {data.customers.length} 位 →
+                  </button>
                 )}
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
+              <div>
                 {data.customers.slice(0, 5).map((c, i) => (
                   <CustomerRow key={i} c={c} i={i} />
                 ))}
-                {data.customers.length > 5 && (
-                  <button onClick={() => setDetailSheet('customers')} style={{
-                    background: 'none', border: '1px dashed var(--border)', borderRadius: 8, padding: 10,
-                    fontSize: 13, color: 'var(--text-3)', cursor: 'pointer', textAlign: 'center',
-                  }}>查看全部 {data.customers.length} 位客戶</button>
-                )}
               </div>
             </>
           )}
 
           {/* ── Section 4: Expense Breakdown ── */}
-          <div style={sectionTitle}>行程費用明細</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 40 }}>
+          <div className="sec">行程費用明細</div>
+          <div className="card" style={{ marginBottom: 40 }}>
+            {(trip.trip_expenses || []).length === 0 && (
+              <div className="card-row muted fs13">尚未登記行程費用</div>
+            )}
             {(trip.trip_expenses || []).map((e, i) => (
-              <div key={i} style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                background: 'var(--card)',
-                borderRadius: 8,
-                padding: '10px 14px',
-                border: '1px solid var(--border)',
-              }}>
-                <span style={{ fontSize: 14 }}>{e.label}</span>
-                <span style={{ fontWeight: 600, fontSize: 14 }}>${Number(e.amount).toLocaleString()}</span>
+              <div key={i} className="card-row row-sb">
+                <span className="fs13">{e.label}</span>
+                <span className="fs13 num">${Number(e.amount).toLocaleString()}</span>
               </div>
             ))}
-            <div style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              padding: '10px 14px',
-              fontWeight: 700,
-            }}>
-              <span>合計</span>
-              <span>${data.tripExpenseTotal.toLocaleString()}</span>
+            <div className="card-row row-sb">
+              <span className="fw600 fs13">合計</span>
+              <span className="fw600 fs15 num">${Math.round(data.tripExpense).toLocaleString()}</span>
             </div>
           </div>
         </>
@@ -725,7 +660,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
               <button onClick={() => setDetailSheet(null)} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: 'var(--text-3)' }}>×</button>
             </div>
             <div style={{ overflowY: 'auto', flex: 1 }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div>
                 {data.productList.map((p, i) => (
                   <ProductRow key={p.id} p={p} i={i} costEdits={costEdits} setCostEdits={setCostEdits} saveCost={saveCost} savingCost={savingCost} onSelect={setSelectedProduct} />
                 ))}
@@ -744,7 +679,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
               <button onClick={() => setDetailSheet(null)} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: 'var(--text-3)' }}>×</button>
             </div>
             <div style={{ overflowY: 'auto', flex: 1 }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div>
                 {data.customers.map((c, i) => (
                   <CustomerRow key={i} c={c} i={i} />
                 ))}
@@ -794,65 +729,137 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
             )}
 
             {/* Info rows */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {selectedProduct.sku && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
-                  <span style={{ color: 'var(--text-3)' }}>SKU</span>
-                  <span style={{ fontWeight: 500 }}>{selectedProduct.sku}</span>
-                </div>
-              )}
-              {selectedProduct.source && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
-                  <span style={{ color: 'var(--text-3)' }}>來源</span>
-                  <span style={{ fontWeight: 500 }}>{selectedProduct.source}</span>
-                </div>
-              )}
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
-                <span style={{ color: 'var(--text-3)' }}>成本</span>
-                <span style={{ fontWeight: 500 }}>
-                  {selectedProduct.hasCost
-                    ? `${selectedProduct.unitCost} ${selectedProduct.currency}`
-                    : '未設定'}
-                </span>
-              </div>
+            <div>
+              {selectedProduct.sku && <InfoRow label="SKU" value={selectedProduct.sku} />}
+              {selectedProduct.source && <InfoRow label="來源" value={selectedProduct.source} />}
+              <InfoRow
+                label="商品設定成本"
+                value={selectedProduct.unitCost != null
+                  ? `${selectedProduct.unitCost} ${selectedProduct.currency}`
+                  : '未設定'}
+              />
               {selectedProduct.shopPrice && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
-                  <span style={{ color: 'var(--text-3)' }}>售價</span>
-                  <span style={{ fontWeight: 500 }}>${selectedProduct.shopPrice.toLocaleString()}</span>
-                </div>
+                <InfoRow label="售價" value={`$${selectedProduct.shopPrice.toLocaleString()}`} />
               )}
 
-              <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0' }} />
+              <div className="wf-rule" style={{ margin: '10px 0' }} />
 
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
-                <span style={{ color: 'var(--text-3)' }}>此趟銷量</span>
-                <span style={{ fontWeight: 600 }}>{selectedProduct.qty}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
-                <span style={{ color: 'var(--text-3)' }}>此趟營收</span>
-                <span style={{ fontWeight: 600 }}>${selectedProduct.revenue.toLocaleString()}</span>
-              </div>
-              {selectedProduct.hasCost && (
+              <InfoRow label="此趟銷量" value={selectedProduct.qty} strong />
+              <InfoRow label="商品總額" value={`$${Math.round(selectedProduct.revenue).toLocaleString()}`} strong />
+              {selectedProduct.discount > 0 && (
+                <InfoRow label="分攤折扣" value={`− $${Math.round(selectedProduct.discount).toLocaleString()}`} strong />
+              )}
+              <InfoRow label="此趟淨營收" value={`$${Math.round(selectedProduct.netRevenue).toLocaleString()}`} strong />
+              <InfoRow label="此趟商品成本" value={`− $${Math.round(selectedProduct.cost).toLocaleString()}`} strong />
+              {selectedProduct.hasCost ? (
                 <>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
-                    <span style={{ color: 'var(--text-3)' }}>此趟毛利</span>
-                    <span style={{ fontWeight: 600, color: selectedProduct.profit >= 0 ? '#16a34a' : '#e53e3e' }}>
-                      ${Math.round(selectedProduct.profit).toLocaleString()}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
-                    <span style={{ color: 'var(--text-3)' }}>毛利率</span>
-                    <span style={{ fontWeight: 600, color: selectedProduct.margin >= 0 ? '#16a34a' : '#e53e3e' }}>
-                      {selectedProduct.margin.toFixed(1)}%
-                    </span>
+                  <InfoRow
+                    label="此趟毛利" strong
+                    value={`$${Math.round(selectedProduct.grossProfit).toLocaleString()}`}
+                    tone={selectedProduct.grossProfit >= 0 ? 'var(--green)' : 'var(--red)'}
+                  />
+                  <InfoRow
+                    label="毛利率" strong
+                    value={`${selectedProduct.margin.toFixed(1)}%`}
+                    tone={selectedProduct.margin >= 0 ? 'var(--green)' : 'var(--red)'}
+                  />
+                  <div className="muted" style={{ fontSize: 11, marginTop: 8, lineHeight: 1.6 }}>
+                    {selectedProduct.costSource === 'snapshot'
+                      ? '成本取自下單當下的快照，日後改成本或匯率不會變動'
+                      : '成本取自目前的商品/規格設定，改動會回頭影響這個數字'}
                   </div>
                 </>
+              ) : (
+                <div className="notice notice-warn" style={{ marginTop: 10, marginBottom: 0, fontSize: 12 }}>
+                  此商品有品項算不出成本，毛利未列出以免誤導
+                </div>
               )}
             </div>
           </div>
         </div>
       )}
     </div>
+  )
+}
+
+// ─── 小元件 ──────────────────────────────────────────────────────
+// 三張 slide 共用的一列：左邊標籤（可帶說明），右邊數值。
+// level: undefined 一般列｜'sub' 小計｜'total' 結論列
+function MetricRow({ label, value, hint, tone, level }) {
+  return (
+    <div className={`wf-row ${level ? `wf-row--${level}` : ''}`}>
+      <div>
+        <div className="wf-label">{label}</div>
+        {hint && <div className="wf-hint">{hint}</div>}
+      </div>
+      <div className="wf-val" style={{ color: tone }}>{value}</div>
+    </div>
+  )
+}
+
+// slide 外觀統一：標題 + 一張卡，卡內是等距的 MetricRow
+function MetricCard({ title, children, footer }) {
+  return (
+    <>
+      <div className="sec" style={{ marginTop: 0 }}>{title}</div>
+      <div className="card wf" style={{ marginBottom: 0 }}>
+        {children}
+        {footer && <div className="wf-foot">{footer}</div>}
+      </div>
+    </>
+  )
+}
+
+function InfoRow({ label, value, tone, strong }) {
+  return (
+    <div className="row-sb" style={{ padding: '5px 0' }}>
+      <span className="muted fs13">{label}</span>
+      <span className={`num fs13 ${strong ? 'fw600' : ''}`} style={{ color: tone }}>{value}</span>
+    </div>
+  )
+}
+
+// ─── 核心財務瀑布 ────────────────────────────────────────────────
+// 一條由上而下的算式，每個數字都看得到是誰減誰來的。
+// 刻意不用「淨利」這個字：這裡只扣到行程費用，金流手續費、寄送成本、
+// 廣告與人事都還沒扣，叫淨利會讓人以為是最終落袋的錢。
+function FinanceWaterfall({ data }) {
+  const money = n => `$${Math.round(n).toLocaleString()}`
+  const tone = n => (n >= 0 ? 'var(--green)' : 'var(--red)')
+
+  return (
+    <MetricCard
+      title="核心財務"
+      footer="尚未扣除金流手續費、廣告與人事等營運費用，因此不等於帳面淨利。"
+    >
+      <MetricRow label="商品總額" hint={`${data.orderCount} 張訂單`} value={money(data.grossItemSales)} />
+      {data.discount > 0 && <MetricRow label="折扣" value={`− ${money(data.discount)}`} />}
+      <div className="wf-rule" />
+      <MetricRow level="sub" label="淨營收" hint="不含運費" value={money(data.netSales)} />
+      <MetricRow label="商品成本" value={`− ${money(data.cogs)}`} />
+      <div className="wf-rule" />
+      <MetricRow
+        level="sub"
+        label="商品毛利"
+        hint={`毛利率 ${data.grossMargin.toFixed(1)}%`}
+        value={money(data.grossProfit)}
+        tone={tone(data.grossProfit)}
+      />
+      <MetricRow label="行程費用" hint="機票、住宿、交通、行李" value={`− ${money(data.tripExpense)}`} />
+      <MetricRow
+        label={data.shippingNet <= 0 ? '運費倒貼' : '運費淨收'}
+        hint={`收 ${money(data.shippingFee)}／付 ${money(data.shippingCost)}`}
+        value={`${data.shippingNet <= 0 ? '−' : '+'} ${money(Math.abs(data.shippingNet))}`}
+      />
+      <div className="wf-rule" />
+      <MetricRow
+        level="total"
+        label="可分配盈餘"
+        hint={`佔淨營收 ${data.distributableMargin.toFixed(1)}%・拆賬分的就是這筆`}
+        value={money(data.distributable)}
+        tone={tone(data.distributable)}
+      />
+    </MetricCard>
   )
 }
 
@@ -875,10 +882,13 @@ function evenSplit(rows) {
 }
 
 function SettleSheet({ trip, data, onClose, onSaved }) {
-  const netProfit = Math.round(data.netProfit)
+  // 拆賬基準是可分配盈餘（毛利 − 行程費用），不是會計上的淨利
+  const distributable = Math.round(data.distributable)
   const advance = data.advanceByPayer || {}
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
+  // 成本沒填完就拆賬會多分錢出去，要老闆明確認知才放行
+  const [ackNoCost, setAckNoCost] = useState(false)
 
   const [rows, setRows] = useState(() => {
     const saved = {}
@@ -906,7 +916,7 @@ function SettleSheet({ trip, data, onClose, onSaved }) {
   const visible = rows.filter(r => r.included || (advance[r.user_id] || 0) > 0)
   const lines = visible.map(r => {
     const pct = r.included ? Number(r.share_pct) || 0 : 0
-    const profitShare = netProfit > 0 ? Math.round(netProfit * pct / 100) : 0
+    const profitShare = distributable > 0 ? Math.round(distributable * pct / 100) : 0
     const reimbursement = Math.round(advance[r.user_id] || 0)
     return {
       user_id: r.user_id,
@@ -921,11 +931,12 @@ function SettleSheet({ trip, data, onClose, onSaved }) {
   const totalPct = rows.filter(r => r.included).reduce((s, r) => s + (Number(r.share_pct) || 0), 0)
   const totalPayout = lines.reduce((s, l) => s + l.payout, 0)
   const distributed = lines.reduce((s, l) => s + l.profit_share, 0)
-  const storeKeep = netProfit - distributed
+  const storeKeep = distributable - distributed
+  const blockedByCost = data.noCostCount > 0 && !ackNoCost
 
   async function submit() {
     const msg = [
-      `本趟淨利 $${netProfit.toLocaleString()}`,
+      `本趟可分配盈餘 $${distributable.toLocaleString()}`,
       `共發出 $${totalPayout.toLocaleString()} 給 ${lines.length} 人`,
       `並將 ${data.unsettledBatchCount} 批進貨一次標記已結清`,
       '',
@@ -936,10 +947,10 @@ function SettleSheet({ trip, data, onClose, onSaved }) {
     setSaving(true)
     const { error } = await supabase.rpc('settle_trip', {
       p_trip_id: trip.id,
-      p_revenue: Math.round(data.totalRevenue),
-      p_product_cost: Math.round(data.totalProductCost),
-      p_trip_expense: Math.round(data.tripExpenseTotal),
-      p_net_profit: netProfit,
+      p_revenue: Math.round(data.netSales),
+      p_product_cost: Math.round(data.cogs),
+      p_trip_expense: Math.round(data.tripExpense),
+      p_net_profit: distributable,
       p_lines: lines,
       p_note: note || null,
     })
@@ -963,9 +974,9 @@ function SettleSheet({ trip, data, onClose, onSaved }) {
   }
 
   const calcRow = (label, value, opts = {}) => (
-    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, padding: '5px 0', ...opts.style }}>
-      <span style={{ color: opts.strong ? 'var(--text)' : 'var(--text-3)', fontWeight: opts.strong ? 700 : 400 }}>{label}</span>
-      <span style={{ fontWeight: opts.strong ? 700 : 500, color: opts.color }}>{value}</span>
+    <div className="row-sb" style={{ padding: '5px 0' }}>
+      <span className={opts.strong ? 'fw600 fs13' : 'muted fs13'}>{label}</span>
+      <span className={`num ${opts.strong ? 'fw600 fs15' : 'fs13'}`} style={{ color: opts.color }}>{value}</span>
     </div>
   )
 
@@ -980,62 +991,82 @@ function SettleSheet({ trip, data, onClose, onSaved }) {
 
         <div style={{ overflowY: 'auto', flex: 1 }}>
           {data.noCostCount > 0 && (
-            <div style={{
-              background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 10,
-              padding: '10px 14px', marginBottom: 14, fontSize: 13, color: '#92400e',
-            }}>
-              有 {data.noCostCount} 件商品沒填成本，淨利會被高估、分出去的錢會比實際賺的多。建議先回報告補完成本再拆。
+            <div className="notice notice-warn">
+              <div style={{ marginBottom: 9 }}>
+                有 {data.noCostCount} 件商品沒填成本，目前以 0 元進貨計算，
+                可分配盈餘被高估、分出去的錢會比實際賺的多。建議先回報告補完成本再拆。
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontWeight: 600 }}>
+                <input
+                  type="checkbox"
+                  checked={ackNoCost}
+                  onChange={e => setAckNoCost(e.target.checked)}
+                  style={{ width: 16, height: 16, cursor: 'pointer', flexShrink: 0 }}
+                />
+                我知道成本不完整，仍要用現在的數字拆賬
+              </label>
             </div>
           )}
 
-          {/* 淨利驗算 */}
-          <div style={{ background: 'var(--card)', borderRadius: 12, padding: '12px 16px', border: '1px solid var(--border)', marginBottom: 16 }}>
-            {calcRow('訂單營收', `$${Math.round(data.totalRevenue).toLocaleString()}`)}
-            {calcRow('商品成本', `− $${Math.round(data.totalProductCost).toLocaleString()}`)}
-            {calcRow('行程費用', `− $${Math.round(data.tripExpenseTotal).toLocaleString()}`)}
-            <div style={{ borderTop: '1px solid var(--border)', margin: '6px 0' }} />
-            {calcRow('淨利', `$${netProfit.toLocaleString()}`, { strong: true, color: netProfit >= 0 ? '#16a34a' : '#e53e3e' })}
+          {/* 可分配盈餘驗算 */}
+          <div className="card" style={{ padding: '12px 16px', marginBottom: 8 }}>
+            {calcRow('商品總額', `$${Math.round(data.grossItemSales).toLocaleString()}`)}
+            {calcRow('折扣', `− $${Math.round(data.discount).toLocaleString()}`)}
+            {calcRow('淨營收', `$${Math.round(data.netSales).toLocaleString()}`, { strong: true })}
+            {calcRow('商品成本', `− $${Math.round(data.cogs).toLocaleString()}`)}
+            {calcRow('行程費用', `− $${Math.round(data.tripExpense).toLocaleString()}`)}
+            {calcRow(
+              data.shippingNet <= 0 ? '運費倒貼' : '運費淨收',
+              `${data.shippingNet <= 0 ? '−' : '+'} $${Math.abs(Math.round(data.shippingNet)).toLocaleString()}`,
+            )}
+            <div className="wf-rule" style={{ margin: '6px 0' }} />
+            {calcRow('可分配盈餘', `$${distributable.toLocaleString()}`, {
+              strong: true, color: distributable >= 0 ? 'var(--green)' : 'var(--red)',
+            })}
+          </div>
+          <div className="muted" style={{ fontSize: 11, marginBottom: 16, lineHeight: 1.6 }}>
+            運費收 ${Math.round(data.shippingFee).toLocaleString()}、實付物流 ${Math.round(data.shippingCost).toLocaleString()}
+            {data.freeShippingCount > 0 && `（其中 ${data.freeShippingCount} 張免運單沒收運費但仍付了物流費）`}。
+            這個數字尚未扣除金流手續費與其他營運費用，不等於帳面淨利。
           </div>
 
-          {netProfit < 0 && (
-            <div style={{
-              background: '#fee2e2', border: '1px solid #ef4444', borderRadius: 10,
-              padding: '10px 14px', marginBottom: 14, fontSize: 13, color: '#991b1b',
-            }}>
-              本趟虧損 ${Math.abs(netProfit).toLocaleString()}，由店家承擔。分潤一律為 0，代墊款照樣全額退還。
+          {distributable < 0 && (
+            <div className="notice notice-danger">
+              本趟短少 ${Math.abs(distributable).toLocaleString()}，由店家承擔。分潤一律為 0，代墊款照樣全額退還。
+            </div>
+          )}
+
+          {data.unpaid > 0 && (
+            <div className="notice notice-warn">
+              本趟還有 ${Math.round(data.unpaid).toLocaleString()} 尚未收款。
+              盈餘已把這筆算成營收，但錢還沒進帳，現在拆等於先用店家的現金墊付分潤。
             </div>
           )}
 
           {/* 參與者與比例 */}
-          <div className="row-sb" style={{ marginBottom: 8 }}>
-            <div style={{ fontSize: 14, fontWeight: 700 }}>工作人員與比例</div>
-            <button
-              onClick={() => setRows(prev => evenSplit(prev))}
-              style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer', color: 'var(--text-2)' }}
-            >平均分配</button>
+          <div className="sec row-sb" style={{ marginTop: 4 }}>
+            <span>工作人員與比例</span>
+            <button className="chip-btn" onClick={() => setRows(prev => evenSplit(prev))}>平均分配</button>
           </div>
-          <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10 }}>
+          <div className="muted" style={{ fontSize: 11, marginBottom: 10, lineHeight: 1.6 }}>
             比例合計目前 {totalPct.toFixed(1)}%，沒分配到的 ${Math.round(Math.max(storeKeep, 0)).toLocaleString()} 由店家保留。
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+          <div style={{ marginBottom: 16 }}>
             {rows.map(r => {
               const adv = Math.round(advance[r.user_id] || 0)
               if (!r.included && adv === 0) return null
               const line = lines.find(l => l.user_id === r.user_id)
               return (
-                <div key={r.user_id} style={{
-                  background: 'var(--card)', borderRadius: 10, padding: '10px 14px',
-                  border: '1px solid var(--border)', opacity: r.included || adv > 0 ? 1 : 0.5,
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                <div key={r.user_id} className="lrow" style={{ opacity: r.included || adv > 0 ? 1 : 0.5 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <input
                       type="checkbox"
                       checked={r.included}
                       onChange={() => toggle(r.user_id)}
                       style={{ width: 18, height: 18, cursor: 'pointer', flexShrink: 0 }}
                     />
-                    <span style={{ fontSize: 14, fontWeight: 600, flex: 1 }}>{r.name}</span>
+                    <span className="fw600 fs13" style={{ flex: 1, minWidth: 0 }}>{r.name}</span>
                     {r.included && (
                       <>
                         <input
@@ -1043,19 +1074,25 @@ function SettleSheet({ trip, data, onClose, onSaved }) {
                           inputMode="decimal"
                           value={r.share_pct}
                           onChange={e => setShare(r.user_id, e.target.value)}
-                          style={{ width: 72, padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--bg)', textAlign: 'right' }}
+                          style={{
+                            width: 68, padding: '6px 8px', borderRadius: 8,
+                            border: '0.5px solid var(--border)', fontSize: 13,
+                            background: 'var(--bg)', textAlign: 'right', color: 'var(--text)',
+                          }}
                         />
-                        <span style={{ fontSize: 13, color: 'var(--text-3)' }}>%</span>
+                        <span className="muted fs13">%</span>
                       </>
                     )}
                   </div>
-                  <div style={{ display: 'flex', gap: 14, fontSize: 13, color: 'var(--text-2)', flexWrap: 'wrap', paddingLeft: 28 }}>
+                  <div className="lrow-meta" style={{ paddingLeft: 28 }}>
                     <span>分潤 ${(line?.profit_share || 0).toLocaleString()}</span>
                     <span>代墊 ${adv.toLocaleString()}</span>
-                    <span style={{ fontWeight: 700, color: 'var(--text)' }}>實拿 ${(line?.payout || 0).toLocaleString()}</span>
+                    <span className="fw600" style={{ color: 'var(--text)' }}>
+                      實拿 ${(line?.payout || 0).toLocaleString()}
+                    </span>
                   </div>
                   {!r.included && adv > 0 && (
-                    <div style={{ fontSize: 12, color: 'var(--text-3)', paddingLeft: 28, marginTop: 4 }}>
+                    <div className="muted" style={{ fontSize: 11, paddingLeft: 28, marginTop: 5 }}>
                       不參與分潤，只退還代墊
                     </div>
                   )}
@@ -1069,39 +1106,63 @@ function SettleSheet({ trip, data, onClose, onSaved }) {
             value={note}
             onChange={e => setNote(e.target.value)}
             placeholder="拆賬備註（選填）"
-            style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--bg)', boxSizing: 'border-box', marginBottom: 16 }}
+            style={{
+              width: '100%', padding: '10px 12px', borderRadius: 10,
+              border: '0.5px solid var(--border)', fontSize: 13,
+              background: 'var(--bg)', color: 'var(--text)', boxSizing: 'border-box', marginBottom: 16,
+            }}
           />
         </div>
 
         {/* 總計與送出 */}
-        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 15, fontWeight: 700, marginBottom: 4 }}>
-            <span>合計發出</span>
-            <span>${totalPayout.toLocaleString()}</span>
+        <div style={{ borderTop: '0.5px solid var(--border)', paddingTop: 14 }}>
+          <div className="row-sb" style={{ marginBottom: 5 }}>
+            <span className="fw600 fs15">合計發出</span>
+            <span className="fw600 num" style={{ fontSize: 19 }}>${totalPayout.toLocaleString()}</span>
           </div>
-          <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 12 }}>
+          <div className="muted" style={{ fontSize: 11, marginBottom: 12, lineHeight: 1.6 }}>
             分潤 ${distributed.toLocaleString()} ＋ 代墊返還 ${(totalPayout - distributed).toLocaleString()}
             ・送出後會把本趟 {data.unsettledBatchCount} 批進貨一次標記已結清
           </div>
           <button
+            className="btn"
             onClick={submit}
-            disabled={saving || lines.length === 0}
+            disabled={saving || lines.length === 0 || blockedByCost}
             style={{
-              width: '100%', padding: '12px 0', borderRadius: 8, border: 'none',
-              background: lines.length === 0 ? 'var(--border)' : 'var(--text)',
-              color: '#fff', fontSize: 15, fontWeight: 700, cursor: lines.length === 0 ? 'default' : 'pointer',
+              padding: 13, fontSize: 15,
+              background: (lines.length === 0 || blockedByCost) ? 'var(--border)' : 'var(--text)',
+              color: (lines.length === 0 || blockedByCost) ? 'var(--text-3)' : '#fff',
+              cursor: (lines.length === 0 || blockedByCost) ? 'default' : 'pointer',
             }}
-          >{saving ? '處理中…' : '完成拆賬'}</button>
+          >{saving ? '處理中…' : blockedByCost ? '請先補完成本或勾選上方確認' : '完成拆賬'}</button>
         </div>
       </div>
     </div>
   )
 }
 
-function SettlementResult({ settlement, onChanged }) {
+function SettlementResult({ settlement, data, onChanged }) {
   const [busy, setBusy] = useState(false)
+  const [showDrift, setShowDrift] = useState(false)
   const lines = [...(settlement.trip_settlement_lines || [])].sort((a, b) => b.payout - a.payout)
   const totalPaid = lines.filter(l => l.paid).reduce((s, l) => s + Number(l.payout), 0)
+
+  // 拆賬單存的是當時的快照；報告上方永遠是即時重算。
+  // 兩者一旦分岔（補了成本、匯率變動、事後又有訂單或取消），要講清楚是哪裡不同。
+  const snap = {
+    revenue: Number(settlement.revenue),
+    cost: Number(settlement.product_cost),
+    expense: Number(settlement.trip_expense),
+    profit: Number(settlement.net_profit),
+  }
+  const now = data ? {
+    revenue: Math.round(data.netSales),
+    cost: Math.round(data.cogs),
+    expense: Math.round(data.tripExpense),
+    profit: Math.round(data.distributable),
+  } : null
+  const drift = now ? now.profit - snap.profit : 0
+  const hasDrift = now != null && Math.abs(drift) >= 1
 
   async function togglePaid(line) {
     setBusy(true)
@@ -1120,28 +1181,66 @@ function SettlementResult({ settlement, onChanged }) {
   }
 
   return (
-    <div style={{ background: 'var(--card)', borderRadius: 12, padding: 16, border: '1px solid var(--border)' }}>
+    <div className="card" style={{ padding: 16 }}>
       <div className="row-sb" style={{ marginBottom: 12 }}>
-        <span style={{ fontSize: 13, color: 'var(--text-3)' }}>
+        <span className="muted fs12">
           已於 {new Date(settlement.settled_at).toLocaleDateString('zh-TW')} 完成拆賬
         </span>
-        <span style={{ fontSize: 12, background: '#dcfce7', color: '#166534', padding: '2px 8px', borderRadius: 4, fontWeight: 600 }}>
-          已拆賬
+        <span className="badge badge-ok">已拆賬</span>
+      </div>
+
+      <div className="row-sb" style={{ marginBottom: hasDrift ? 10 : 14 }}>
+        <span className="fs13">
+          <span className="muted">當時盈餘 </span>
+          <span className="fw600 num">${snap.profit.toLocaleString()}</span>
+        </span>
+        <span className="fs13">
+          <span className="muted">合計發出 </span>
+          <span className="fw600 num">${Number(settlement.total_payout).toLocaleString()}</span>
         </span>
       </div>
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--text-3)', marginBottom: 12 }}>
-        <span>當時淨利 ${Number(settlement.net_profit).toLocaleString()}</span>
-        <span>合計發出 ${Number(settlement.total_payout).toLocaleString()}</span>
-      </div>
+      {hasDrift && (
+        <div style={{
+          border: '0.5px solid var(--border)', borderRadius: 10,
+          padding: '10px 12px', marginBottom: 12, fontSize: 12, color: 'var(--text-2)',
+        }}>
+          <div className="row-sb" style={{ gap: 10 }}>
+            <span style={{ lineHeight: 1.5 }}>
+              現在重算是 <strong className="num">${now.profit.toLocaleString()}</strong>，
+              比當時{drift > 0 ? '多' : '少'} <span className="num">${Math.abs(drift).toLocaleString()}</span>
+            </span>
+            <button className="link-btn" style={{ flexShrink: 0 }} onClick={() => setShowDrift(v => !v)}>
+              {showDrift ? '收合' : '看差在哪'}
+            </button>
+          </div>
+          {showDrift && (
+            <div style={{ marginTop: 10 }}>
+              {[
+                ['淨營收', snap.revenue, now.revenue],
+                ['商品成本', snap.cost, now.cost],
+                ['行程費用', snap.expense, now.expense],
+              ].map(([label, a, b]) => (
+                <div key={label} className="row-sb" style={{ padding: '3px 0' }}>
+                  <span className="muted">{label}</span>
+                  <span className="num">
+                    ${a.toLocaleString()} → ${b.toLocaleString()}
+                    {b !== a && <strong>（{b > a ? '+' : ''}{(b - a).toLocaleString()}）</strong>}
+                  </span>
+                </div>
+              ))}
+              <div className="muted" style={{ marginTop: 8, lineHeight: 1.6 }}>
+                多半是事後補了商品成本、匯率變動，或這段期間又有訂單成立/取消。
+                發出去的錢以拆賬當時的快照為準；要照新數字重發，請作廢重算。
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
+      <div style={{ marginBottom: 12 }}>
         {lines.map(l => (
-          <div key={l.id} style={{
-            display: 'flex', alignItems: 'center', gap: 10,
-            padding: '9px 12px', borderRadius: 8, border: '1px solid var(--border)',
-            background: l.paid ? 'var(--bg)' : 'transparent',
-          }}>
+          <div key={l.id} className="lrow row-sb" style={{ gap: 10, background: l.paid ? 'var(--bg)' : undefined }}>
             <input
               type="checkbox"
               checked={l.paid}
@@ -1150,30 +1249,31 @@ function SettlementResult({ settlement, onChanged }) {
               style={{ width: 18, height: 18, cursor: 'pointer', flexShrink: 0 }}
             />
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 14, fontWeight: 600, textDecoration: l.paid ? 'line-through' : 'none', color: l.paid ? 'var(--text-3)' : 'var(--text)' }}>
+              <div
+                className="fw600 fs13"
+                style={{ textDecoration: l.paid ? 'line-through' : 'none', color: l.paid ? 'var(--text-3)' : 'var(--text)' }}
+              >
                 {l.user_name || '未知'}
               </div>
-              <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+              <div className="muted num" style={{ fontSize: 11, marginTop: 3 }}>
                 分潤 ${Number(l.profit_share).toLocaleString()}（{Number(l.share_pct)}%）＋ 代墊 ${Number(l.reimbursement).toLocaleString()}
               </div>
             </div>
-            <div style={{ fontSize: 15, fontWeight: 700 }}>${Number(l.payout).toLocaleString()}</div>
+            <div className="fw600 num fs15">${Number(l.payout).toLocaleString()}</div>
           </div>
         ))}
       </div>
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={{ fontSize: 12, color: 'var(--text-3)' }}>
+      <div className="row-sb">
+        <span className="muted num" style={{ fontSize: 11 }}>
           已付 ${totalPaid.toLocaleString()} / ${Number(settlement.total_payout).toLocaleString()}
         </span>
-        <button
-          onClick={voidSettlement}
-          disabled={busy}
-          style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer', color: '#e53e3e' }}
-        >作廢重算</button>
+        <button className="chip-btn" onClick={voidSettlement} disabled={busy} style={{ color: 'var(--red)' }}>
+          作廢重算
+        </button>
       </div>
       {settlement.note && (
-        <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 10 }}>備註：{settlement.note}</div>
+        <div className="muted" style={{ fontSize: 11, marginTop: 10 }}>備註：{settlement.note}</div>
       )}
     </div>
   )
@@ -1182,40 +1282,38 @@ function SettlementResult({ settlement, onChanged }) {
 // ─── Shared Row Components ──────────────────────────────────────
 function ProductRow({ p, i, costEdits, setCostEdits, saveCost, savingCost, onSelect }) {
   return (
-    <div
-      onClick={() => onSelect?.(p)}
-      style={{
-        background: 'var(--card)',
-        borderRadius: 10,
-        padding: '12px 14px',
-        border: '1px solid var(--border)',
-        cursor: onSelect ? 'pointer' : undefined,
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-        {p.images?.[0] && (
-          <img src={p.images[0]} alt="" style={{ width: 36, height: 36, borderRadius: 6, objectFit: 'cover', flexShrink: 0 }} />
+    <div className="lrow" onClick={() => onSelect?.(p)} style={{ cursor: onSelect ? 'pointer' : undefined }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        {p.images?.[0] ? (
+          <img src={p.images[0]} alt="" style={{ width: 36, height: 36, borderRadius: 8, objectFit: 'cover', flexShrink: 0 }} />
+        ) : (
+          <span className="lrow-rank fs13" style={{ minWidth: 20 }}>{i + 1}</span>
         )}
-        <div style={{ fontWeight: 600, fontSize: 14 }}>
-          <span style={{ color: 'var(--text-3)', marginRight: 6 }}>#{i + 1}</span>
-          {p.name}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="fw600 fs13" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {p.images?.[0] && <span className="lrow-rank">{i + 1}</span>}
+            {p.name}
+          </div>
+          <div className="lrow-meta">
+            <span>{p.qty} 件</span>
+            <span>淨營收 ${Math.round(p.netRevenue).toLocaleString()}</span>
+            {p.hasCost && (
+              <span style={{ color: p.grossProfit >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                毛利 ${Math.round(p.grossProfit).toLocaleString()}・{p.margin.toFixed(1)}%
+              </span>
+            )}
+          </div>
         </div>
       </div>
-      <div style={{ display: 'flex', gap: 16, fontSize: 13, color: 'var(--text-2)', flexWrap: 'wrap' }}>
-        <span>銷量 {p.qty}</span>
-        <span>營收 ${p.revenue.toLocaleString()}</span>
-        {p.hasCost && <span>毛利 ${Math.round(p.profit).toLocaleString()}</span>}
-        {p.hasCost && <span>{p.margin.toFixed(1)}%</span>}
-      </div>
       {!p.hasCost && (
-        <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div style={{ marginTop: 10, display: 'flex', gap: 6, alignItems: 'center' }} onClick={e => e.stopPropagation()}>
           <select
             value={costEdits[p.id]?.currency || p.currency || 'TWD'}
             onChange={e => setCostEdits(prev => ({
               ...prev,
               [p.id]: { ...prev[p.id], currency: e.target.value, cost: prev[p.id]?.cost || '' }
             }))}
-            style={{ padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--bg)' }}
+            style={{ padding: '7px 8px', borderRadius: 8, border: '0.5px solid var(--border)', fontSize: 12, background: 'var(--bg)' }}
           >
             {SUPPORTED_CURRENCIES.map(c => (
               <option key={c} value={c}>{c}</option>
@@ -1224,21 +1322,25 @@ function ProductRow({ p, i, costEdits, setCostEdits, saveCost, savingCost, onSel
           <input
             type="number"
             inputMode="decimal"
-            placeholder="輸入成本"
+            placeholder="補上進貨成本"
             value={costEdits[p.id]?.cost || ''}
             onChange={e => setCostEdits(prev => ({
               ...prev,
               [p.id]: { ...prev[p.id], cost: e.target.value, currency: prev[p.id]?.currency || p.currency || 'TWD' }
             }))}
-            style={{ flex: 1, padding: '6px 10px', borderRadius: 6, border: '1px solid #f59e0b', fontSize: 13, background: '#fffbeb' }}
+            style={{
+              flex: 1, minWidth: 0, padding: '7px 10px', borderRadius: 8,
+              border: '0.5px solid var(--amber)', fontSize: 13, background: 'var(--amber-bg)', color: 'var(--text)',
+            }}
           />
           <button
             onClick={() => saveCost(p.id)}
             disabled={!costEdits[p.id]?.cost || savingCost === p.id}
             style={{
-              padding: '6px 12px', borderRadius: 6, border: 'none',
+              padding: '7px 14px', borderRadius: 8, border: 'none', flexShrink: 0,
               background: costEdits[p.id]?.cost ? 'var(--text)' : 'var(--border)',
-              color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', flexShrink: 0,
+              color: '#fff', fontSize: 12, fontWeight: 600,
+              cursor: costEdits[p.id]?.cost ? 'pointer' : 'default',
             }}
           >
             {savingCost === p.id ? '…' : '儲存'}
@@ -1251,25 +1353,17 @@ function ProductRow({ p, i, costEdits, setCostEdits, saveCost, savingCost, onSel
 
 function CustomerRow({ c, i }) {
   return (
-    <div style={{
-      display: 'flex',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      background: 'var(--card)',
-      borderRadius: 8,
-      padding: '10px 14px',
-      border: '1px solid var(--border)',
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontSize: 13, color: 'var(--text-3)' }}>#{i + 1}</span>
-        <span style={{ fontWeight: 500, fontSize: 14 }}>{c.name}</span>
-        {c.isNew && (
-          <span style={{ fontSize: 11, background: '#dbeafe', color: '#2563eb', padding: '1px 6px', borderRadius: 4 }}>新客</span>
-        )}
+    <div className="lrow row-sb">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+        <span className="lrow-rank fs13" style={{ minWidth: 16, margin: 0 }}>{i + 1}</span>
+        <span className="fs13" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {c.name}
+        </span>
+        {c.isNew && <span className="badge badge-blue" style={{ flexShrink: 0 }}>新客</span>}
       </div>
-      <div style={{ fontWeight: 600, fontSize: 14 }}>
-        ${c.total.toLocaleString()}
-        <span style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 4 }}>{c.orderCount}單</span>
+      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+        <span className="fw600 fs13 num">${c.total.toLocaleString()}</span>
+        <span className="muted num" style={{ fontSize: 11, marginLeft: 6 }}>{c.orderCount} 單</span>
       </div>
     </div>
   )
@@ -1387,19 +1481,20 @@ function TripSheet({ trip, onClose, onSaved, onDelete }) {
 
   const inputStyle = {
     width: '100%',
-    padding: '10px 12px',
-    borderRadius: 8,
-    border: '1px solid var(--border)',
+    padding: '11px 12px',
+    borderRadius: 10,
+    border: '0.5px solid var(--border)',
     fontSize: 15,
     background: 'var(--bg)',
+    color: 'var(--text)',
     boxSizing: 'border-box',
   }
 
   const labelStyle = {
-    fontSize: 13,
-    fontWeight: 500,
+    fontSize: 12,
+    fontWeight: 600,
     color: 'var(--text-2)',
-    marginBottom: 4,
+    marginBottom: 5,
   }
 
   return (
@@ -1541,7 +1636,7 @@ function TripSheet({ trip, onClose, onSaved, onDelete }) {
               borderRadius: 10,
               border: 'none',
               background: 'none',
-              color: 'var(--red, #e53e3e)',
+              color: 'var(--red)',
               fontSize: 14,
               cursor: 'pointer',
             }}

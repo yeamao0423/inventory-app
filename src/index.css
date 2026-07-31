@@ -3,6 +3,9 @@
 :root {
   --bg: #f5f5f0;
   --surface: #ffffff;
+  /* 別名：不少頁面歷來寫 var(--card)，但這個變數從沒被定義過，
+     導致那些卡片背景是無效值、直接透出米色底。與 --surface 同值。 */
+  --card: #ffffff;
   --border: #e8e8e0;
   --border-light: #f0f0ea;
   --text: #1a1a1a;
@@ -469,15 +472,64 @@ html, body, #root {
   .btn:hover { opacity: .88; }
   .icon-btn:hover { opacity: .85; }
 
-  /* 行程報告：輪播攤平成三欄（覆蓋 inline style 需 !important） */
+  /* 行程報告：輪播攤平成三等欄（覆蓋 inline style 需 !important）。
+     三塊都是同一種「標籤→數值」列表，等寬並排、頂端對齊就自然整齊。
+     早期版本在這裡放 2 欄卡片牆，卡片數除不盡欄數就留孤兒、有無說明
+     文字又造成高度參差，換成列表後這兩個問題都不存在。 */
   .trip-carousel {
     display: grid !important;
     grid-template-columns: repeat(3, 1fr);
-    gap: 20px;
+    align-items: start;
+    gap: 24px;
     overflow-x: visible !important;
   }
   .trip-slide { min-width: 0 !important; padding-right: 0 !important; }
   .trip-dots { display: none !important; }
+}
+
+/* ── 行程報告 ─────────────────────────────── */
+/* 金額全部走等寬數字，右對齊時位數才咬得住 */
+.num { font-variant-numeric: tabular-nums; }
+
+/* 財務瀑布：由上而下的算式，靠字級與粗細分層，不靠底色 */
+.wf { padding: 14px 16px; }
+.wf-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 6px 0; }
+.wf-label { font-size: 14px; color: var(--text-2); }
+.wf-hint { font-size: 11px; color: var(--text-3); margin-top: 3px; line-height: 1.5; }
+.wf-val { font-size: 15px; font-weight: 500; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.wf-rule { border-top: 0.5px solid var(--border-light); margin: 4px 0; }
+.wf-row--sub .wf-label { font-weight: 600; color: var(--text); }
+.wf-row--sub .wf-val { font-size: 17px; font-weight: 700; }
+.wf-row--total { padding-top: 10px; }
+.wf-row--total .wf-label { font-size: 15px; font-weight: 700; color: var(--text); }
+.wf-row--total .wf-val { font-size: 27px; font-weight: 700; letter-spacing: -.02em; }
+.wf-foot {
+  font-size: 11px; color: var(--text-3); line-height: 1.65;
+  padding-top: 11px; margin-top: 6px; border-top: 0.5px solid var(--border-light);
+}
+
+/* 提示條：沿用 badge 的語意色，不另外發明顏色 */
+.notice { border-radius: 12px; padding: 11px 14px; font-size: 13px; line-height: 1.55; margin-bottom: 14px; }
+.notice-warn   { background: var(--amber-bg); color: var(--amber); }
+.notice-danger { background: var(--red-bg);   color: var(--red); }
+
+/* 明細列：商品／客戶／費用共用 */
+.lrow {
+  background: var(--card); border: 0.5px solid var(--border);
+  border-radius: 12px; padding: 11px 14px;
+}
+.lrow + .lrow { margin-top: 6px; }
+.lrow-meta {
+  display: flex; gap: 14px; flex-wrap: wrap;
+  font-size: 12px; color: var(--text-3); margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.lrow-rank { color: var(--text-3); font-variant-numeric: tabular-nums; margin-right: 6px; }
+
+.link-btn { background: none; border: none; padding: 0; font-size: 12px; color: var(--text-3); cursor: pointer; }
+.chip-btn {
+  background: none; border: 0.5px solid var(--border); border-radius: 20px;
+  padding: 5px 12px; font-size: 12px; color: var(--text-2); cursor: pointer;
 }
 
 /* ListToolbar：搜尋框拉滿，排序/篩選/匯出收成圖示放進框內右側。

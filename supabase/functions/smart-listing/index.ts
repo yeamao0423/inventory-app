@@ -13,6 +13,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
+  detectImageFormat,
   parseClaudeJson,
   sanitizeSuggestion,
   SUPPORTED_CURRENCIES,
@@ -27,7 +28,6 @@ const MONTHLY_LIMIT = Number(Deno.env.get("SMART_LISTING_RATE_PER_MONTH") ?? "10
 
 // consumer/viewer 不能上架，也就不該燒 AI 額度
 const ALLOWED_ROLES = ["super_admin", "admin", "editor"];
-const ALLOWED_MEDIA = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 const MAX_IMAGES = 3;
 const MAX_IMAGE_B64 = 6_800_000; // base64 約 6.8MB ≈ 原檔 5MB（Anthropic 單圖上限）
 
@@ -196,6 +196,37 @@ async function autoGroupImages(
   return parsed.groups as number[][];
 }
 
+type ImageValidation =
+  | { ok: true; images: { data: string; media_type: string }[] }
+  | { ok: false; error: string; status: number };
+
+// 數量/大小合法檢查＋用真實位元組矯正 media_type，不信任前端宣稱的格式
+// （webview canvas 編碼失敗可能靜默退回別的格式，但仍標成原本要求的類型）。
+function validateImages(images: unknown, max: number): ImageValidation {
+  if (!Array.isArray(images) || images.length === 0 || images.length > max) {
+    return { ok: false, error: `請提供 1-${max} 張照片`, status: 400 };
+  }
+  const fixed: { data: string; media_type: string }[] = [];
+  for (const img of images) {
+    if (!img || typeof img.data !== "string" || !img.data) {
+      return { ok: false, error: "照片格式不支援", status: 400 };
+    }
+    if (img.data.length > MAX_IMAGE_B64) {
+      return { ok: false, error: "照片檔案過大", status: 400 };
+    }
+    const real = detectImageFormat(img.data);
+    if (!real) {
+      return {
+        ok: false,
+        error: "照片格式不支援（可能是 HEIC 等格式），請改用 JPG/PNG/WebP 照片",
+        status: 400,
+      };
+    }
+    fixed.push({ data: img.data, media_type: real });
+  }
+  return { ok: true, images: fixed };
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
@@ -206,15 +237,9 @@ Deno.serve(async (req) => {
 
     // ── 自動分組模式 ──────────────────────────────────────
     if (mode === "group") {
-      if (!Array.isArray(images) || images.length === 0 || images.length > MAX_GROUP_IMAGES) {
-        return json({ error: `請提供 1-${MAX_GROUP_IMAGES} 張照片` }, 400);
-      }
-      for (const img of images) {
-        if (!img || typeof img.data !== "string" || !ALLOWED_MEDIA.includes(img.media_type)) {
-          return json({ error: "照片格式不支援" }, 400);
-        }
-        if (img.data.length > MAX_IMAGE_B64) return json({ error: "照片檔案過大" }, 400);
-      }
+      const validated = validateImages(images, MAX_GROUP_IMAGES);
+      if (!validated.ok) return json({ error: validated.error }, validated.status);
+      const groupImages = validated.images;
 
       // 驗 JWT
       const authHeader = req.headers.get("Authorization") ?? "";
@@ -243,7 +268,7 @@ Deno.serve(async (req) => {
         .eq("store_id", roleRow.store_id).gte("created_at", monthStart.toISOString());
       if ((count ?? 0) >= MONTHLY_LIMIT) return json({ error: "本月 AI 額度已用完" }, 429);
 
-      const groups = await autoGroupImages(images);
+      const groups = await autoGroupImages(groupImages);
       if (!groups) return json({ error: "AI 分組失敗，請手動分組" }, 502);
 
       await admin.from("ai_usage_log").insert({
@@ -256,20 +281,9 @@ Deno.serve(async (req) => {
     // ── 原有補齊模式 ──────────────────────────────────────
 
     // 輸入驗證：1-3 張 base64 圖，格式與大小都要合法
-    if (!Array.isArray(images) || images.length === 0 || images.length > MAX_IMAGES) {
-      return json({ error: `請提供 1-${MAX_IMAGES} 張照片` }, 400);
-    }
-    for (const img of images) {
-      if (
-        !img || typeof img.data !== "string" || !img.data ||
-        !ALLOWED_MEDIA.includes(img.media_type)
-      ) {
-        return json({ error: "照片格式不支援" }, 400);
-      }
-      if (img.data.length > MAX_IMAGE_B64) {
-        return json({ error: "照片檔案過大" }, 400);
-      }
-    }
+    const validated = validateImages(images, MAX_IMAGES);
+    if (!validated.ok) return json({ error: validated.error }, validated.status);
+    const listingImages = validated.images;
 
     // 驗 JWT：以 anon client 帶入使用者 Authorization 解出身分
     const authHeader = req.headers.get("Authorization") ?? "";
@@ -333,7 +347,7 @@ Deno.serve(async (req) => {
         messages: [{
           role: "user",
           content: [
-            ...images.map((img: { data: string; media_type: string }) => ({
+            ...listingImages.map((img) => ({
               type: "image",
               source: {
                 type: "base64",

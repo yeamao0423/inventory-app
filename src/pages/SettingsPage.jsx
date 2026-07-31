@@ -216,14 +216,52 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        <div className="sec">運費</div>
+        <div className="sec">運費（向客戶收）</div>
         <div className="card" style={{ padding: 16 }}>
           {inputRow('運費（NT$）', 'shipping_fee', 'number', '60')}
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label">免運門檻（NT$，商品小計達此金額免運）</label>
             <input className="form-input" type="number" placeholder="3800"
               value={form.free_shipping_threshold ?? ''} onChange={set('free_shipping_threshold')} />
+            <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6, lineHeight: 1.6 }}>
+              填 0 代表全店免運，等於每一單的物流費都由你自己吸收。
+            </div>
           </div>
+        </div>
+
+        <div className="sec">物流成本（實際付出去）</div>
+        <div className="card" style={{ padding: 16 }}>
+          <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 14, lineHeight: 1.7 }}>
+            這是你實際付給物流的錢，跟上面「向客戶收多少」是兩回事。
+            有收運費時兩邊相抵、不賺不賠；免運時這筆就是你的淨支出，
+            會從行程報告的可分配盈餘裡扣掉。訂單成立時會凍結當下的金額，
+            之後調整這裡不會改到已成立的訂單。
+          </div>
+          {[
+            { key: 'default',    label: '未指定物流（匯款自寄）' },
+            { key: 'UNIMARTC2C', label: '7-11 超商取貨' },
+            { key: 'FAMIC2C',    label: '全家 超商取貨' },
+            { key: 'HILIFEC2C',  label: '萊爾富 超商取貨' },
+            { key: 'OKMARTC2C',  label: 'OK 超商取貨' },
+          ].map(({ key, label }) => (
+            <div className="form-group" key={key} style={{ marginBottom: key === 'OKMARTC2C' ? 0 : 14 }}>
+              <label className="form-label">{label}（NT$）</label>
+              <input
+                className="form-input"
+                type="number"
+                placeholder="60"
+                value={form.shipping_costs?.[key] ?? ''}
+                onChange={e => {
+                  const v = e.target.value
+                  setForm(prev => ({
+                    ...prev,
+                    shipping_costs: { ...(prev.shipping_costs ?? {}), [key]: v === '' ? '' : Number(v) },
+                  }))
+                  setSaved(false)
+                }}
+              />
+            </div>
+          ))}
         </div>
 
         <div className="sec">加購設定</div>
@@ -317,14 +355,19 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        <div className="sec">客服聯絡（顯示於通知信 footer 與新訂單通知）</div>
+        <div className="sec">客服聯絡（顯示於商城頁尾、通知信 footer 與新訂單通知）</div>
         <div className="card" style={{ padding: 16 }}>
           {inputRow('客服 LINE 連結', 'contact_line_url', 'text', '例：https://line.me/R/ti/p/@xxxxxx')}
+          {inputRow('客服電話', 'contact_phone', 'text', '例：02-12345678')}
           {inputRow('客服 Email', 'contact_email', 'text', '例：service@yourshop.com')}
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label">新訂單通知信箱（收到客戶下單通知；留空則用客服 Email）</label>
             <input className="form-input" type="text" placeholder="例：owner@yourshop.com"
               value={form.order_notify_email ?? ''} onChange={set('order_notify_email')} />
+          </div>
+          <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-3)' }}>
+            客服電話與 Email 會公開顯示在商城每一頁的頁尾（金物流審核需要）。
+            留空時會改用「物流設定」的寄件人電話／Email，建議填寫對外的客服聯絡方式。
           </div>
         </div>
 

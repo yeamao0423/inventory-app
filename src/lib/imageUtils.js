@@ -4,6 +4,22 @@ const MAX_WIDTH = 1200
 const MAX_HEIGHT = 1200
 const QUALITY = 0.75
 
+// canvas.toBlob 只是「請求」某格式；部分瀏覽器/webview（較舊 iOS Safari、LINE/IG 內建瀏覽器等）
+// 不支援編碼成 webp 時會靜默退回 png，但 blob.type 仍會誠實反映實際編碼結果。
+// 一律以 blob.type 為準，不可假設一定是請求的格式。
+const EXT_BY_TYPE = {
+  'image/webp': 'webp',
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+}
+
+function fileFromBlob(blob, originalName) {
+  const type = blob.type || 'image/png'
+  const ext = EXT_BY_TYPE[type] || 'png'
+  return new File([blob], originalName.replace(/\.\w+$/, `.${ext}`), { type })
+}
+
 export function compressImage(file) {
   return new Promise((resolve) => {
     if (file.size < 100 * 1024) { resolve(file); return }
@@ -25,7 +41,7 @@ export function compressImage(file) {
       canvas.toBlob(
         (blob) => {
           if (blob && blob.size < file.size) {
-            resolve(new File([blob], file.name.replace(/\.\w+$/, '.webp'), { type: 'image/webp' }))
+            resolve(fileFromBlob(blob, file.name))
           } else {
             resolve(file)
           }
@@ -61,7 +77,7 @@ export function reencodeImage(file, maxDim, quality) {
       canvas.toBlob(
         (blob) => {
           if (blob) {
-            resolve(new File([blob], file.name.replace(/\.\w+$/, '.webp'), { type: 'image/webp' }))
+            resolve(fileFromBlob(blob, file.name))
           } else {
             resolve(file)
           }
