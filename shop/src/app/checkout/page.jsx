@@ -1,9 +1,12 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
+import { isComposing } from '../../lib/imeSafeEnter'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
 import { getStore, getStoreId } from '../../lib/store'
 import { trackPixel } from '../../lib/metaPixel'
+import { fetchBundlesByIds } from '../../lib/bundles'
+import { bundleIdsInCart, cartLineKey, computeCartTotals } from '../../lib/bundleCart'
 import { useI18n, useCart, useUser } from '../layout'
 
 export default function CheckoutPage() {
@@ -74,12 +77,38 @@ export default function CheckoutPage() {
   const [couponError, setCouponError] = useState('')
   const [couponLoading, setCouponLoading] = useState(false)
 
-  const subtotal = cart.reduce((s, i) => s + i.price * i.qty, 0)
+  // ── 組合商品（套裝價）──
+  // 這裡算的只是「給消費者看的畫面」。真正生效的是 place_order 裡的重新驗證：
+  // 套裝價一律取 DB 的 bundle_price、完整性一律比對 DB 的 bundle_items，
+  // 前端 localStorage 怎麼改都不影響最後付多少（見 20250071 migration）。
+  const [bundles, setBundles] = useState([])
+  const bundleIds = bundleIdsInCart(cart)
+  const bundleKey = bundleIds.join(',')
+  useEffect(() => {
+    if (bundleIds.length === 0) { setBundles([]); return }
+    let alive = true
+    fetchBundlesByIds(bundleIds).then(rows => { if (alive) setBundles(rows) }).catch(() => {})
+    return () => { alive = false }
+  }, [bundleKey]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const { subtotal, bundleDiscount } = computeCartTotals(cart, bundles)
+  const hasBundlePrice = bundleDiscount > 0
+
+  // 套裝價視為最終價，不與優惠券併用（ADR-0004）。已套用的券在套裝成立時自動移除。
+  useEffect(() => {
+    if (hasBundlePrice && couponPreview) {
+      setCouponPreview(null)
+      setCouponError(lang === 'zh'
+        ? '套裝價不能與優惠券併用，已移除優惠碼'
+        : 'Bundle price cannot be combined with coupons — the code has been removed')
+    }
+  }, [hasBundlePrice]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const FREE_SHIPPING_THRESHOLD = store?.settings?.free_shipping_threshold ?? 3800
   const SHIPPING_FEE = store?.settings?.shipping_fee ?? 60
   const shippingFee = subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : SHIPPING_FEE
-  const discountAmount = couponPreview?.discount_amount || 0
-  const total = subtotal - discountAmount + shippingFee
+  const discountAmount = hasBundlePrice ? 0 : (couponPreview?.discount_amount || 0)
+  const total = subtotal - bundleDiscount - discountAmount + shippingFee
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   // ── 加購金額試算：與 DB 的 append_to_order 用同一組規則 ──
@@ -133,6 +162,12 @@ export default function CheckoutPage() {
   async function applyCoupon() {
     const code = couponCode.trim().toUpperCase()
     if (!code) return
+    if (hasBundlePrice) {
+      setCouponError(lang === 'zh'
+        ? '套裝價不能與優惠券併用。若想改用優惠碼，請回購物車把套裝拆開（各件以原價計算）。'
+        : 'Bundle price cannot be combined with coupons. Break up the bundle in your cart to use a code.')
+      return
+    }
     setCouponLoading(true)
     setCouponError('')
     setCouponPreview(null)
@@ -255,9 +290,9 @@ export default function CheckoutPage() {
       p_items_json: cart,
       p_total_amount: orderTotal,
       p_shipping_fee: shippingFee,
-      // coupon (nullable)
-      p_coupon_code: couponPreview?.code || null,
-      p_subtotal: couponPreview ? subtotal : null,
+      // coupon (nullable)。套裝價成立時一律不帶券 —— DB 端也會擋，這裡先避免白跑一趟。
+      p_coupon_code: hasBundlePrice ? null : (couponPreview?.code || null),
+      p_subtotal: !hasBundlePrice && couponPreview ? subtotal : null,
       p_consumer_email: form.email,
     })
 
@@ -285,6 +320,20 @@ export default function CheckoutPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: orderToken, lang }),
     }).catch(err => console.error('Email send failed:', err))
+
+    // 認領：下單時身分揭曉，把這個瀏覽器先前以訪客身分留下的客服對話歸到本人名下。
+    // 動態載入，避免把聊天相關程式碼拉進結帳頁的 bundle；失敗不影響下單。
+    if (user) {
+      import('../../lib/chat')
+        .then(async ({ getVisitorToken, claimConversations }) => {
+          const visitorToken = getVisitorToken()
+          const { data: { session } } = await supabase.auth.getSession()
+          if (visitorToken && session?.access_token) {
+            await claimConversations({ storeId, visitorToken, accessToken: session.access_token })
+          }
+        })
+        .catch(err => console.error('claim conversations failed:', err))
+    }
 
     clearCart()
     router.push(`/order/${orderToken}`)
@@ -340,6 +389,14 @@ export default function CheckoutPage() {
                   <div className="order-summary-item-price">NT${(item.price * item.qty).toLocaleString()}</div>
                 </div>
               ))}
+              {/* 加購走 append_to_order，不經過套裝價的驗證 —— 先講清楚，別讓她以為有折 */}
+              {bundleDiscount > 0 && (
+                <div style={{ marginTop: 10, fontSize: 12, color: 'var(--amber)', lineHeight: 1.7 }}>
+                  {zh
+                    ? '加購到既有訂單時不套用套裝價，以上商品以各件原價計算。想用套裝價請取消加購，另外建立新訂單。'
+                    : 'Bundle pricing does not apply when adding to an existing order — these items are charged at regular price.'}
+                </div>
+              )}
             </div>
 
             <div className="order-summary-card" style={{ marginTop: 16 }}>
@@ -502,9 +559,14 @@ export default function CheckoutPage() {
           <div className="order-summary-card">
             <div className="order-summary-title">{t('checkout.order_summary')}</div>
             {cart.map(item => (
-              <div className="order-summary-item" key={`${item.id}-${item.color}-${item.size}`}>
+              <div className="order-summary-item" key={cartLineKey(item)}>
                 <div className="order-summary-item-name">
                   {item.name}
+                  {item.bundleName && (
+                    <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                      {lang === 'zh' ? '組合：' : 'Bundle: '}{item.bundleName}
+                    </div>
+                  )}
                   {item.variantLabel && (
                     <div style={{ fontSize: 12, color: 'var(--text-3)' }}>{item.variantLabel}</div>
                   )}
@@ -519,8 +581,22 @@ export default function CheckoutPage() {
               <span>NT${subtotal.toLocaleString()}</span>
             </div>
 
-            {/* 優惠碼輸入 */}
-            {!couponPreview ? (
+            {/* 套裝價折抵：組合齊全時成立，寫進訂單的 discount_amount */}
+            {bundleDiscount > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, color: '#1a7a3c', marginBottom: 8 }}>
+                <span>{lang === 'zh' ? '套裝價折抵' : 'Bundle discount'}</span>
+                <span>-NT${bundleDiscount.toLocaleString()}</span>
+              </div>
+            )}
+
+            {/* 優惠碼輸入。套裝價視為最終價，不與優惠券併用（ADR-0004）。 */}
+            {hasBundlePrice ? (
+              <div style={{ fontSize: 12, color: 'var(--text-3)', lineHeight: 1.7, marginBottom: 10, background: 'var(--border-light)', padding: '8px 12px', borderRadius: 8 }}>
+                {lang === 'zh'
+                  ? '套裝價已是優惠價，不能再疊加優惠券或會員等級折扣。想改用優惠碼的話，回購物車把套裝拆開即可，各件會以原價計算。'
+                  : 'The bundle price is already discounted and cannot be combined with coupons or member-level discounts. Break up the bundle in your cart to use a code instead.'}
+              </div>
+            ) : !couponPreview ? (
               <div style={{ marginBottom: 10 }}>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <input
@@ -529,7 +605,7 @@ export default function CheckoutPage() {
                     placeholder={lang === 'zh' ? '輸入優惠碼' : 'Coupon code'}
                     value={couponCode}
                     onChange={e => { setCouponCode(e.target.value); setCouponError('') }}
-                    onKeyDown={e => e.key === 'Enter' && applyCoupon()}
+                    onKeyDown={e => !isComposing(e) && e.key === 'Enter' && applyCoupon()}
                   />
                   <button
                     onClick={applyCoupon}
