@@ -14,6 +14,7 @@ import PlatformPage from './pages/PlatformPage'
 import SettingsPage from './pages/SettingsPage'
 import StaticPagesPage from './pages/StaticPagesPage'
 import HomeDesignPage from './pages/HomeDesignPage'
+import ProductTemplatePage from './pages/ProductTemplatePage'
 import MembersPage from './pages/MembersPage'
 import MemberLevelsPage from './pages/MemberLevelsPage'
 import InboxPage from './pages/InboxPage'
@@ -171,6 +172,10 @@ export default function App() {
         <Route path="/users"      element={<UsersPage />} />
         <Route path="/settings"   element={<SettingsPage />} />
         <Route path="/home-design" element={<HomeDesignPage />} />
+        {/* 商品頁編排：全店範本與單一商品覆寫是同一個頁面元件，差別只在讀寫哪張表。
+            /storefront/:spId/page 排在 /storefront 的轉址之後，兩者路徑不重疊。 */}
+        <Route path="/product-template" element={<ProductTemplatePage />} />
+        <Route path="/storefront/:spId/page" element={<ProductTemplatePage />} />
         <Route path="/pages"      element={<StaticPagesPage />} />
         <Route path="/platform"   element={<PlatformPage />} />
         <Route path="/invite"     element={<InvitePage />} />

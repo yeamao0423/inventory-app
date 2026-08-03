@@ -48,7 +48,7 @@ describe('normalizeContent — 沒編過與壞資料', () => {
 
   it('版本號不是 1（含未來版本、壞值）時仍盡力正規化，並標回目前版本', () => {
     expect(normalizeContent({ version: 99, blocks: [{ type: 'text', body: 'x' }] }))
-      .toEqual({ version: CONTENT_VERSION, blocks: [{ id: 'text-0', type: 'text', title: '', body: 'x' }] })
+      .toEqual({ version: CONTENT_VERSION, blocks: [{ id: 'text-0', type: 'text', span: 12, title: '', body: 'x' }] })
     expect(normalizeContent({ version: 'abc', blocks: [] }).version).toBe(CONTENT_VERSION)
   })
 
@@ -62,7 +62,7 @@ describe('normalizeContent — 缺欄位補預設', () => {
   it('hero 缺欄位時每個欄位都補成空字串', () => {
     const out = normalizeContent({ blocks: [{ type: 'hero' }] })
     expect(out.blocks[0]).toEqual({
-      id: 'hero-0', type: 'hero',
+      id: 'hero-0', type: 'hero', span: 12,
       image: '', title: '', subtitle: '', buttonText: '', buttonHref: '',
     })
   })
@@ -102,7 +102,7 @@ describe('normalizeContent — 缺欄位補預設', () => {
     const out = normalizeContent({
       blocks: [{ type: 'text', title: 123, body: { a: 1 }, onClick: 'alert(1)', style: 'color:red' }],
     })
-    expect(out.blocks[0]).toEqual({ id: 'text-0', type: 'text', title: '123', body: '' })
+    expect(out.blocks[0]).toEqual({ id: 'text-0', type: 'text', span: 12, title: '123', body: '' })
   })
 
   it('文字欄位長度有上限，不會讓單一區塊塞爆頁面', () => {
