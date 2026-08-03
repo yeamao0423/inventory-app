@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect } from 'react'
+import { isComposing } from '../../lib/imeSafeEnter'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
 import { getStore } from '../../lib/store'
@@ -165,7 +166,7 @@ export default function AuthPage() {
                 value={email}
                 onChange={e => setEmail(e.target.value)}
                 placeholder="example@email.com"
-                onKeyDown={e => e.key === 'Enter' && submitFn()}
+                onKeyDown={e => !isComposing(e) && e.key === 'Enter' && submitFn()}
               />
             </div>
 
@@ -178,7 +179,7 @@ export default function AuthPage() {
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   placeholder={zh ? '至少 6 個字元' : 'At least 6 characters'}
-                  onKeyDown={e => e.key === 'Enter' && submitFn()}
+                  onKeyDown={e => !isComposing(e) && e.key === 'Enter' && submitFn()}
                 />
               </div>
             )}
@@ -192,7 +193,7 @@ export default function AuthPage() {
                   value={confirmPassword}
                   onChange={e => setConfirmPassword(e.target.value)}
                   placeholder={zh ? '再次輸入密碼' : 'Re-enter password'}
-                  onKeyDown={e => e.key === 'Enter' && submitFn()}
+                  onKeyDown={e => !isComposing(e) && e.key === 'Enter' && submitFn()}
                 />
               </div>
             )}

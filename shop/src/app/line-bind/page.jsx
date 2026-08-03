@@ -2,6 +2,7 @@
 // LINE 會員綁定頁（從 LINE 圖文選單/bot 連結開啟 → 登入商城一次 → LINE 認證 → 綁定）
 // LIFF SDK 以 CDN 載入，不新增 npm 依賴。
 import { useState, useEffect, useCallback } from 'react'
+import { isComposing } from '../../lib/imeSafeEnter'
 import { supabase } from '../../lib/supabase'
 import { getStore } from '../../lib/store'
 
@@ -111,7 +112,7 @@ export default function LineBindPage() {
               <label className="form-label">密碼</label>
               <input className="form-input" type="password" value={password}
                 onChange={e => setPassword(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleLogin()} />
+                onKeyDown={e => !isComposing(e) && e.key === 'Enter' && handleLogin()} />
             </div>
             <button className="btn-primary" style={{ marginTop: 8 }} onClick={handleLogin}>登入並綁定</button>
           </>

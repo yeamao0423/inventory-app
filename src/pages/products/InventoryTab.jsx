@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { isComposing } from '../../lib/imeSafeEnter'
 import { supabase } from '../../lib/supabase'
 import { SUPPORTED_CURRENCIES } from '../../constants/currency'
 import { useAuth } from '../../hooks/useAuth'
@@ -364,7 +365,7 @@ function EditableField({ productId, field, initialValue, canEdit, onSaved, onVal
             value={value}
             onChange={onChange}
             onBlur={save}
-            onKeyDown={e => e.key === 'Enter' && save()}
+            onKeyDown={e => !isComposing(e) && e.key === 'Enter' && save()}
             placeholder={placeholder}
             type={type}
             style={{ flex: 1, border: 'none', background: 'transparent', outline: 'none', fontSize: 14, fontWeight: 600, color: 'var(--text)', minWidth: 0, ...inputStyle }}
@@ -455,7 +456,7 @@ function VariantStockEditor({ variants, optionTypes, canEdit, onSaved, productCo
                     type="number"
                     defaultValue={v.variant_cost ?? ''}
                     onBlur={e => saveCost(v.id, e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && e.currentTarget.blur()}
+                    onKeyDown={e => !isComposing(e) && e.key === 'Enter' && e.currentTarget.blur()}
                     placeholder={productCost != null ? String(productCost) : costCurrency}
                     title={`留空＝用商品成本（${costCurrency}）`}
                     style={{ width: 76, textAlign: 'center', border: '0.5px solid var(--border)', borderRadius: 8, padding: '6px 8px', fontSize: 14, background: 'var(--bg)', color: 'var(--text)' }}
@@ -465,7 +466,7 @@ function VariantStockEditor({ variants, optionTypes, canEdit, onSaved, productCo
                     type="number"
                     defaultValue={s}
                     onBlur={e => saveStock(v.id, e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && e.currentTarget.blur()}
+                    onKeyDown={e => !isComposing(e) && e.key === 'Enter' && e.currentTarget.blur()}
                     style={{ width: 64, textAlign: 'center', border: '0.5px solid var(--border)', borderRadius: 8, padding: '6px 8px', fontSize: 14, fontWeight: 600, background: 'var(--bg)', color: 'var(--text)' }}
                   />
                 </div>
@@ -931,7 +932,7 @@ function SourceField({ productId, initialSource, canEdit, onSaved, existingSourc
                 value={source}
                 onChange={e => setSource(e.target.value)}
                 onBlur={() => save()}
-                onKeyDown={e => e.key === 'Enter' && save()}
+                onKeyDown={e => !isComposing(e) && e.key === 'Enter' && save()}
                 placeholder="例：UNIQLO"
                 style={{ flex: 1 }}
               />

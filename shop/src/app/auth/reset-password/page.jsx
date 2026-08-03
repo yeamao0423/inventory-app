@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect } from 'react'
+import { isComposing } from '../../../lib/imeSafeEnter'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../../lib/supabase'
 import { useI18n } from '../../layout'
@@ -70,7 +71,7 @@ export default function ResetPasswordPage() {
                 type="password"
                 value={confirmPassword}
                 onChange={e => setConfirmPassword(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleReset()}
+                onKeyDown={e => !isComposing(e) && e.key === 'Enter' && handleReset()}
               />
             </div>
             <button className="btn-primary" style={{ marginTop: 8 }} onClick={handleReset} disabled={loading}>

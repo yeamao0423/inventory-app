@@ -4,6 +4,7 @@ import { useProductRefresh } from '../hooks/useProductRefresh'
 import { revalidateShop } from '../lib/revalidateShop'
 import QuickListSheet from './QuickListSheet'
 import BulkListSheet from './BulkListSheet'
+import ShopSyncNotice from './ShopSyncNotice'
 
 // 全域置頂欄：跨頁常駐的動作（快速上架 / 批量上架 / 登出），不論停在哪個分頁都能用。
 // 左側在手機補顯示店名（側欄的 .side-brand 只在桌機出現），桌機留白避免與側欄品牌重複。
@@ -53,6 +54,8 @@ export default function TopBar() {
       {bulkList && (
         <BulkListSheet onClose={() => setBulkList(false)} onSaved={handleSaved} />
       )}
+      {/* 掛在全域置頂欄裡，任何一頁清商城快取失敗都看得到 */}
+      <ShopSyncNotice />
     </>
   )
 }

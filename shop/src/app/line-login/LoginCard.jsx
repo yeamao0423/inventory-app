@@ -1,6 +1,8 @@
 'use client'
 // LINE 登入卡片 UI（LIFF 頁與 Web OAuth callback 頁共用）
 // 各 phase 對應 useLineLogin 狀態機；email 關卡 = 乾淨版強制補填（送出才建帳號）
+import { isComposing } from '../../lib/imeSafeEnter'
+
 export default function LoginCard({ flow }) {
   const {
     phase, msg, lineName, emailInput, setEmailInput, password, setPassword,
@@ -35,7 +37,7 @@ export default function LoginCard({ flow }) {
               <input className="form-input" type="email" value={emailInput}
                 onChange={e => setEmailInput(e.target.value)}
                 placeholder="example@email.com"
-                onKeyDown={e => e.key === 'Enter' && submitEmail()} />
+                onKeyDown={e => !isComposing(e) && e.key === 'Enter' && submitEmail()} />
             </div>
             <button className="btn-primary" style={{ marginTop: 8 }} onClick={submitEmail}>
               完成註冊
@@ -54,7 +56,7 @@ export default function LoginCard({ flow }) {
               <input className="form-input" type="text" inputMode="numeric" maxLength={6}
                 value={otpCode} onChange={e => setOtpCode(e.target.value.replace(/\D/g, ''))}
                 placeholder="123456"
-                onKeyDown={e => e.key === 'Enter' && verifyEmailCode()} />
+                onKeyDown={e => !isComposing(e) && e.key === 'Enter' && verifyEmailCode()} />
             </div>
             <button className="btn-primary" style={{ marginTop: 8 }} onClick={verifyEmailCode}>
               驗證並完成註冊
@@ -77,7 +79,7 @@ export default function LoginCard({ flow }) {
               <label className="form-label">輸入密碼</label>
               <input className="form-input" type="password" value={password}
                 onChange={e => setPassword(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && verifyWithPassword()} />
+                onKeyDown={e => !isComposing(e) && e.key === 'Enter' && verifyWithPassword()} />
             </div>
             <button className="btn-primary" style={{ marginTop: 8 }} onClick={verifyWithPassword}>
               驗證並綁定 LINE

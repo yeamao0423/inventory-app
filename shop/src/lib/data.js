@@ -7,6 +7,7 @@ import { cache } from 'react'
 import { headers } from 'next/headers'
 import { unstable_cache } from 'next/cache'
 import { supabase } from './supabase'
+import { pickBlockProducts } from './blockProducts'
 
 const STORE_COLS = 'id, name, slug, settings, is_active'
 const TTL = 3600 // 秒
@@ -240,5 +241,119 @@ export const getStorePage = cache(async (storeId, slug) => {
   )()
 })
 
+// ── 組合商品：先輕量查出組合屬於哪家店（之後才能把詳情快取也掛上 store-{id} tag）──
+function fetchBundleStoreId(bundleId) {
+  return unstable_cache(
+    async () => {
+      if (!supabase) return null
+      const { data } = await supabase
+        .from('bundles').select('store_id')
+        .eq('id', bundleId).eq('is_published', true).maybeSingle()
+      return data?.store_id ?? null
+    },
+    ['bundle-store-id', String(bundleId)],
+    { tags: [`bundle-${bundleId}`], revalidate: TTL },
+  )()
+}
+
+// ── 組合商品落地頁（快取，tag=bundle-{id} + store-{id}）──
+// 組合 id 全域唯一 → 與商品詳情頁一樣不需先知道店家即可反查，可完整靜態快取。
+// 回傳的 items 逐件帶著該商品的上架資料與規格，讓消費者在落地頁直接選規格。
+export const getBundleDetail = cache(async (bundleId) => {
+  if (!supabase) return null
+  const storeId = await fetchBundleStoreId(bundleId)
+  if (storeId == null) return null
+
+  return unstable_cache(
+    async () => {
+      const { data: bundle } = await supabase
+        .from('bundles')
+        .select('*, bundle_items(product_id, sort_order)')
+        .eq('id', bundleId)
+        .eq('is_published', true)
+        .maybeSingle()
+      if (!bundle) return null
+
+      const ordered = [...(bundle.bundle_items || [])].sort((a, b) => a.sort_order - b.sort_order)
+      const productIds = ordered.map(bi => bi.product_id)
+      if (productIds.length === 0) {
+        return { bundle, items: [], missingProductIds: [], optTypes: [], store: null }
+      }
+
+      const [{ data: sps }, { data: varData }, { data: optTypes }, { data: store }] = await Promise.all([
+        supabase
+          .from('storefront_products')
+          .select('*, products:shop_products!inner(*, product_images(id, url, sort_order, tag_filter))')
+          .eq('store_id', storeId)
+          .eq('published', true)
+          .in('product_id', productIds),
+        // 明列欄位：不含 variant_cost（migration 39 對 anon 封鎖成本，select('*') 會整句報錯）
+        supabase.from('product_variants')
+          .select('id, product_id, options, stock, price_adjustment, variant_price, sale_price')
+          .in('product_id', productIds),
+        supabase.from('variant_option_types')
+          .select('*, variant_option_values(id, value, sort_order)')
+          .eq('store_id', storeId)
+          .order('sort_order'),
+        supabase.from('stores').select(STORE_COLS).eq('id', storeId).maybeSingle(),
+      ])
+
+      // 已下架／已刪除的商品沒有東西可以顯示，但**不能當作它不存在** ——
+      // 結帳時 DB 仍會以 bundle_items 判定完整性，缺這件就不給套裝價。
+      // 所以另外回報 missingProductIds，讓落地頁的價格與結帳結果一致。
+      const spByProduct = new Map((sps || []).map(sp => [sp.product_id, sp]))
+      const items = productIds
+        .filter(pid => spByProduct.has(pid))
+        .map(pid => ({
+          productId: pid,
+          sp: spByProduct.get(pid),
+          variants: (varData || []).filter(v => v.product_id === pid),
+        }))
+      const missingProductIds = productIds.filter(pid => !spByProduct.has(pid))
+
+      return { bundle, items, missingProductIds, optTypes: optTypes || [], store: store || null }
+    },
+    ['bundle-detail', String(bundleId)],
+    { tags: [`bundle-${bundleId}`, `store-${storeId}`], revalidate: TTL },
+  )()
+})
+
+// ── generateStaticParams 用：所有已發佈組合的 id + name（跨店）──
+// 不掛 unstable_cache：build 時執行一次即可。
+export async function getAllPublishedBundleParams() {
+  if (!supabase) return []
+  const { data } = await supabase.from('bundles').select('id, name').eq('is_published', true)
+  return data || []
+}
+
 // 給其他地方用（目前 product 詳情已內含 store）
 export { fetchStoreById as getStoreById }
+
+// ── 首頁區塊內容（快取，tag=store-{id}）──
+// 刻意不塞進 STORE_COLS：那組欄位被每一頁的店家查詢共用，把首頁 blocks 掛上去
+// 等於每頁都多背一份用不到的 jsonb。首頁自己多打一次（已快取）比較划算。
+// 回傳原始 jsonb，正規化交給 lib/contentBlocks.js —— null 代表「沒編過」，
+// 首頁據此走既有預設版面（轉址到 /products），不是顯示空白頁。
+export const getStoreHomeBlocks = cache(async (storeId) => {
+  if (!supabase || storeId == null) return null
+  return unstable_cache(
+    async () => {
+      const { data } = await supabase
+        .from('stores').select('home_blocks')
+        .eq('id', storeId).maybeSingle()
+      return data?.home_blocks ?? null
+    },
+    ['store-home-blocks', String(storeId)],
+    { tags: [`store-${storeId}`], revalidate: TTL },
+  )()
+})
+
+// ── 商品精選區塊用的商品（沿用既有的列表查詢，不新增 DB round-trip）──
+// getProductList 已經被列表頁快取住，這裡只是在記憶體裡挑出要的幾筆，
+// 且吐出的形狀與列表頁完全一致，商品卡片可以直接共用。
+// 挑選規則本身在 lib/blockProducts.js（純函式），後台即時預覽在瀏覽器端用同一份，
+// 兩邊才不會挑出不同結果。這裡只負責把快取好的商品清單餵進去。
+export const getBlockProducts = cache(async (storeId, block) => {
+  const { products, categories } = await getProductList(storeId)
+  return pickBlockProducts(products, categories, block)
+})

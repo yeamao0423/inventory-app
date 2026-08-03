@@ -7,6 +7,9 @@ import { supabase } from '../lib/supabase'
 import { getStore, getStorePages } from '../lib/store'
 import { getMenuItems, resolvePin } from '../lib/menu'
 import { initMetaPixel, trackPageView, trackPixel } from '../lib/metaPixel'
+import { brandCss } from '../lib/brandColor'
+import { cartLineKey } from '../lib/bundleCart'
+import ChatLauncher from './ChatLauncher'
 import zhMessages from '../messages/zh.json'
 import enMessages from '../messages/en.json'
 
@@ -22,7 +25,7 @@ export function useI18n() { return useContext(I18nContext) }
 
 // ── Cart Context ───────────────────────────
 export const CartContext = createContext({
-  cart: [], addItem: () => {}, removeItem: () => {}, clearCart: () => {},
+  cart: [], addItem: () => {}, addItems: () => {}, removeItem: () => {}, clearCart: () => {},
   // 加購模式：購物車綁定到某張既有訂單，結帳時走 append_to_order 而非 place_order
   appendTo: null, startAppend: () => {}, cancelAppend: () => {},
   // localStorage 是否已讀入。在此之前 cart/appendTo 都還是初始值，
@@ -164,13 +167,18 @@ export default function RootLayout({ children }) {
     return val || key
   }
 
+  // 合併規則：同商品、同規格、且屬於同一個組合才算同一列（cartLineKey）。
+  // 掛了組合的列不能跟單買的列併在一起 —— 否則刪掉單買那件會連套裝那件一起消失。
+  function mergeIntoCart(prev, item) {
+    const key = cartLineKey(item)
+    if (prev.some(i => cartLineKey(i) === key)) {
+      return prev.map(i => cartLineKey(i) === key ? { ...i, qty: i.qty + item.qty } : i)
+    }
+    return [...prev, item]
+  }
+
   function addItem(item) {
-    setCart(prev => {
-      const key = `${item.id}-${item.variantLabel || ''}`
-      const existing = prev.find(i => `${i.id}-${i.variantLabel || ''}` === key)
-      if (existing) return prev.map(i => `${i.id}-${i.variantLabel || ''}` === key ? { ...i, qty: i.qty + item.qty } : i)
-      return [...prev, item]
-    })
+    setCart(prev => mergeIntoCart(prev, item))
     trackPixel('AddToCart', {
       content_ids: [String(item.id)],
       content_name: item.name,
@@ -181,8 +189,16 @@ export default function RootLayout({ children }) {
     showToast(lang === 'zh' ? '已加入購物車 ✓' : 'Added to cart ✓')
   }
 
+  // 組合商品：整套一次加入。一次 setState、一則提示，不要跳 N 個 toast。
+  function addItems(list) {
+    const items = (list || []).filter(Boolean)
+    if (items.length === 0) return
+    setCart(prev => items.reduce((acc, it) => mergeIntoCart(acc, it), prev))
+    showToast(lang === 'zh' ? `已將 ${items.length} 件加入購物車 ✓` : `${items.length} items added to cart ✓`)
+  }
+
   function removeItem(key) {
-    setCart(prev => prev.filter(i => `${i.id}-${i.variantLabel || ''}` !== key))
+    setCart(prev => prev.filter(i => cartLineKey(i) !== key))
   }
 
   function clearCart() { setCart([]) }
@@ -212,12 +228,19 @@ export default function RootLayout({ children }) {
   // tel: 只留數字與開頭 +，避免店主填「0912-345-678」或帶空白時連結失效
   const telHref = contactPhone.replace(/(?!^\+)[^\d]/g, '')
 
+  // 品牌主色：這裡負責純 client 頁面（購物車、結帳、會員中心）。
+  // server render 的頁面（首頁、商品詳情、預覽）另有 BrandStyle 提前注入同一組值，
+  // 讓首屏就是正確顏色、不會先閃一次預設黑。重覆宣告無害。
+  // 店家沒設定或設了壞值時 brandCss 回空字串 → 一個位元組都不注入，維持既有外觀。
+  const brandStyle = brandCss(store?.settings?.brand_color)
+
   return (
     <html lang={lang === 'zh' ? 'zh-TW' : 'en'}>
       <body>
+        {brandStyle && <style dangerouslySetInnerHTML={{ __html: brandStyle }} />}
         <UserContext.Provider value={{ user, loading: userLoading }}>
           <I18nContext.Provider value={{ t, lang, setLang }}>
-            <CartContext.Provider value={{ cart, addItem, removeItem, clearCart, appendTo, startAppend, cancelAppend, hydrated }}>
+            <CartContext.Provider value={{ cart, addItem, addItems, removeItem, clearCart, appendTo, startAppend, cancelAppend, hydrated }}>
               <nav className="nav">
                 <div className="nav-inner">
                   <Link href="/" className="nav-logo">
@@ -392,6 +415,9 @@ export default function RootLayout({ children }) {
               </footer>
 
               {toast && <div className="toast">{toast}</div>}
+
+              {/* 客服聊天視窗：延遲載入，首屏畫完才出現（見 ChatLauncher） */}
+              <ChatLauncher />
             </CartContext.Provider>
           </I18nContext.Provider>
         </UserContext.Provider>

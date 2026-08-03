@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react'
+import { isComposing } from '../lib/imeSafeEnter'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 
@@ -218,7 +219,7 @@ export default function VariantEditor({
                         value={newValueText}
                         onChange={e => setNewValueText(e.target.value)}
                         onKeyDown={e => {
-                          if (e.key === 'Enter') createValue(type.id)
+                          if (!isComposing(e) && e.key === 'Enter') createValue(type.id)
                           if (e.key === 'Escape') { setAddingValueFor(null); setNewValueText('') }
                         }}
                         onBlur={() => { setAddingValueFor(null); setNewValueText('') }}
@@ -261,7 +262,7 @@ export default function VariantEditor({
               value={newTypeText}
               onChange={e => setNewTypeText(e.target.value)}
               onKeyDown={e => {
-                if (e.key === 'Enter') createType()
+                if (!isComposing(e) && e.key === 'Enter') createType()
                 if (e.key === 'Escape') { setAddingType(false); setNewTypeText('') }
               }}
               onBlur={() => { setAddingType(false); setNewTypeText('') }}

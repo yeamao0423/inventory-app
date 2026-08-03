@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { isComposing } from '../lib/imeSafeEnter'
 import { supabase } from '../lib/supabase'
 import { Pill } from './MenuPopover'
 import CustomSelect from './CustomSelect'
@@ -77,13 +78,13 @@ function NameDialog({ title, initName = '', initNameEn = '', showEn = true, name
         <label className="form-label fs12">{nameLabel} *</label>
         <input autoFocus className="form-input" style={{ width: '100%', marginBottom: 12 }} placeholder={placeholder}
           value={name} onChange={e => setName(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && save()} />
+          onKeyDown={e => !isComposing(e) && e.key === 'Enter' && save()} />
         {showEn && (
           <>
             <label className="form-label fs12">英文名稱</label>
             <input className="form-input" style={{ width: '100%', marginBottom: 12 }}
               value={nameEn} onChange={e => setNameEn(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && save()} />
+              onKeyDown={e => !isComposing(e) && e.key === 'Enter' && save()} />
           </>
         )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 6 }}>
@@ -527,7 +528,7 @@ export default function TaxonomyManager({ storeId, can, syncShop }) {
                     placeholder={selSpec.name === '顏色' ? '例：黑色' : '例：S'}
                     value={newValInputs[selSpec.id] || ''}
                     onChange={e => setNewValInputs(f => ({ ...f, [selSpec.id]: e.target.value }))}
-                    onKeyDown={e => e.key === 'Enter' && addValue(selSpec.id)} />
+                    onKeyDown={e => !isComposing(e) && e.key === 'Enter' && addValue(selSpec.id)} />
                 </div>
                 <button className="btn" onClick={() => addValue(selSpec.id)} style={{ fontSize: 13, padding: '9px 16px', marginBottom: 0 }}>新增</button>
               </div>
@@ -702,7 +703,7 @@ export default function TaxonomyManager({ storeId, can, syncShop }) {
                 placeholder={selSpec.name === '顏色' ? '例：黑色' : '例：S'}
                 value={newValInputs[selSpec.id] || ''}
                 onChange={e => setNewValInputs(f => ({ ...f, [selSpec.id]: e.target.value }))}
-                onKeyDown={e => e.key === 'Enter' && addValue(selSpec.id)} />
+                onKeyDown={e => !isComposing(e) && e.key === 'Enter' && addValue(selSpec.id)} />
               <button className="btn" onClick={() => addValue(selSpec.id)} style={{ fontSize: 13, padding: '9px 16px', marginBottom: 0 }}>新增</button>
             </div>
           )}

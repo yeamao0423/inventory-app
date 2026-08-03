@@ -1,18 +1,22 @@
 import { useEffect, useState } from 'react'
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from './hooks/useAuth'
+import { useInboxUnread } from './hooks/useInboxUnread'
 import LoginPage from './pages/LoginPage'
 import ProductsPage from './pages/ProductsPage'
 import OrdersPage from './pages/OrdersPage'
 import UsersPage from './pages/UsersPage'
 import TripsPage from './pages/TripsPage'
 import CouponsPage from './pages/CouponsPage'
+import BundlesPage from './pages/BundlesPage'
 import InvitePage from './pages/InvitePage'
 import PlatformPage from './pages/PlatformPage'
 import SettingsPage from './pages/SettingsPage'
 import StaticPagesPage from './pages/StaticPagesPage'
+import HomeDesignPage from './pages/HomeDesignPage'
 import MembersPage from './pages/MembersPage'
 import MemberLevelsPage from './pages/MemberLevelsPage'
+import InboxPage from './pages/InboxPage'
 import TopBar from './components/TopBar'
 import { ProductRefreshProvider } from './hooks/useProductRefresh'
 import MarketingLayout from './marketing/MarketingLayout'
@@ -26,12 +30,17 @@ const allTabs = [
   // 庫存／商城／分類管理吃的是同一批商品資料，合成單一「商品」入口，內部再分頁
   { path: '/products',   label: '商品',  icon: BoxIcon, storeOnly: true },
   { path: '/orders',     label: '訂單',  icon: ReceiptIcon, storeOnly: true },
+  { path: '/inbox',      label: '客服',  icon: ChatIcon, storeOnly: true },
   { path: '/trips',      label: '行程',  icon: TripIcon, superOnly: true },
   { path: '/coupons',    label: '優惠券', icon: CouponIcon, storeOnly: true, group: 'more' },
+  // 組合商品不是商品（不進庫存、不成為訂單品項），所以不掛在「商品」底下，另開一個入口
+  { path: '/bundles',    label: '組合',  icon: BundleIcon, adminOnly: true, group: 'more' },
   { path: '/members',    label: '會員',  icon: MemberIcon, adminOnly: true, group: 'more' },
   { path: '/levels',     label: '等級',  icon: TierIcon, adminOnly: true, group: 'more' },
   { path: '/users',      label: '成員',  icon: UsersIcon, adminOnly: true, group: 'more' },
   { path: '/settings',   label: '設定',  icon: GearIcon, superOnly: true, group: 'more' },
+  // 首頁＝行銷內容（區塊），靜態頁＝法務內容（Markdown）。兩套刻意分開，見 docs/adr/0005
+  { path: '/home-design', label: '首頁',  icon: HomeIcon, superOnly: true, group: 'more' },
   { path: '/pages',      label: '靜態頁', icon: PageIcon, superOnly: true, group: 'more' },
   { path: '/platform',   label: '平台',  icon: PlatformIcon, platformOnly: true, group: 'more' },
 ]
@@ -41,6 +50,7 @@ export default function App() {
   const navigate = useNavigate()
   const location = useLocation()
   const [moreOpen, setMoreOpen] = useState(false)
+  const inboxUnread = useInboxUnread()
 
   // 換頁時自動關閉「更多」選單
   useEffect(() => { setMoreOpen(false) }, [location.pathname])
@@ -152,12 +162,15 @@ export default function App() {
         <Route path="/"           element={<Navigate to="/products" replace />} />
         <Route path="/storefront" element={<Navigate to="/products?tab=listings" replace />} />
         <Route path="/orders"     element={<OrdersPage />} />
+        <Route path="/inbox"      element={<InboxPage />} />
         <Route path="/coupons"    element={<CouponsPage />} />
+        <Route path="/bundles"    element={<BundlesPage />} />
         <Route path="/members"    element={<MembersPage />} />
         <Route path="/levels"     element={<MemberLevelsPage />} />
         <Route path="/trips"      element={<TripsPage />} />
         <Route path="/users"      element={<UsersPage />} />
         <Route path="/settings"   element={<SettingsPage />} />
+        <Route path="/home-design" element={<HomeDesignPage />} />
         <Route path="/pages"      element={<StaticPagesPage />} />
         <Route path="/platform"   element={<PlatformPage />} />
         <Route path="/invite"     element={<InvitePage />} />
@@ -180,8 +193,18 @@ export default function App() {
             key={path}
             className={`tab-btn ${location.pathname === path ? 'active' : ''}`}
             onClick={() => navigate(path)}
+            style={{ position: 'relative' }}
           >
             <Icon />
+            {/* 客服未讀紅點：有顧客在等回覆 */}
+            {path === '/inbox' && inboxUnread > 0 && (
+              <span style={{
+                position: 'absolute', top: 4, right: 'calc(50% - 18px)',
+                minWidth: 16, height: 16, padding: '0 4px', borderRadius: 8,
+                background: '#c0392b', color: '#fff', fontSize: 10, fontWeight: 700,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>{inboxUnread > 99 ? '99+' : inboxUnread}</span>
+            )}
             <span className="tab-lbl">{label}</span>
           </button>
         ))}
@@ -239,11 +262,17 @@ function BoxIcon() {
 function BagIcon({ size = 24 }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
 }
+function ChatIcon() {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>
+}
 function ReceiptIcon() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 012-2h2a2 2 0 012 2M9 5h6m-3 4v6m-2-3h4"/></svg>
 }
 function CouponIcon() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M2 9V6a2 2 0 012-2h16a2 2 0 012 2v3"/><path d="M2 15v3a2 2 0 002 2h16a2 2 0 002-2v-3"/><path d="M22 9a3 3 0 01-3 3 3 3 0 013 3"/><path d="M2 9a3 3 0 003 3 3 3 0 00-3 3"/><line x1="9" y1="9" x2="9" y2="9.01"/><line x1="9" y1="12" x2="9" y2="12.01"/><line x1="9" y1="15" x2="9" y2="15.01"/></svg>
+}
+function BundleIcon() {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="8" width="18" height="13" rx="1.5"/><path d="M3 12h18"/><path d="M12 8v13"/><path d="M12 8S10.5 3 8 3a2.5 2.5 0 000 5h4zm0 0s1.5-5 4-5a2.5 2.5 0 010 5h-4z"/></svg>
 }
 function TripIcon() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5"/></svg>
@@ -262,6 +291,9 @@ function PlatformIcon() {
 }
 function GearIcon() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33h.01a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51h.01a1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82v.01a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+}
+function HomeIcon() {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 10.5L12 3l9 7.5V20a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1z"/></svg>
 }
 function PageIcon() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/><line x1="8" y1="9" x2="10" y2="9"/></svg>
