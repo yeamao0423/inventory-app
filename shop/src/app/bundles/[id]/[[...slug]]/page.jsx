@@ -1,6 +1,7 @@
 import { notFound, redirect } from 'next/navigation'
 import { getBundleDetail, getAllPublishedBundleParams } from '../../../../lib/data'
 import { slugifyName } from '../../../../lib/slug'
+import BrandStyle from '../../../BrandStyle'
 import BundleDetail from '../BundleDetail'
 
 // ISR：與商品詳情頁對稱 —— 靠 params.id 反查店，不讀 host，可完整靜態快取。
@@ -51,12 +52,17 @@ export default async function BundleLandingPage({ params }) {
     redirect(`/bundles/${params.id}/${encodeURIComponent(canonicalSlug)}`)
   }
 
+  // 品牌主色在 server 端就注入，首屏直接是正確顏色。
+  // 這頁之前漏掉了，只靠 layout 的 client 注入，開頁會先閃一次預設黑再變色。
   return (
-    <BundleDetail
-      bundle={data.bundle}
-      items={data.items}
-      missingProductIds={data.missingProductIds}
-      optTypes={data.optTypes}
-    />
+    <>
+      <BrandStyle store={data.store} />
+      <BundleDetail
+        bundle={data.bundle}
+        items={data.items}
+        missingProductIds={data.missingProductIds}
+        optTypes={data.optTypes}
+      />
+    </>
   )
 }

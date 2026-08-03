@@ -3,8 +3,10 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useI18n } from '../../layout'
 import { useCart } from '../../layout'
+import Reveal from '../../Reveal'
 import { getActivePrice } from '../../../lib/salePrice'
 import { trackPixel } from '../../../lib/metaPixel'
+import { useBuyBar } from '../../../lib/useBuyBar'
 
 // 資料由 server component（page.jsx）以 props 帶入，這裡只負責互動。
 export default function ProductDetail({ sp, variants, customOptions, optTypes, productTags }) {
@@ -13,6 +15,8 @@ export default function ProductDetail({ sp, variants, customOptions, optTypes, p
   const [customNote, setCustomNote] = useState('')
   const [qty, setQty] = useState(1)
   const [added, setAdded] = useState(false)
+  // 黏底購買列：主視覺裡的 CTA 捲走之後接手同一顆按鈕（見 lib/useBuyBar.js）
+  const { anchorRef, visible: barVisible } = useBuyBar()
 
   // 哪些規格類型被這個商品的 variants 使用（由 props 推導，server/client 結果一致）
   const usedTypeIds = new Set()
@@ -112,8 +116,19 @@ export default function ProductDetail({ sp, variants, customOptions, optTypes, p
     setTimeout(() => setAdded(false), 2000)
   }
 
+  // 主視覺與黏底列共用同一顆按鈕的文案，避免兩處各寫一份而慢慢走鐘
+  const ctaLabel = added
+    ? '✓ ' + (zh ? '已加入' : 'Added!')
+    : markedSoldOut
+      ? (zh ? '缺貨中' : 'Out of Stock')
+      : collectionExpired
+        ? (zh ? '收單已截止' : 'Collection Ended')
+        : stockSoldOut
+          ? t('product.sold_out')
+          : t('product.add_to_cart')
+
   return (
-    <div style={{ minHeight: '70vh' }}>
+    <div className="has-buy-bar" style={{ minHeight: '70vh' }}>
       {/* Sticky sub-nav */}
       <div className="detail-subnav">
         <div className="container" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -127,12 +142,12 @@ export default function ProductDetail({ sp, variants, customOptions, optTypes, p
 
       <div className="detail-wrap">
         {/* Image gallery（規格切換時 remount，current 歸 0，不會停在已消失的圖）*/}
-        <div>
+        <Reveal>
           <ImageGallery key={visibleImages.map(i => i.id).join('-')} images={visibleImages} name={name} />
-        </div>
+        </Reveal>
 
         {/* Info */}
-        <div>
+        <Reveal delay={80}>
           <h1 className="detail-name">{name}</h1>
           {productTags.length > 0 && (
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
@@ -169,50 +184,27 @@ export default function ProductDetail({ sp, variants, customOptions, optTypes, p
                 <div className="spec-label">
                   {type.name}{selectedVal ? <>: <strong>{selectedVal.value}</strong></> : ''}
                 </div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                {/* 規格 chip 與組合商品頁共用 .spec-chip：兩頁的同一個動作要長得一樣。
+                    樣式從行內搬到 CSS，hover／active／disabled 才有完整狀態。 */}
+                <div className="spec-chip-row" style={{ marginTop: 8 }}>
                   {values.map(val => {
                     const isSelected = selectedOptions[String(type.id)] === val.id
                     const soldOut = isValueSoldOut(type.id, val.id)
                     const rep = repImageFor(sortedImages, type.id, val.id)
                     const onPick = () => !soldOut && setSelectedOptions(s => ({ ...s, [String(type.id)]: val.id }))
                     // 有代表圖 → 圖片 chip（點了選此值，與 gallery 過濾互補）；沒有 → 文字 chip
-                    if (rep) {
-                      return (
-                        <button
-                          key={val.id}
-                          onClick={onPick}
-                          title={val.value}
-                          style={{
-                            display: 'flex', alignItems: 'center', gap: 6,
-                            padding: '3px 12px 3px 3px', borderRadius: 22, fontSize: 13,
-                            background: isSelected ? 'var(--text)' : 'transparent',
-                            color: isSelected ? '#fff' : soldOut ? 'var(--text-3)' : 'var(--text-2)',
-                            border: isSelected ? '0.5px solid var(--text)' : '0.5px solid var(--border)',
-                            cursor: soldOut ? 'default' : 'pointer',
-                            textDecoration: soldOut ? 'line-through' : 'none',
-                            transition: 'all .15s', opacity: soldOut ? 0.5 : 1,
-                          }}
-                        >
-                          <img src={rep.url} alt="" style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />
-                          {val.value}
-                        </button>
-                      )
-                    }
                     return (
                       <button
                         key={val.id}
+                        className={`spec-chip${isSelected ? ' selected' : ''}`}
                         onClick={onPick}
-                        style={{
-                          fontSize: 13, padding: '4px 12px', borderRadius: 20,
-                          background: isSelected ? 'var(--text)' : 'transparent',
-                          color: isSelected ? '#fff' : soldOut ? 'var(--text-3)' : 'var(--text-2)',
-                          border: '0.5px solid var(--border)',
-                          cursor: soldOut ? 'default' : 'pointer',
-                          textDecoration: soldOut ? 'line-through' : 'none',
-                          transition: 'all .15s',
-                          opacity: soldOut ? 0.5 : 1,
-                        }}
-                      >{val.value}</button>
+                        disabled={soldOut}
+                        aria-pressed={isSelected}
+                        title={val.value}
+                      >
+                        {rep && <img className="spec-chip-img" src={rep.url} alt="" />}
+                        {val.value}
+                      </button>
                     )
                   })}
                 </div>
@@ -292,21 +284,25 @@ export default function ProductDetail({ sp, variants, customOptions, optTypes, p
             </div>
           )}
 
-          <button
-            className="add-btn"
-            onClick={handleAddToCart}
-            disabled={isUnavailable}
-          >
-            {added
-              ? '✓ ' + (zh ? '已加入' : 'Added!')
-              : markedSoldOut
-                ? (zh ? '缺貨中' : 'Out of Stock')
-                : collectionExpired
-                  ? (zh ? '收單已截止' : 'Collection Ended')
-                  : stockSoldOut
-                    ? t('product.sold_out')
-                    : t('product.add_to_cart')
-            }
+          <div ref={anchorRef}>
+            <button className="add-btn" onClick={handleAddToCart} disabled={isUnavailable}>
+              {ctaLabel}
+            </button>
+          </div>
+        </Reveal>
+      </div>
+
+      {/* 黏底購買列：不是第二顆 CTA，是上面那顆捲走之後接手的同一顆 */}
+      <div className={`buy-bar${barVisible ? ' is-on' : ''}`} aria-hidden={!barVisible}>
+        <div className="buy-bar-inner">
+          <div className="buy-bar-price">
+            <div className="buy-bar-label">
+              {[variantLabel || name, qty > 1 ? `× ${qty}` : null].filter(Boolean).join('  ')}
+            </div>
+            <div className="buy-bar-value">NT${Number(price * qty).toLocaleString()}</div>
+          </div>
+          <button className="add-btn" onClick={handleAddToCart} disabled={isUnavailable} tabIndex={barVisible ? 0 : -1}>
+            {ctaLabel}
           </button>
         </div>
       </div>
@@ -337,67 +333,52 @@ function repImageFor(images, typeId, valueId) {
 function ImageGallery({ images, name }) {
   const [current, setCurrent] = useState(0)
 
-  if (images.length === 0) return <div className="detail-img">📦</div>
+  if (images.length === 0) {
+    return <div className="bundle-empty-hero">{name ? '這件商品還沒有照片' : ''}</div>
+  }
 
   return (
     <div>
-      <div style={{ position: 'relative' }}>
+      <div className="gallery-main">
+        {/* 首圖是這一頁的 LCP，明講優先度讓瀏覽器先抓它 */}
         <img
           src={images[current].url}
           alt={name}
           className="detail-img"
-          style={{ objectFit: 'cover', width: '100%' }}
+          fetchPriority="high"
         />
         {images.length > 1 && (
           <>
             <button
+              className="gallery-arrow prev"
+              aria-label="上一張"
               onClick={() => setCurrent(i => (i - 1 + images.length) % images.length)}
-              style={arrowBtn('left')}
             >‹</button>
             <button
+              className="gallery-arrow next"
+              aria-label="下一張"
               onClick={() => setCurrent(i => (i + 1) % images.length)}
-              style={arrowBtn('right')}
             >›</button>
-            <div style={{ position: 'absolute', bottom: 10, left: '50%', transform: 'translateX(-50%)', display: 'flex', gap: 6 }}>
-              {images.map((_, i) => (
-                <div key={i} onClick={() => setCurrent(i)} style={{
-                  width: 7, height: 7, borderRadius: '50%', cursor: 'pointer',
-                  background: i === current ? '#fff' : 'rgba(255,255,255,0.5)',
-                }} />
-              ))}
-            </div>
           </>
         )}
+        {/* 沒有底部圓點：下方的縮圖列已經把「共幾張、現在第幾張」講完了，
+            圓點只是同一件事的第二種說法，而且壓在亮色照片上根本看不見。 */}
       </div>
 
       {images.length > 1 && (
-        <div style={{ display: 'flex', gap: 8, marginTop: 10, overflowX: 'auto', paddingBottom: 4 }}>
+        <div className="gallery-thumbs">
           {images.map((img, i) => (
-            <img
+            <button
               key={img.id ?? i}
-              src={img.url}
-              alt=""
+              className={`gallery-thumb${i === current ? ' active' : ''}`}
+              aria-label={`切換到第 ${i + 1} 張`}
               onClick={() => setCurrent(i)}
-              style={{
-                width: 60, height: 60, objectFit: 'cover', borderRadius: 8,
-                flexShrink: 0, cursor: 'pointer',
-                outline: i === current ? '2px solid var(--text)' : 'none',
-                opacity: i === current ? 1 : 0.6,
-              }}
-            />
+            >
+              <img src={img.url} alt="" loading="lazy" />
+            </button>
           ))}
         </div>
       )}
     </div>
   )
-}
-
-function arrowBtn(side) {
-  return {
-    position: 'absolute', top: '50%', transform: 'translateY(-50%)',
-    [side]: 10, background: 'rgba(0,0,0,0.35)', color: '#fff',
-    border: 'none', borderRadius: '50%', width: 36, height: 36,
-    fontSize: 22, cursor: 'pointer', display: 'flex',
-    alignItems: 'center', justifyContent: 'center', lineHeight: 1,
-  }
 }

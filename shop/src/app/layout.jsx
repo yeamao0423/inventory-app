@@ -237,6 +237,12 @@ export default function RootLayout({ children }) {
   return (
     <html lang={lang === 'zh' ? 'zh-TW' : 'en'}>
       <body>
+        {/* 進場動畫的初始狀態是 opacity: 0，由 IntersectionObserver 補上 .is-in。
+            沒有 JS 的環境（少數爬蟲、關掉 JS 的瀏覽器）不會有人來加那個 class，
+            內容就會整頁隱形 —— 這一段把它救回來。 */}
+        <noscript>
+          <style dangerouslySetInnerHTML={{ __html: '.reveal{opacity:1!important;animation:none!important}' }} />
+        </noscript>
         {brandStyle && <style dangerouslySetInnerHTML={{ __html: brandStyle }} />}
         <UserContext.Provider value={{ user, loading: userLoading }}>
           <I18nContext.Provider value={{ t, lang, setLang }}>

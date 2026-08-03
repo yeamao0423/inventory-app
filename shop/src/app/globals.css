@@ -30,6 +30,30 @@
   /* 文字量測：CJK 一行約 35 字，超過就難讀 */
   --measure: 68ch;
   --r-card: 16px;
+
+  /* ── 圓角尺標 ───────────────────────────
+     混用圓角是設計壞掉的第一個徵兆。這裡只准四階，各自有明確職責：
+       panel  面板／卡片本體
+       media  卡片裡的圖（比外框小一階，才有內縮的層次）
+       ctl    按鈕、輸入框
+       pill   規格 chip、徽章這類「選項」，一律全圓
+     舊的 --r-card 留著給首頁區塊系統用，不動它。 */
+  --r-panel: 20px;
+  --r-media: 14px;
+  --r-ctl: 14px;
+  --r-pill: 999px;
+
+  /* ── 高度（陰影）─────────────────────────
+     陰影帶暖灰色相、不是純黑 —— 純黑陰影壓在 #fafaf8 這種暖底上會發灰發髒。
+     只有兩階：靜止與浮起。 */
+  --sh-rest: 0 1px 2px rgba(38, 34, 28, .05), 0 8px 22px rgba(38, 34, 28, .075);
+  --sh-lift: 0 2px 4px rgba(38, 34, 28, .05), 0 18px 40px rgba(38, 34, 28, .12);
+
+  /* 詳情頁容器：hero 與下方清單共用同一個寬度，左緣才切得齊 */
+  --detail-max: 1160px;
+
+  /* 動畫：一條曲線走全站。前段快、收尾慢，是「東西被放到定位」的感覺 */
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
 }
 @media (min-width: 600px)  { :root { --blk-gutter: 24px; } }
 @media (min-width: 1024px) { :root { --blk-gutter: 32px; } }
@@ -43,6 +67,36 @@ input, textarea, select { font-family: inherit; }
 /* ── Layout ─────────────────────────────── */
 .container { max-width: var(--max-w); margin: 0 auto; padding: 0 20px; }
 @media (max-width: 600px) { .container { padding: 0 12px; } }
+
+/* ── 動畫基礎 ─────────────────────────────
+   全站只有這一組進場動畫，由 Reveal.jsx 的 IntersectionObserver 掛上 .is-in。
+   只動 transform 與 opacity（GPU 合成，不觸發 layout）。
+   降低動態偏好開啟時，初始狀態直接是終值 —— 不是「動得比較慢」，是完全不動。 */
+@keyframes revealIn {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: none; }
+}
+.reveal { opacity: 1; }
+@media (prefers-reduced-motion: no-preference) {
+  .reveal { opacity: 0; }
+  /* 用 animation 而不是 transition，而且 fill-mode 是 backwards 不是 both：
+     動畫跑完之後元素回到自己原本的樣式，卡片的 hover 位移才不會被動畫的終值鎖死。
+     （both 會讓 transform: none 永久生效，hover 就再也不動了。） */
+  .reveal.is-in {
+    opacity: 1;
+    animation: revealIn .55s var(--ease-out) var(--reveal-delay, 0ms) backwards;
+  }
+}
+
+/* 數值變動時的一下彈跳。用在折抵徽章：價格被改動了，要看得見 */
+@keyframes valuePop {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.075); }
+  100% { transform: scale(1); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .value-pop { animation: valuePop .34s var(--ease-out); }
+}
 
 /* ── Nav ─────────────────────────────────── */
 .nav { background: rgba(255,255,255,0.95); backdrop-filter: blur(12px); border-bottom: 0.5px solid var(--border); position: sticky; top: 0; z-index: 100; }
@@ -276,20 +330,57 @@ input, textarea, select { font-family: inherit; }
 }
 
 /* ── Product Detail ──────────────────────── */
-.detail-wrap { max-width: 1000px; margin: 0 auto; padding: 40px 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: start; }
-@media (max-width: 680px) { .detail-wrap { grid-template-columns: 1fr; gap: 24px; padding: 24px 14px; } }
-.detail-img { width: 100%; aspect-ratio: 1; border-radius: 16px; object-fit: cover; background: var(--border-light); display: flex; align-items: center; justify-content: center; font-size: 80px; }
-@media (max-width: 600px) { .detail-img { border-radius: 12px; } }
-.detail-name { font-size: 26px; font-weight: 700; margin-bottom: 8px; }
-@media (max-width: 600px) { .detail-name { font-size: 20px; } }
-.detail-price { font-size: 24px; font-weight: 700; margin-bottom: 24px; }
-@media (max-width: 600px) { .detail-price { font-size: 20px; margin-bottom: 16px; } }
+/* 主視覺與資訊欄刻意「不」等寬。1fr 1fr 看起來很整齊，但右欄的內容量是左欄的三倍，
+   等寬只會讓右欄一路往下長、左欄下方開天窗。1.08fr 讓圖稍微大一點、重心壓在視覺上。 */
+.detail-wrap {
+  max-width: var(--detail-max); margin: 0 auto;
+  padding: 36px 20px 8px;
+  display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr);
+  gap: clamp(28px, 4vw, 56px); align-items: start;
+}
+@media (max-width: 900px) { .detail-wrap { grid-template-columns: minmax(0, 1fr); gap: 24px; padding: 20px 16px 8px; } }
+
+/* 服飾是直式拍的。1:1 會把上下都裁掉，4:5 才留得住整件衣服 */
+.detail-img {
+  width: 100%; aspect-ratio: 4 / 5; border-radius: var(--r-media);
+  object-fit: cover; background: var(--border-light);
+  display: flex; align-items: center; justify-content: center; font-size: 80px;
+}
+
+.detail-eyebrow {
+  font-size: 11.5px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--text-3); margin-bottom: 10px;
+}
+.detail-name { font-size: clamp(24px, 3.2vw, 34px); font-weight: 700; letter-spacing: -.02em; line-height: 1.25; margin-bottom: 12px; }
+.detail-price { font-size: clamp(26px, 3.4vw, 34px); font-weight: 700; letter-spacing: -.02em; margin-bottom: 20px; font-variant-numeric: tabular-nums; }
 .detail-price-sale { color: var(--red); }
 .detail-price-old { font-size: 16px; font-weight: 400; color: var(--text-3); text-decoration: line-through; }
 @media (max-width: 600px) { .detail-price-old { font-size: 14px; } }
-.detail-desc { font-size: 15px; color: var(--text-2); line-height: 1.7; margin-bottom: 28px; white-space: pre-line; }
-.spec-label { font-size: 13px; font-weight: 600; margin-bottom: 10px; color: var(--text-2); text-transform: uppercase; letter-spacing: .05em; }
-.spec-group { margin-bottom: 20px; }
+.detail-desc { font-size: 15px; color: var(--text-2); line-height: 1.75; max-width: var(--measure); margin-bottom: 24px; white-space: pre-line; }
+/* 不用 text-transform: uppercase —— 中文沒有大小寫，只有英文標籤會變樣，兩種語言長得不一致 */
+.spec-label { font-size: 13px; font-weight: 600; margin-bottom: 10px; color: var(--text-2); }
+.spec-group { margin-bottom: 22px; }
+
+/* 規格 chip：商品詳情頁與組合頁共用同一顆按鈕。
+   點擊區高 38px（Apple HIG 建議 44、這裡是密集選項的折衷，仍在可點範圍）。 */
+.spec-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  min-height: 38px; padding: 0 15px;
+  border-radius: var(--r-pill); border: 1px solid var(--border);
+  background: var(--surface); color: var(--text-2);
+  font-size: 13.5px; font-weight: 500; cursor: pointer;
+  transition: border-color .18s var(--ease-out), background .18s var(--ease-out),
+              color .18s var(--ease-out), transform .1s var(--ease-out);
+}
+.spec-chip:hover:not(:disabled) { border-color: var(--text-3); color: var(--text); }
+.spec-chip:active:not(:disabled) { transform: scale(.96); }
+.spec-chip.selected {
+  background: var(--brand, var(--text)); color: var(--brand-fg, #fff);
+  border-color: var(--brand, var(--text));
+}
+.spec-chip:disabled { text-decoration: line-through; opacity: .4; cursor: not-allowed; }
+.spec-chip-img { width: 30px; height: 30px; border-radius: 50%; object-fit: cover; flex-shrink: 0; margin-left: -11px; }
+.spec-chip-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .color-options { display: flex; gap: 10px; flex-wrap: wrap; }
 .color-btn { width: 34px; height: 34px; border-radius: 50%; border: 2.5px solid transparent; cursor: pointer; transition: all .15s; position: relative; }
 .color-btn.selected { border-color: var(--text); }
@@ -301,15 +392,18 @@ input, textarea, select { font-family: inherit; }
 .size-btn.selected { background: var(--text); color: #fff; border-color: var(--text); }
 .size-btn.sold-out { opacity: .35; cursor: not-allowed; text-decoration: line-through; }
 .qty-wrap { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
-.qty-btn { width: 36px; height: 36px; border-radius: 50%; border: 0.5px solid var(--border); background: var(--surface); font-size: 18px; display: flex; align-items: center; justify-content: center; transition: all .15s; }
-.qty-btn:hover { border-color: var(--text); }
-.qty-num { font-size: 17px; font-weight: 600; min-width: 28px; text-align: center; }
-.custom-textarea { width: 100%; padding: 12px 14px; border: 0.5px solid var(--border); border-radius: 10px; font-size: 14px; resize: vertical; min-height: 80px; outline: none; transition: border .15s; background: var(--surface); }
-.custom-textarea:focus { border-color: var(--text); }
-.add-btn { width: 100%; padding: 16px; background: var(--text); color: #fff; border: none; border-radius: 14px; font-size: 16px; font-weight: 600; margin-top: 20px; transition: opacity .15s, transform .1s; }
-.add-btn:hover { opacity: .85; }
-.add-btn:active { transform: scale(.98); }
-.add-btn:disabled { opacity: .4; cursor: not-allowed; }
+.qty-btn { width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--border); background: var(--surface); font-size: 18px; display: flex; align-items: center; justify-content: center; transition: border-color .18s var(--ease-out), transform .1s var(--ease-out); }
+.qty-btn:hover:not(:disabled) { border-color: var(--text); }
+.qty-btn:active:not(:disabled) { transform: scale(.94); }
+.qty-num { font-size: 17px; font-weight: 600; min-width: 28px; text-align: center; font-variant-numeric: tabular-nums; }
+.custom-textarea { width: 100%; padding: 13px 15px; border: 1px solid var(--border); border-radius: var(--r-ctl); font-size: 14px; resize: vertical; min-height: 80px; outline: none; transition: border-color .18s var(--ease-out), box-shadow .18s var(--ease-out); background: var(--surface); color: var(--text); }
+/* 輸入框的焦點狀態要看得見，而且鍵盤操作的人靠它導航 */
+.custom-textarea::placeholder { color: var(--text-3); }
+.custom-textarea:focus { border-color: var(--brand, var(--text)); box-shadow: 0 0 0 3px var(--brand-soft, rgba(26,26,26,.08)); }
+.add-btn { width: 100%; padding: 17px; background: var(--text); color: #fff; border: none; border-radius: var(--r-ctl); font-size: 16px; font-weight: 600; margin-top: 20px; transition: transform .12s var(--ease-out), box-shadow .2s var(--ease-out), opacity .15s; box-shadow: var(--sh-rest); }
+.add-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--sh-lift); }
+.add-btn:active:not(:disabled) { transform: translateY(0) scale(.985); }
+.add-btn:disabled { opacity: .38; cursor: not-allowed; box-shadow: none; }
 .back-link { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--text-3); margin-bottom: 24px; transition: color .15s; }
 .back-link:hover { color: var(--text); }
 .detail-subnav {
@@ -330,6 +424,59 @@ input, textarea, select { font-family: inherit; }
   font-size: 13px; color: var(--text-3); white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; min-width: 0;
 }
+
+/* ── 相簿（商品詳情頁）───────────────────── */
+.gallery-main { position: relative; border-radius: var(--r-media); overflow: hidden; background: var(--border-light); }
+/* 方向鍵預設半透明，滑到圖上才實體化 —— 讓照片本身是主角，控制項退到後面 */
+.gallery-arrow {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  width: 40px; height: 40px; border-radius: 50%; border: none;
+  background: rgba(255,255,255,.82); color: var(--text);
+  backdrop-filter: blur(8px);
+  font-size: 21px; line-height: 1; display: flex; align-items: center; justify-content: center;
+  opacity: 0; transition: opacity .22s var(--ease-out), transform .12s var(--ease-out);
+  box-shadow: var(--sh-rest);
+}
+.gallery-main:hover .gallery-arrow, .gallery-arrow:focus-visible { opacity: 1; }
+.gallery-arrow:active { transform: translateY(-50%) scale(.92); }
+.gallery-arrow.prev { left: 12px; }
+.gallery-arrow.next { right: 12px; }
+/* 觸控裝置沒有 hover，方向鍵一直顯示 */
+@media (hover: none) { .gallery-arrow { opacity: 1; } }
+
+.gallery-thumbs { display: flex; gap: 8px; margin-top: 10px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
+.gallery-thumbs::-webkit-scrollbar { display: none; }
+.gallery-thumb { width: 62px; height: 62px; border-radius: 10px; overflow: hidden; flex-shrink: 0; border: none; padding: 0; background: none; opacity: .55; transition: opacity .2s, box-shadow .2s; }
+.gallery-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gallery-thumb.active { opacity: 1; box-shadow: 0 0 0 2px var(--brand, var(--text)); }
+
+/* ── 黏底購買列 ────────────────────────────
+   不是第二個 CTA，是同一個 CTA 跟著你走：主視覺裡的按鈕還看得到時，這一列是收起來的；
+   捲過去之後才滑出（由 IntersectionObserver 切 .is-on）。
+   任何時刻畫面上只有一顆「加入購物車」。 */
+.buy-bar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 95;
+  background: rgba(255,255,255,.93); backdrop-filter: blur(16px);
+  border-top: 1px solid var(--border);
+  transform: translateY(110%);
+  transition: transform .32s var(--ease-out);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.buy-bar.is-on { transform: translateY(0); }
+.buy-bar-inner {
+  max-width: var(--detail-max); margin: 0 auto;
+  padding: 12px 20px; display: flex; align-items: center; gap: 16px;
+}
+@media (max-width: 600px) { .buy-bar-inner { padding: 10px 14px; gap: 12px; } }
+.buy-bar-price { flex: 1; min-width: 0; }
+.buy-bar-label { font-size: 11.5px; color: var(--text-3); line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.buy-bar-value { font-size: 20px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+@media (max-width: 600px) { .buy-bar-value { font-size: 18px; } }
+.buy-bar .add-btn { width: auto; margin-top: 0; padding: 14px 30px; font-size: 15px; flex-shrink: 0; }
+@media (max-width: 600px) { .buy-bar .add-btn { padding: 13px 20px; font-size: 14.5px; } }
+/* 黏底列會蓋住頁面最後一段，補等高的內距 */
+.has-buy-bar { padding-bottom: 92px; }
+@media (prefers-reduced-motion: reduce) { .buy-bar { transition: none; } }
 
 /* ── Cart ────────────────────────────────── */
 .cart-wrap { max-width: 700px; margin: 0 auto; padding: 40px 20px; }
@@ -599,48 +746,166 @@ input, textarea, select { font-family: inherit; }
 /* 內容區塊裡的連結 */
 .blk-body a, .blk-link { color: var(--brand-text, var(--text)); text-decoration: underline; }
 
-/* ── 組合商品落地頁 ────────────────────────────────────────────────
-   商品清單刻意「不」放進 .detail-wrap 的右欄。那一欄只有約 456px，
-   把 N 件商品連同各自的規格選擇器塞進去，圖只剩得下 56px、規格被擠到換行。
-   社群導購來的人是看到穿搭照才點進來的，她要能看清楚每一件長什麼樣。 */
-.bundle-items { max-width: 1100px; margin: 0 auto; padding: 0 20px 56px; }
-.bundle-items-head { font-size: 17px; font-weight: 700; margin-bottom: 4px; }
-.bundle-items-sub { font-size: 13px; color: var(--text-3); line-height: 1.7; margin-bottom: 18px; }
 
-.bundle-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
-@media (max-width: 900px) { .bundle-grid { grid-template-columns: repeat(2, 1fr); gap: 14px; } }
+/* ── 組合商品落地頁 ────────────────────────────────────────────────
+   兩個決定整頁樣貌的取捨：
+
+   一、主視覺與商品清單共用 --detail-max 這一個寬度。之前 hero 是 1000px、清單是 1100px，
+       上下兩段的左緣差了 50px，捲下去會覺得版面在晃 —— 那不是錯覺，是真的沒對齊。
+
+   二、商品清單不放進 hero 右欄。那一欄只有約 500px，塞 N 件商品連同各自的規格選擇器，
+       圖只剩得下 56px。社群導購來的人是看到穿搭照才點進來的，她要看清楚每一件長什麼樣。 */
+
+/* ── 主視覺 ───────────────────────────────── */
+/* 沒有情境主圖時，用組合內商品的實拍圖拼一張。全部是真實資料，不是佔位灰塊。
+   格數跟著有圖的件數走，不會留空格。 */
+/* 多格拼貼用 1:1 而不是 4:5。右欄的內容量固定就那些，
+   左邊拉到 4:5 會比右欄高出 250px，下面整片開天窗；1:1 把落差收到 100px 上下。
+   單張情境主圖仍走 4:5，因為那時左右等高與否不影響 —— 只有一張圖時它就是主角。 */
+.bundle-collage { display: grid; gap: 8px; aspect-ratio: 1 / 1; }
+.bundle-collage[data-n="1"] { grid-template-columns: minmax(0, 1fr); aspect-ratio: 4 / 5; }
+.bundle-collage[data-n="2"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1.4fr) minmax(0, 1fr); }
+.bundle-collage[data-n="3"] { grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+.bundle-collage[data-n="3"] > :first-child { grid-row: span 2; }
+.bundle-collage-cell {
+  border-radius: var(--r-media); overflow: hidden; background: var(--border-light);
+  position: relative; min-width: 0; min-height: 0;
+}
+.bundle-collage-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* 沒有任何圖可用時的空狀態：說清楚為什麼是空的，不是丟一塊灰方塊 */
+.bundle-empty-hero {
+  aspect-ratio: 4 / 5; border-radius: var(--r-media);
+  background: var(--border-light); border: 1px dashed var(--border);
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  color: var(--text-3); font-size: 13.5px; padding: 24px; line-height: 1.7;
+}
+
+/* ── 主視覺右欄 ───────────────────────────── */
+.bundle-price-row { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.bundle-save {
+  display: inline-block; font-size: 12.5px; font-weight: 600; padding: 4px 12px;
+  border-radius: var(--r-pill);
+  background: var(--brand-soft, var(--green-bg)); color: var(--brand-text, var(--green));
+}
+
+/* 狀態列：套裝價成不成立，一句話講完。這是本頁最重要的一則訊息 */
+.bundle-status { border-radius: var(--r-panel); padding: 14px 16px; margin-bottom: 18px; }
+.bundle-status-title { font-size: 13.5px; font-weight: 600; margin-bottom: 3px; }
+.bundle-status-body { font-size: 12.5px; line-height: 1.7; }
+.bundle-status[data-tone="ok"] { background: var(--green-bg); }
+.bundle-status[data-tone="ok"] .bundle-status-title,
+.bundle-status[data-tone="ok"] .bundle-status-body { color: var(--green); }
+.bundle-status[data-tone="warn"] { background: var(--amber-bg); }
+.bundle-status[data-tone="warn"] .bundle-status-title,
+.bundle-status[data-tone="warn"] .bundle-status-body { color: var(--amber); }
+
+/* 金額明細：安靜的收據，不是第二張卡片。
+   只在真的有折抵可以解釋時才出現 —— 沒有折抵的時候它跟上面的大數字是同一件事，講兩次是雜訊。 */
+.bundle-receipt { margin-bottom: 20px; }
+.bundle-receipt-row {
+  display: flex; justify-content: space-between; gap: 16px;
+  font-size: 13.5px; color: var(--text-2); padding: 7px 0;
+  font-variant-numeric: tabular-nums;
+}
+.bundle-receipt-row.is-discount { color: var(--green); }
+.bundle-receipt-row.is-total {
+  font-size: 15px; font-weight: 700; color: var(--text);
+  border-top: 1px solid var(--border); margin-top: 4px; padding-top: 12px;
+}
+
+/* ── 商品清單 ─────────────────────────────── */
+/* 下方 padding 刻意小：.has-buy-bar 已經替黏底列補了 92px，兩邊都給就會多出一大塊空白 */
+.bundle-items { max-width: var(--detail-max); margin: 0 auto; padding: 44px 20px 20px; }
+@media (max-width: 900px) { .bundle-items { padding: 32px 16px 12px; } }
+.bundle-items-head { font-size: clamp(19px, 2.4vw, 24px); font-weight: 700; letter-spacing: -.015em; margin-bottom: 6px; }
+.bundle-items-sub { font-size: 13.5px; color: var(--text-3); line-height: 1.7; max-width: var(--measure); margin-bottom: 24px; }
+
+/* 欄數由件數決定（--cols 由 JSX 帶入），不會出現「格子比商品多」的空洞。
+   4 件走 2×2 而不是 3+1，避免最後一列只剩孤零零一張。 */
+.bundle-grid {
+  display: grid; gap: 20px;
+  grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr));
+}
+@media (max-width: 900px) { .bundle-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; } }
 @media (max-width: 560px) { .bundle-grid { grid-template-columns: 1fr; } }
 
-.bundle-card { border: 0.5px solid var(--border); border-radius: 14px; overflow: hidden; display: flex; flex-direction: column; }
-.bundle-card.is-dim { opacity: .5; }
+/* 卡片：拿掉 0.5px 細框，改用白底＋暖灰陰影。
+   內部是 grid 而不是 flex —— 最後一列（勾選狀態）固定貼底，
+   規格組數不同的卡片底部才會切齊。 */
+.bundle-card {
+  position: relative;
+  background: var(--surface); border: 1px solid transparent;
+  border-radius: var(--r-panel); box-shadow: var(--sh-rest);
+  display: grid; grid-template-rows: auto 1fr auto; overflow: hidden;
+  transition: box-shadow .25s var(--ease-out), transform .25s var(--ease-out),
+              border-color .25s var(--ease-out), background .25s var(--ease-out);
+}
+@media (hover: hover) {
+  .bundle-card:not(.is-off):hover { transform: translateY(-3px); box-shadow: var(--sh-lift); }
+}
+/* 被排除的品項：灰階＋虛線框＋去掉陰影。單純降透明度看起來像「載入中」，
+   這裡要讀得出來是「我主動拿掉的」。 */
+.bundle-card.is-off {
+  background: transparent; box-shadow: none;
+  border-color: var(--border); border-style: dashed;
+}
+.bundle-card.is-off .bundle-card-media,
+.bundle-card.is-off .bundle-card-body { filter: grayscale(1); opacity: .5; }
+.bundle-card.is-off .bundle-card-media { transform: scale(.985); }
 
-.bundle-card-media { display: block; position: relative; width: 100%; aspect-ratio: 1; background: var(--border-light); }
-.bundle-card-media img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.bundle-card-flag { position: absolute; left: 8px; top: 8px; font-size: 11.5px; padding: 3px 9px; border-radius: 20px; background: rgba(0,0,0,.72); color: #fff; }
+.bundle-card-media {
+  display: block; position: relative; width: 100%; aspect-ratio: 4 / 5;
+  background: var(--border-light); overflow: hidden;
+  transition: filter .25s var(--ease-out), opacity .25s var(--ease-out), transform .25s var(--ease-out);
+}
+.bundle-card-media img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .5s var(--ease-out); }
+@media (hover: hover) {
+  .bundle-card:not(.is-off):hover .bundle-card-media img { transform: scale(1.035); }
+}
+.bundle-card-flag {
+  position: absolute; left: 10px; top: 10px;
+  font-size: 11.5px; font-weight: 600; padding: 4px 11px; border-radius: var(--r-pill);
+  background: rgba(26,26,26,.78); color: #fff; backdrop-filter: blur(6px);
+}
 
-.bundle-card-body { padding: 13px; display: flex; flex-direction: column; gap: 11px; flex: 1; }
+/* 包含／排除：改成右上角的圓形勾選。這是決定套裝價成不成立的動作，
+   之前是卡片最底的一條底線文字，用了最弱的元件承載最重的決定。 */
+.bundle-check {
+  position: absolute; top: 10px; right: 10px; z-index: 2;
+  width: 32px; height: 32px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid rgba(255,255,255,.75);
+  background: rgba(26,26,26,.32); backdrop-filter: blur(6px);
+  color: #fff; padding: 0;
+  transition: background .2s var(--ease-out), border-color .2s var(--ease-out), transform .12s var(--ease-out);
+}
+.bundle-check:hover { transform: scale(1.08); }
+.bundle-check:active { transform: scale(.94); }
+.bundle-check[aria-checked="true"] {
+  background: var(--brand, var(--text)); color: var(--brand-fg, #fff);
+  border-color: var(--brand, var(--text));
+}
+.bundle-check svg { width: 16px; height: 16px; display: block; }
+
+.bundle-card-body { padding: 15px 16px 6px; display: flex; flex-direction: column; gap: 12px; transition: filter .25s var(--ease-out), opacity .25s var(--ease-out); }
 .bundle-card-name { font-weight: 600; font-size: 14.5px; line-height: 1.45; color: inherit; }
-.bundle-card-price { font-size: 13.5px; color: var(--text-2); }
-.bundle-card-price s { color: var(--text-3); margin-left: 6px; }
+.bundle-card-name:hover { text-decoration: underline; text-underline-offset: 3px; }
+.bundle-card-price { font-size: 14px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.bundle-card-price s { color: var(--text-3); margin-left: 7px; font-weight: 400; }
 .bundle-card-warn { font-size: 12px; color: var(--red); line-height: 1.6; }
+.bundle-spec-label { font-size: 12px; color: var(--text-3); margin-bottom: 7px; }
 
-.bundle-spec-label { font-size: 12px; color: var(--text-3); margin-bottom: 6px; }
-.bundle-chips { display: flex; gap: 6px; flex-wrap: wrap; }
-.bundle-chip { font-size: 13px; padding: 6px 13px; border-radius: 20px; border: 0.5px solid var(--border); background: transparent; color: var(--text-2); cursor: pointer; }
-.bundle-chip.selected { background: var(--brand, var(--text)); color: var(--brand-fg, #fff); border-color: var(--brand, var(--text)); }
-.bundle-chip:disabled { text-decoration: line-through; opacity: .45; cursor: default; }
+/* 卡片底列：固定在最後一列，所有卡片高度自動對齊 */
+.bundle-card-foot {
+  padding: 10px 16px 14px; font-size: 12px; line-height: 1.5;
+  color: var(--text-3); min-height: 38px; display: flex; align-items: center;
+}
+.bundle-card.is-off .bundle-card-foot { color: var(--text-2); font-weight: 600; }
 
-/* 「不要這件」是例外操作，放卡片最下面、用文字而不是 checkbox，
-   免得最少用的控制項佔掉每一列最顯眼的起始位置。 */
-.bundle-card-foot { margin-top: auto; padding-top: 2px; }
-.bundle-toggle { font-size: 12.5px; color: var(--text-3); background: none; border: none; padding: 0; cursor: pointer; text-decoration: underline; }
-
-/* 合計與 CTA：桌機黏在右欄（捲動看商品時一直在），手機改放商品清單下方，
-   讓「選規格 → 結帳」的順序跟捲動方向一致。兩者互斥顯示，不是重複的 CTA。 */
-.bundle-buy-desktop { position: sticky; top: 20px; }
-.bundle-buy-mobile { display: none; }
-@media (max-width: 680px) {
-  .bundle-items { padding: 0 14px 8px; }
-  .bundle-buy-desktop { display: none; }
-  .bundle-buy-mobile { display: block; max-width: 1100px; margin: 0 auto; padding: 0 14px 40px; }
+/* ── 主視覺區的桌機黏著 ─────────────────────
+   右欄比左圖矮，捲動時讓價格與 CTA 跟著走一小段。
+   完全捲離主視覺之後接手的是 .buy-bar，兩者不會同時出現。 */
+/* 84px 會被 .detail-subnav（sticky top:60、高約 41px）蓋住上緣，要讓到它下面 */
+@media (min-width: 901px) {
+  .bundle-buy-col { position: sticky; top: 112px; }
 }
