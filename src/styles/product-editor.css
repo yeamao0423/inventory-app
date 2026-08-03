@@ -1,0 +1,261 @@
+/* 商品頁編排器的樣式（ProductPageEditor / BlockInspector 專用，前綴 pe-）。
+ *
+ * 為什麼獨立一支 css 而不是寫在 index.css：index.css 是全站共用的地基，
+ * 這一頁的視覺是實驗性的（Elementor 式兩欄），改動頻率遠高於地基。
+ * 分開之後改壞只會壞這一頁。
+ *
+ * 顏色一律走既有變數（--text / --border / --surface …）。這頁不引入任何新色階：
+ * 後台的色票是刻意壓到最少的，多一個色就多一處日後要跟著深色模式改的地方。
+ *
+ * 格線由 .hd-split 提供（index.css），這裡只管兩欄裡面的東西。
+ */
+
+/* ── 左側面板 ───────────────────────────────
+ * 面板是「頭 / 可捲動的身體 / 腳」三段：清單再長，回上一層的按鈕與儲存發佈都還在原地。
+ * 一整欄跟著頁面捲的話，編到第 12 個區塊時發佈鈕早就捲出畫面了。 */
+.pe-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .04);
+  overflow: hidden;
+}
+
+/* 與 .lp-inline 同一組數字：兩欄要一起釘住、一樣高，否則預覽會比面板矮一截 */
+@media (min-width: 1200px) {
+  .pe-panel { position: sticky; top: 0; height: calc(100vh - 140px); }
+}
+
+.pe-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px;
+  border-bottom: 0.5px solid var(--border-light);
+}
+.pe-head-title { font-size: 13.5px; font-weight: 600; flex: 1; min-width: 0; }
+.pe-head-sub { font-size: 11.5px; color: var(--text-3); }
+
+.pe-body { flex: 1; min-height: 0; overflow-y: auto; padding: 14px; }
+
+.pe-foot {
+  border-top: 0.5px solid var(--border-light);
+  padding: 12px 14px;
+  background: var(--surface);
+}
+
+/* 回到清單：一顆低調的文字鈕，位置固定在面板頂端左上，換到哪個區塊都在同一個地方 */
+.pe-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-2);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.pe-back:hover { color: var(--text); }
+
+/* ── 可加入的區塊 ─────────────────────────── */
+.pe-add-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+.pe-add-btn {
+  padding: 9px 11px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  text-align: left;
+  cursor: pointer;
+}
+.pe-add-btn:hover { border-color: var(--text-3); }
+.pe-add-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.pe-add-hint { font-size: 11px; color: var(--text-3); margin-top: 2px; line-height: 1.4; }
+
+/* ── 目前版面的清單 ───────────────────────── */
+.pe-list { display: flex; flex-direction: column; gap: 8px; }
+
+.pe-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 8px 8px 4px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.pe-item:hover { border-color: var(--text-3); }
+.pe-item.is-selected { border-color: var(--text); box-shadow: 0 0 0 1px var(--text); }
+/* 拖曳中的來源半透明、目標畫一條落點線 —— 沒有這兩個回饋，原生 DnD 幾乎看不出在拖什麼 */
+.pe-item.is-dragging { opacity: .4; }
+.pe-item.is-over-top { box-shadow: 0 -2px 0 0 var(--text); }
+.pe-item.is-over-bottom { box-shadow: 0 2px 0 0 var(--text); }
+
+.pe-handle {
+  width: 22px;
+  flex-shrink: 0;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1;
+  cursor: grab;
+  user-select: none;
+}
+.pe-handle:active { cursor: grabbing; }
+
+.pe-item-main {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.pe-item-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pe-item-sub { font-size: 11px; color: var(--text-3); margin-top: 1px; }
+
+.pe-icon-btn {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.pe-icon-btn:disabled { opacity: .35; cursor: not-allowed; }
+.pe-icon-btn.is-danger { color: #c0392b; }
+
+.pe-empty {
+  padding: 26px 16px;
+  text-align: center;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+/* ── 屬性面板的欄位 ───────────────────────── */
+.pe-field { margin-bottom: 16px; }
+.pe-field-label { font-size: 12.5px; font-weight: 600; margin-bottom: 7px; display: block; }
+.pe-hint { font-size: 11.5px; color: var(--text-3); margin-top: 5px; line-height: 1.6; }
+
+.pe-chip-row { display: flex; gap: 7px; flex-wrap: wrap; }
+.pe-chip {
+  padding: 6px 13px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.pe-chip.is-active { border-color: var(--text); background: var(--text); color: #fff; }
+
+/* 開關：後台沒有現成的 switch，這裡做一顆最小可用的（純 CSS，無圖示） */
+.pe-switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+}
+.pe-switch-label { flex: 1; min-width: 0; font-size: 12.5px; color: var(--text); }
+.pe-switch-track {
+  width: 36px;
+  height: 20px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--border);
+  position: relative;
+  transition: background .15s;
+}
+.pe-switch[aria-checked='true'] .pe-switch-track { background: var(--text); }
+.pe-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--surface);
+  transition: transform .15s;
+}
+.pe-switch[aria-checked='true'] .pe-switch-knob { transform: translateX(16px); }
+
+/* 這個區塊沒有可調欄位時的說明。留白比空白誠實：告訴店主「不是壞了，是本來就沒有」 */
+.pe-nosetting {
+  padding: 14px;
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+/* ── 提醒 ─────────────────────────────────── */
+.pe-warn {
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--amber-bg);
+  color: var(--amber);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.pe-note {
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--blue-bg);
+  color: var(--blue);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+/* 圖片欄位（與 BlocksEditor 的 ImageField 同一種版型，換成 class 寫法） */
+.pe-img-row { display: flex; gap: 10px; align-items: flex-start; }
+.pe-img-thumb {
+  width: 84px;
+  height: 63px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.pe-img-thumb img { width: 100%; height: 100%; object-fit: cover; }
