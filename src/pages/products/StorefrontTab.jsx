@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../hooks/useAuth'
 import { useProductRefresh } from '../../hooks/useProductRefresh'
@@ -14,7 +15,7 @@ import { toTwdCost, calcMargin, getEffectivePrices, getEffectiveCosts, calcMargi
 import { cmpNum, cmpStr, cmpDate } from '../../lib/sortUtils'
 import { utcToLocal, localToISO } from '../../lib/datetime'
 import { Pill } from '../../components/MenuPopover'
-import ProductIntroEditor from '../../components/ProductIntroEditor'
+import { blockCount } from '../../lib/contentBlocks'
 import ListToolbar from '../../components/ListToolbar'
 
 // 商城排序選項（預設＝第一項：上架 新→舊）
@@ -712,6 +713,7 @@ function CopyNameBar({ name }) {
 // ── Add/Edit listing sheet ─────────────────────────────
 function ListingSheet({ item, products, onClose, onSaved }) {
   const { storeId } = useAuth()
+  const navigate = useNavigate()
   const isEdit = !!item
   const [form, setForm] = useState({
     product_id: item?.product_id || '',
@@ -735,7 +737,10 @@ function ListingSheet({ item, products, onClose, onSaved }) {
   const [showVariants, setShowVariants] = useState(false)
   const [exchangeRates, setExchangeRates] = useState({})
   const [recentEnds, setRecentEnds] = useState([])
-  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+  // 這張表單沒有自動存檔，離開就沒了。要導去別頁前得先知道有沒有東西會被丟掉，
+  // 所以 set() 兼作髒標記 —— 只有使用者動過欄位才算，程式載入的預設值不算（見下方 base_stock）
+  const [dirty, setDirty] = useState(false)
+  const set = (k, v) => { setDirty(true); setForm(f => ({ ...f, [k]: v })) }
 
   const editingItem = item || createdItem
   const isEditing = !!editingItem
@@ -780,7 +785,8 @@ function ListingSheet({ item, products, onClose, onSaved }) {
           if ((data || []).length > 0) setShowVariants(true)
         })
       supabase.from('products').select('quantity').eq('id', activeProductId).single()
-        .then(({ data }) => { if (data) set('base_stock', String(data.quantity || 0)) })
+        // 這是把現況讀進表單，不是使用者的變更，所以繞過 set() 不標記 dirty
+        .then(({ data }) => { if (data) setForm(f => ({ ...f, base_stock: String(data.quantity || 0) })) })
     } else {
       setVariants([])
       setShowVariants(false)
@@ -835,6 +841,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
       setSaving(false)
       onSaved()
       if (error) { alert('建立失敗：' + error.message); return }
+      setDirty(false)
       revalidateShop({ storeId, productIds: [Number(form.product_id)] })
       // Switch to edit mode so user can set up variants
       setCreatedItem(data)
@@ -846,6 +853,19 @@ function ListingSheet({ item, products, onClose, onSaved }) {
 
   // Selling mode: 'stock' (現貨) or 'collection' (收單)
   const sellingMode = form.collection_end ? 'collection' : 'stock'
+
+  // ── 商品頁編排入口 ──
+  // page_blocks 是「已自訂」的唯一判準：null 代表跟隨全店範本，不是空版面（見 migration 20250082）
+  const hasPageOverride = !!editingItem?.page_blocks
+  // 舊版「商品介紹」的殘留提示。發佈過的優先，沒發佈過就看草稿 ——
+  // 兩種都代表店主投入過內容，開編排器時 mergeIntroIntoTemplate 會把它接進版面
+  const legacyIntroCount = blockCount(editingItem?.intro_blocks ?? editingItem?.intro_blocks_draft ?? null)
+
+  function openPageBuilder() {
+    // 編排器是獨立一頁，導過去等於關掉這張 sheet；表單沒自動存檔，先問一次再走
+    if (dirty && !window.confirm('上架設定有未儲存的變更，前往商品頁編排會丟失這些變更。要繼續嗎？')) return
+    navigate(`/storefront/${editingItem.id}/page`)
+  }
 
   // Validation helper
   function validate() {
@@ -1163,9 +1183,36 @@ function ListingSheet({ item, products, onClose, onSaved }) {
           <input className="form-input" placeholder="Product description in English" value={form.desc_en} onChange={e => set('desc_en', e.target.value)} />
         </div>
 
-        {/* 商品介紹（區塊內容）：草稿／發佈自成一套，不跟著這張表單的「儲存」走 */}
+        {/* 商品頁編排：只放入口，編輯在獨立頁。
+            排版面需要橫向空間，塞在這張窄表單裡預覽永遠只剩手機版。
+            而且版面的草稿／發佈刻意與這張表單的「儲存」分開 ——
+            版面是「編好幾天再一起上線」的東西，混在一起會讓店主改個售價就把半成品推上線。 */}
         {isEditing && (
-          <ProductIntroEditor spId={editingItem.id} productId={activeProductId} />
+          <>
+            <div className="sec" style={{ marginTop: 16 }}>商品頁</div>
+            <div style={{
+              border: '0.5px solid var(--border)', borderRadius: 10,
+              background: 'var(--surface)', padding: '12px 14px', marginBottom: 20,
+            }}>
+              <div className="fs13" style={{ color: 'var(--text-2)', lineHeight: 1.6 }}>
+                {hasPageOverride
+                  ? '這件商品有自己的版面，不跟著全店範本更動。'
+                  : '目前跟隨全店商品頁範本，改範本這件商品也會跟著換。'}
+              </div>
+              {legacyIntroCount > 0 && (
+                <div className="fs12" style={{ color: 'var(--text-3)', lineHeight: 1.6, marginTop: 4 }}>
+                  舊版商品介紹有 {legacyIntroCount} 個區塊，開啟編排器時會一併帶入。
+                </div>
+              )}
+              <button
+                className="btn btn-outline"
+                onClick={openPageBuilder}
+                style={{ width: 'auto', padding: '8px 16px', marginTop: 10 }}
+              >
+                編排商品頁
+              </button>
+            </div>
+          </>
         )}
 
         {/* ── 6. 上架控制 ── */}
