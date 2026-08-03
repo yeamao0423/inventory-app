@@ -1,0 +1,259 @@
+import { describe, it, expect } from 'vitest'
+import {
+  BLOCK_TYPES, CONTENT_VERSION, IMAGE_RATIOS,
+  createBlock, normalizeContent, isEmptyContent, blockCount,
+  moveBlock, duplicateBlock, removeBlock, replaceBlock,
+  TEMPLATES, buildTemplate, safeHref, splitParagraphs,
+} from './contentBlocks'
+
+// 這份測試的重點不是「好資料能過」，而是「壞資料不能讓商城炸掉」。
+// blocks 是 jsonb，資料庫沒有 schema 保護，任何形狀都可能出現在這裡。
+
+describe('normalizeContent — 沒編過與壞資料', () => {
+  it('null / undefined 代表沒編過，回 null（商城走預設版面）', () => {
+    expect(normalizeContent(null)).toBe(null)
+    expect(normalizeContent(undefined)).toBe(null)
+  })
+
+  it('不是物件的東西一律當成沒編過', () => {
+    expect(normalizeContent('hello')).toBe(null)
+    expect(normalizeContent(42)).toBe(null)
+    expect(normalizeContent(true)).toBe(null)
+    expect(normalizeContent([{ type: 'text' }])).toBe(null)
+  })
+
+  it('blocks 不是陣列時回空內容，不丟例外', () => {
+    expect(normalizeContent({ version: 1, blocks: 'nope' })).toEqual({ version: 1, blocks: [] })
+    expect(normalizeContent({ version: 1 })).toEqual({ version: 1, blocks: [] })
+    expect(normalizeContent({})).toEqual({ version: 1, blocks: [] })
+  })
+
+  it('未知型別的區塊被丟掉，其餘保留', () => {
+    const out = normalizeContent({
+      version: 1,
+      blocks: [
+        { type: 'video', src: 'x' },
+        { type: 'text', title: '標題', body: '內文' },
+        { type: 'carousel' },
+      ],
+    })
+    expect(out.blocks).toHaveLength(1)
+    expect(out.blocks[0].type).toBe('text')
+  })
+
+  it('陣列裡混進 null / 字串 / 沒有 type 的東西都被丟掉', () => {
+    const out = normalizeContent({ blocks: [null, 'text', 7, {}, { type: null }, { type: 'text' }] })
+    expect(out.blocks).toHaveLength(1)
+  })
+
+  it('版本號不是 1（含未來版本、壞值）時仍盡力正規化，並標回目前版本', () => {
+    expect(normalizeContent({ version: 99, blocks: [{ type: 'text', body: 'x' }] }))
+      .toEqual({ version: CONTENT_VERSION, blocks: [{ id: 'text-0', type: 'text', title: '', body: 'x' }] })
+    expect(normalizeContent({ version: 'abc', blocks: [] }).version).toBe(CONTENT_VERSION)
+  })
+
+  it('超過上限的區塊數被截斷（防止壞資料把頁面撐爆）', () => {
+    const many = Array.from({ length: 200 }, () => ({ type: 'text', body: 'x' }))
+    expect(normalizeContent({ blocks: many }).blocks.length).toBe(60)
+  })
+})
+
+describe('normalizeContent — 缺欄位補預設', () => {
+  it('hero 缺欄位時每個欄位都補成空字串', () => {
+    const out = normalizeContent({ blocks: [{ type: 'hero' }] })
+    expect(out.blocks[0]).toEqual({
+      id: 'hero-0', type: 'hero',
+      image: '', title: '', subtitle: '', buttonText: '', buttonHref: '',
+    })
+  })
+
+  it('media_text 的 imageSide / imageRatio 有壞值時退回預設', () => {
+    const out = normalizeContent({
+      blocks: [
+        { type: 'media_text', imageSide: 'top', imageRatio: 42 },
+        { type: 'media_text', imageSide: 'right', imageRatio: '33' },
+      ],
+    })
+    expect(out.blocks[0].imageSide).toBe('left')
+    expect(out.blocks[0].imageRatio).toBe(50)
+    expect(out.blocks[1].imageSide).toBe('right')
+    expect(out.blocks[1].imageRatio).toBe(33)
+    IMAGE_RATIOS.forEach(r => expect(typeof r).toBe('number'))
+  })
+
+  it('products 的 mode / limit / productIds 都被收斂到合法範圍', () => {
+    const out = normalizeContent({
+      blocks: [
+        { type: 'products', mode: 'random', limit: 999, productIds: 'x' },
+        { type: 'products', mode: 'category', categoryId: '12', limit: 0, productIds: [1, '2', null, 'x', 3.7] },
+      ],
+    })
+    expect(out.blocks[0].mode).toBe('manual')
+    expect(out.blocks[0].limit).toBe(24)
+    expect(out.blocks[0].productIds).toEqual([])
+    expect(out.blocks[0].categoryId).toBe(null)
+    expect(out.blocks[1].mode).toBe('category')
+    expect(out.blocks[1].categoryId).toBe(12)
+    expect(out.blocks[1].limit).toBe(1)
+    expect(out.blocks[1].productIds).toEqual([1, 2, 3])
+  })
+
+  it('不認識的額外欄位被丟掉（白名單），型別錯的文字欄位被轉成字串', () => {
+    const out = normalizeContent({
+      blocks: [{ type: 'text', title: 123, body: { a: 1 }, onClick: 'alert(1)', style: 'color:red' }],
+    })
+    expect(out.blocks[0]).toEqual({ id: 'text-0', type: 'text', title: '123', body: '' })
+  })
+
+  it('文字欄位長度有上限，不會讓單一區塊塞爆頁面', () => {
+    const out = normalizeContent({ blocks: [{ type: 'text', body: 'x'.repeat(20000) }] })
+    expect(out.blocks[0].body.length).toBe(5000)
+  })
+
+  it('保留既有 id，沒有 id 時依索引補一個穩定的', () => {
+    const out = normalizeContent({ blocks: [{ id: 'keep-me', type: 'text' }, { type: 'text' }] })
+    expect(out.blocks[0].id).toBe('keep-me')
+    expect(out.blocks[1].id).toBe('text-1')
+  })
+})
+
+describe('safeHref — 連結不可以變成 XSS 入口', () => {
+  it('放行相對路徑、錨點、http(s)、mailto、tel', () => {
+    expect(safeHref('/products')).toBe('/products')
+    expect(safeHref('#section')).toBe('#section')
+    expect(safeHref('https://example.com/a?b=1')).toBe('https://example.com/a?b=1')
+    expect(safeHref('http://example.com')).toBe('http://example.com')
+    expect(safeHref('mailto:a@b.co')).toBe('mailto:a@b.co')
+    expect(safeHref('tel:0912345678')).toBe('tel:0912345678')
+  })
+
+  it('擋掉 javascript: / data: / vbscript:，含大小寫與前置空白的變形', () => {
+    expect(safeHref('javascript:alert(1)')).toBe('')
+    expect(safeHref('  JavaScript:alert(1)')).toBe('')
+    expect(safeHref('java\tscript:alert(1)')).toBe('')
+    expect(safeHref('data:text/html,<script>alert(1)</script>')).toBe('')
+    expect(safeHref('vbscript:msgbox')).toBe('')
+    expect(safeHref('//evil.com')).toBe('')
+  })
+
+  it('非字串一律回空字串', () => {
+    expect(safeHref(null)).toBe('')
+    expect(safeHref({})).toBe('')
+    expect(safeHref(5)).toBe('')
+  })
+
+  it('正規化後的 hero buttonHref 走同一套規則', () => {
+    const out = normalizeContent({ blocks: [{ type: 'hero', buttonHref: 'javascript:alert(1)' }] })
+    expect(out.blocks[0].buttonHref).toBe('')
+  })
+})
+
+describe('createBlock 與編輯操作', () => {
+  it('四種型別都建得出來，且立刻能通過正規化', () => {
+    expect(BLOCK_TYPES).toEqual(['hero', 'media_text', 'text', 'products'])
+    for (const type of BLOCK_TYPES) {
+      const block = createBlock(type)
+      expect(block.type).toBe(type)
+      expect(block.id).toBeTruthy()
+      const out = normalizeContent({ version: 1, blocks: [block] })
+      expect(out.blocks).toHaveLength(1)
+      expect(out.blocks[0].id).toBe(block.id)
+    }
+  })
+
+  it('未知型別建不出區塊', () => {
+    expect(createBlock('video')).toBe(null)
+  })
+
+  it('每次建立的 id 都不一樣', () => {
+    expect(createBlock('text').id).not.toBe(createBlock('text').id)
+  })
+
+  it('上移／下移在邊界時原樣回傳（同一個陣列參考不強制，但內容不變）', () => {
+    const blocks = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
+    expect(moveBlock(blocks, 0, -1).map(b => b.id)).toEqual(['a', 'b', 'c'])
+    expect(moveBlock(blocks, 2, 1).map(b => b.id)).toEqual(['a', 'b', 'c'])
+    expect(moveBlock(blocks, 0, 1).map(b => b.id)).toEqual(['b', 'a', 'c'])
+    expect(moveBlock(blocks, 2, -1).map(b => b.id)).toEqual(['a', 'c', 'b'])
+    expect(blocks.map(b => b.id)).toEqual(['a', 'b', 'c']) // 不可就地改動
+  })
+
+  it('複製會插在原區塊後面，且拿到新的 id', () => {
+    const blocks = [createBlock('text'), createBlock('hero')]
+    const out = duplicateBlock(blocks, 0)
+    expect(out).toHaveLength(3)
+    expect(out[1].type).toBe('text')
+    expect(out[1].id).not.toBe(out[0].id)
+    expect(out[2].id).toBe(blocks[1].id)
+  })
+
+  it('刪除與取代都回新陣列', () => {
+    const blocks = [{ id: 'a' }, { id: 'b' }]
+    expect(removeBlock(blocks, 0).map(b => b.id)).toEqual(['b'])
+    expect(removeBlock(blocks, 9)).toHaveLength(2)
+    expect(replaceBlock(blocks, 1, { id: 'b', title: 'x' })[1].title).toBe('x')
+    expect(blocks[1].title).toBe(undefined)
+  })
+})
+
+describe('isEmptyContent / blockCount', () => {
+  it('null、空 blocks、壞資料都算空', () => {
+    expect(isEmptyContent(null)).toBe(true)
+    expect(isEmptyContent({ version: 1, blocks: [] })).toBe(true)
+    expect(isEmptyContent('x')).toBe(true)
+    expect(isEmptyContent({ version: 1, blocks: [{ type: 'nope' }] })).toBe(true)
+    expect(isEmptyContent({ version: 1, blocks: [{ type: 'text' }] })).toBe(false)
+  })
+
+  it('blockCount 只算得到正規化後留下來的區塊', () => {
+    expect(blockCount(null)).toBe(0)
+    expect(blockCount({ blocks: [{ type: 'text' }, { type: 'nope' }] })).toBe(1)
+  })
+})
+
+describe('起始模板', () => {
+  it('兩套模板：品牌形象型與賣貨型', () => {
+    expect(Object.keys(TEMPLATES)).toEqual(['brand', 'selling'])
+  })
+
+  it('品牌形象型＝主視覺→圖文並排→商品精選', () => {
+    const content = buildTemplate('brand')
+    expect(content.blocks.map(b => b.type)).toEqual(['hero', 'media_text', 'products'])
+  })
+
+  it('賣貨型＝主視覺→商品精選→圖文並排→文字段落', () => {
+    const content = buildTemplate('selling')
+    expect(content.blocks.map(b => b.type)).toEqual(['hero', 'products', 'media_text', 'text'])
+  })
+
+  it('模板產出的內容原封不動通過正規化（不會被自己的驗證擋掉）', () => {
+    for (const key of Object.keys(TEMPLATES)) {
+      const content = buildTemplate(key)
+      expect(normalizeContent(content)).toEqual(content)
+    }
+  })
+
+  it('未知模板回 null', () => {
+    expect(buildTemplate('nope')).toBe(null)
+  })
+})
+
+describe('splitParagraphs — body 允許換行但不解析 Markdown', () => {
+  it('依換行切段，去掉多餘空白行', () => {
+    expect(splitParagraphs('第一段\n第二段\n\n第三段')).toEqual(['第一段', '第二段', '第三段'])
+  })
+
+  it('相容 \\r\\n', () => {
+    expect(splitParagraphs('a\r\nb')).toEqual(['a', 'b'])
+  })
+
+  it('空字串與非字串回空陣列', () => {
+    expect(splitParagraphs('')).toEqual([])
+    expect(splitParagraphs('   ')).toEqual([])
+    expect(splitParagraphs(null)).toEqual([])
+  })
+
+  it('不解析 Markdown、不吃掉標記字元 —— 原樣留給渲染層逸出', () => {
+    expect(splitParagraphs('**粗體** 與 <b>標籤</b>')).toEqual(['**粗體** 與 <b>標籤</b>'])
+  })
+})

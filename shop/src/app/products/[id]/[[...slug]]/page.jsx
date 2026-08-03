@@ -2,6 +2,8 @@ import { notFound, redirect } from 'next/navigation'
 import { getProductDetail, getAllPublishedProductParams } from '../../../../lib/data'
 import { slugifyName } from '../../../../lib/slug'
 import ProductDetail from '../ProductDetail'
+import Blocks, { hasBlocks } from '../../../blocks/Blocks'
+import BrandStyle from '../../../BrandStyle'
 
 // ISR：詳情頁不讀 host（靠 params.id 反查店），可完整靜態快取。
 // 靜態頁存 CDN，訪客直接命中不碰 DB；後台改商品時 /api/revalidate 打 product-{id}
@@ -104,6 +106,7 @@ export default async function ProductDetailPage({ params }) {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: jsonLdSafe }}
       />
+      <BrandStyle store={data.store} />
       <ProductDetail
         sp={data.sp}
         variants={data.variants}
@@ -111,6 +114,13 @@ export default async function ProductDetailPage({ params }) {
         optTypes={data.optTypes}
         productTags={data.productTags}
       />
+      {/* 商品介紹（區塊內容）。ProductDetail 是 client component，介紹刻意留在這一層
+          server render，才進得了靜態 HTML；沒編過（intro_blocks 為 null）就連分隔線都不長出來。 */}
+      {hasBlocks(data.sp.intro_blocks) && (
+        <div className="blk-intro">
+          <Blocks content={data.sp.intro_blocks} storeId={data.sp.store_id} />
+        </div>
+      )}
     </>
   )
 }

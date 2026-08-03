@@ -14,6 +14,7 @@ import { toTwdCost, calcMargin, getEffectivePrices, getEffectiveCosts, calcMargi
 import { cmpNum, cmpStr, cmpDate } from '../../lib/sortUtils'
 import { utcToLocal, localToISO } from '../../lib/datetime'
 import { Pill } from '../../components/MenuPopover'
+import ProductIntroEditor from '../../components/ProductIntroEditor'
 import ListToolbar from '../../components/ListToolbar'
 
 // 商城排序選項（預設＝第一項：上架 新→舊）
@@ -1161,6 +1162,11 @@ function ListingSheet({ item, products, onClose, onSaved }) {
           <label className="form-label">英文描述</label>
           <input className="form-input" placeholder="Product description in English" value={form.desc_en} onChange={e => set('desc_en', e.target.value)} />
         </div>
+
+        {/* 商品介紹（區塊內容）：草稿／發佈自成一套，不跟著這張表單的「儲存」走 */}
+        {isEditing && (
+          <ProductIntroEditor spId={editingItem.id} productId={activeProductId} />
+        )}
 
         {/* ── 6. 上架控制 ── */}
         <div style={{ display: 'flex', gap: 16, marginBottom: 20, marginTop: 8 }}>
