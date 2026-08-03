@@ -17,7 +17,22 @@
   --amber: #8a5c00;
   --amber-bg: #fff8e8;
   --max-w: 1200px;
+
+  /* ── 版面尺標（區塊系統專用，見下方「區塊內容」段）──
+     8px 基準，這是 Material 3 / Carbon / Atlassian 的共同分母；
+     區塊系統裡的任何間距只能取這組值，不要再手寫 56px 這種落在尺標外的數字。 */
+  --space-2: 8px;  --space-3: 12px; --space-4: 16px; --space-5: 24px;
+  --space-6: 32px; --space-7: 48px; --space-8: 64px; --space-9: 96px;
+  /* 欄間距：隨斷點放大（16 → 24 → 32），主流系統都這樣做，全站單一值會讓手機太鬆、桌機太擠 */
+  --blk-gutter: 16px;
+  /* 區塊之間的垂直節奏。單一來源，改這裡就整站一起變 */
+  --section-y: clamp(48px, 7vw, 96px);
+  /* 文字量測：CJK 一行約 35 字，超過就難讀 */
+  --measure: 68ch;
+  --r-card: 16px;
 }
+@media (min-width: 600px)  { :root { --blk-gutter: 24px; } }
+@media (min-width: 1024px) { :root { --blk-gutter: 32px; } }
 
 html { scroll-behavior: smooth; }
 body { font-family: -apple-system, 'SF Pro Display', 'Helvetica Neue', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; -webkit-font-smoothing: antialiased; }
@@ -452,4 +467,180 @@ input, textarea, select { font-family: inherit; }
 }
 @media (max-width: 600px) {
   .legal-page { padding: 0 24px; }
+}
+
+/* ── 區塊內容（首頁客製與商品介紹）───────────
+   由 app/blocks/BlocksView.jsx 渲染，全部是 server component。
+   四種區塊：主視覺 / 圖文並排 / 文字段落 / 商品精選。
+
+   版面規則（三條，其餘都是推論）：
+
+   1. 一條左緣基準線。所有區塊的內容都放在 .container 裡（1200 + 20px），
+      主視覺的「背景」滿版但「文字」也回到 .container。這樣標題左緣、圖片左緣、
+      導覽列 logo 三者切齊。過去主視覺置中於視窗、其餘置中於 1200，寬螢幕上會有兩條基準線。
+
+   2. 十二欄。圖文並排的圖片佔比（25/33/50/67/75%）實際上就是 3/4/6/8/9 欄，
+      改用欄跨距表達之後比例才會精準，而且商品精選（每張卡 3 欄）的邊緣會跟圖片邊緣對齊。
+      欄間距 --blk-gutter 隨斷點放大。
+
+   3. 垂直節奏只有一個來源：.blocks 的 gap = --section-y。
+      不要再回去寫 `.blk + .blk { padding-top: 0 }` 那種規則，那會讓主視覺與下一個區塊
+      的間距變成 0（黏在一起），也讓連續兩個文字區塊擠成一團。 */
+.blocks {
+  display: flex; flex-direction: column;
+  gap: var(--section-y);
+  padding-bottom: var(--section-y);
+}
+.blk { padding: 0; }
+/* 主視覺是滿版圖，貼著導覽列才對；其他型別當開頭時要有上方留白 */
+.blocks > .blk:first-child:not(.blk-hero) { margin-top: var(--section-y); }
+
+/* 十二欄網格，圖文並排與商品精選共用 */
+.blk-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--blk-gutter);
+}
+
+/* 型階：modular scale 約 1.25，全部 clamp，手機不會爆、寬螢幕不會顯小 */
+.blk-title {
+  font-size: clamp(24px, 3.2vw, 32px); font-weight: 700;
+  letter-spacing: -0.5px; line-height: 1.3;
+  max-width: var(--measure); margin-bottom: var(--space-5);
+}
+.blk-body { font-size: 16px; line-height: 1.75; color: var(--text-2); max-width: var(--measure); }
+.blk-body p + p { margin-top: var(--space-4); }
+/* 文字段落：不置中，跟著左緣基準線走 */
+.blk-narrow { max-width: var(--measure); }
+/* 圖片容器：長寬比寫死，next/image 與原生 <img> 兩條路徑都不會有 CLS */
+.blk-img { position: relative; width: 100%; overflow: hidden; background: var(--border-light); border-radius: var(--r-card); }
+.blk-img > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.blk-img-empty { border-radius: var(--r-card); }
+
+/* 主視覺：圖上疊字，沒設圖時退成淺色底。
+   遮罩是左濃右淡的橫向漸層加一層底部漸層 —— 文字靠左，遮罩就要跟著靠左，
+   否則遇到左半邊是亮色的照片（白牆、天空）文字會糊掉。 */
+.blk-hero { position: relative; }
+.blk-hero .blk-img { border-radius: 0; }
+.blk-hero-overlay {
+  position: absolute; inset: 0; display: flex; align-items: flex-end;
+  padding-block: clamp(28px, 5vw, 72px);
+  background:
+    linear-gradient(90deg, rgba(0,0,0,.58) 0%, rgba(0,0,0,.30) 46%, rgba(0,0,0,.04) 100%),
+    linear-gradient(0deg, rgba(0,0,0,.34) 0%, rgba(0,0,0,0) 58%);
+}
+.blk-hero-inner { max-width: 640px; color: #fff; }
+.blk-hero-title {
+  font-size: clamp(32px, 5vw, 56px); font-weight: 700;
+  letter-spacing: -1.5px; line-height: 1.15; text-shadow: 0 2px 16px rgba(0,0,0,.4);
+}
+.blk-hero-sub {
+  font-size: clamp(15px, 1.4vw, 18px); line-height: 1.6; margin-top: var(--space-4);
+  max-width: 44ch; opacity: .96; text-shadow: 0 1px 10px rgba(0,0,0,.4);
+}
+/* 按鈕底色跟站上其他主要按鈕同一套（品牌色，沒設就近黑）。
+   舊版預設白底：放在白牆或天空的照片上會整顆消失，對比也過不了 AA。 */
+.blk-btn {
+  display: inline-block; margin-top: var(--space-6);
+  padding: 13px 30px; border-radius: 999px; font-size: 15px; font-weight: 600;
+  background: var(--brand, var(--text)); color: var(--brand-fg, #fff);
+  transition: opacity .15s;
+}
+.blk-btn:hover { opacity: .85; }
+
+/* 圖文並排：--blk-img-cols 是店主設定的圖片佔比換算成的欄數（3/4/6/8/9）。
+   對齊改成 start —— 舊版 center 會讓圖片一高、右邊文字就飄在垂直中線，上下各留一塊死白。 */
+.blk-media-text-media { grid-column: span var(--blk-img-cols, 6); }
+.blk-media-text-body  { grid-column: span var(--blk-body-cols, 6); padding-top: var(--space-2); }
+.blk-media-text-grid { align-items: start; }
+.blk-img-right .blk-media-text-media { order: 2; }
+.blk-img-right .blk-media-text-body { order: 1; }
+/* 很寬的螢幕上，9 欄的 4:3 圖會高得離譜 */
+.blk-media-text-media .blk-img { max-height: 68vh; }
+
+/* 商品精選：每張卡 3 欄，卡片邊緣就會跟圖文並排的圖片邊緣落在同一條格線上 */
+.blk-product-grid > * { grid-column: span 3; }
+.blk-product-grid .blk-img { border-radius: 0; }
+
+/* 商品詳情頁的介紹區：與規格選擇區之間拉出明顯分隔 */
+.blk-intro { border-top: 0.5px solid var(--border); }
+
+@media (max-width: 1024px) {
+  .blk-product-grid > * { grid-column: span 4; }
+}
+@media (max-width: 760px) {
+  /* 手機一律上下堆疊 —— 並排會兩邊都太窄，比例只在桌機有意義 */
+  .blk-media-text-media,
+  .blk-media-text-body { grid-column: span 12; }
+  .blk-img-right .blk-media-text-media,
+  .blk-img-right .blk-media-text-body { order: initial; }
+  .blk-media-text-body { padding-top: 0; }
+  .blk-hero .blk-img { aspect-ratio: 4 / 3 !important; }
+}
+@media (max-width: 600px) {
+  .blk-product-grid > * { grid-column: span 6; }
+}
+
+/* ── 品牌主色 ────────────────────────────
+   變數由 BrandStyle（server）與 layout（client）注入；店家沒設定時完全不注入，
+   所有規則都會落到 var() 的第二個參數，也就是原本的樣子。
+   套用範圍刻意只有下面這幾處：主要按鈕背景、連結文字、標籤／徽章、選中狀態的邊框、價格強調。
+   導覽列、頁面背景、卡片底色一律不動 —— 那會讓各店品質參差（見 docs/adr/0006）。 */
+.btn-primary, .add-btn { background: var(--brand, var(--text)); color: var(--brand-fg, #fff); }
+.size-btn.selected { background: var(--brand, var(--text)); color: var(--brand-fg, #fff); border-color: var(--brand, var(--text)); }
+.color-btn.selected { border-color: var(--brand, var(--text)); }
+.color-btn.selected::after { border-color: var(--brand, var(--text)); }
+.product-badge-collection { background: var(--brand-soft, var(--amber-bg)); color: var(--brand-text, var(--amber)); }
+.product-tag { background: var(--brand-soft, #f0f6ff); color: var(--brand-text, #2563eb); border-color: var(--brand-soft, #c5d9f7); }
+/* 價格強調：只動一般價，特價維持紅色（那是消費者認得的慣例，不該被品牌色蓋掉） */
+.detail-price { color: var(--brand-text, inherit); }
+.detail-price .detail-price-sale { color: var(--red); }
+.detail-price .detail-price-old { color: var(--text-3); }
+/* 內容區塊裡的連結 */
+.blk-body a, .blk-link { color: var(--brand-text, var(--text)); text-decoration: underline; }
+
+/* ── 組合商品落地頁 ────────────────────────────────────────────────
+   商品清單刻意「不」放進 .detail-wrap 的右欄。那一欄只有約 456px，
+   把 N 件商品連同各自的規格選擇器塞進去，圖只剩得下 56px、規格被擠到換行。
+   社群導購來的人是看到穿搭照才點進來的，她要能看清楚每一件長什麼樣。 */
+.bundle-items { max-width: 1100px; margin: 0 auto; padding: 0 20px 56px; }
+.bundle-items-head { font-size: 17px; font-weight: 700; margin-bottom: 4px; }
+.bundle-items-sub { font-size: 13px; color: var(--text-3); line-height: 1.7; margin-bottom: 18px; }
+
+.bundle-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+@media (max-width: 900px) { .bundle-grid { grid-template-columns: repeat(2, 1fr); gap: 14px; } }
+@media (max-width: 560px) { .bundle-grid { grid-template-columns: 1fr; } }
+
+.bundle-card { border: 0.5px solid var(--border); border-radius: 14px; overflow: hidden; display: flex; flex-direction: column; }
+.bundle-card.is-dim { opacity: .5; }
+
+.bundle-card-media { display: block; position: relative; width: 100%; aspect-ratio: 1; background: var(--border-light); }
+.bundle-card-media img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.bundle-card-flag { position: absolute; left: 8px; top: 8px; font-size: 11.5px; padding: 3px 9px; border-radius: 20px; background: rgba(0,0,0,.72); color: #fff; }
+
+.bundle-card-body { padding: 13px; display: flex; flex-direction: column; gap: 11px; flex: 1; }
+.bundle-card-name { font-weight: 600; font-size: 14.5px; line-height: 1.45; color: inherit; }
+.bundle-card-price { font-size: 13.5px; color: var(--text-2); }
+.bundle-card-price s { color: var(--text-3); margin-left: 6px; }
+.bundle-card-warn { font-size: 12px; color: var(--red); line-height: 1.6; }
+
+.bundle-spec-label { font-size: 12px; color: var(--text-3); margin-bottom: 6px; }
+.bundle-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.bundle-chip { font-size: 13px; padding: 6px 13px; border-radius: 20px; border: 0.5px solid var(--border); background: transparent; color: var(--text-2); cursor: pointer; }
+.bundle-chip.selected { background: var(--brand, var(--text)); color: var(--brand-fg, #fff); border-color: var(--brand, var(--text)); }
+.bundle-chip:disabled { text-decoration: line-through; opacity: .45; cursor: default; }
+
+/* 「不要這件」是例外操作，放卡片最下面、用文字而不是 checkbox，
+   免得最少用的控制項佔掉每一列最顯眼的起始位置。 */
+.bundle-card-foot { margin-top: auto; padding-top: 2px; }
+.bundle-toggle { font-size: 12.5px; color: var(--text-3); background: none; border: none; padding: 0; cursor: pointer; text-decoration: underline; }
+
+/* 合計與 CTA：桌機黏在右欄（捲動看商品時一直在），手機改放商品清單下方，
+   讓「選規格 → 結帳」的順序跟捲動方向一致。兩者互斥顯示，不是重複的 CTA。 */
+.bundle-buy-desktop { position: sticky; top: 20px; }
+.bundle-buy-mobile { display: none; }
+@media (max-width: 680px) {
+  .bundle-items { padding: 0 14px 8px; }
+  .bundle-buy-desktop { display: none; }
+  .bundle-buy-mobile { display: block; max-width: 1100px; margin: 0 auto; padding: 0 14px 40px; }
 }
