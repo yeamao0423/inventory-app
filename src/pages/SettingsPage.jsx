@@ -5,6 +5,7 @@ import { compressImage } from '../lib/imageUtils'
 import { SHARE_VARS, DEFAULT_SHARE_TEMPLATE, resolveShopBaseUrl } from '../lib/socialShare'
 import { revalidateShop } from '../lib/revalidateShop'
 import { utcToLocal, localToISO } from '../lib/datetime'
+import BrandColorPicker from '../components/BrandColorPicker'
 
 // 店家設定（僅店主）：把過去寫死在程式裡的營運參數搬進 stores.settings
 // 新店主首次進入（settings 為空）時作為開店精靈使用
@@ -212,6 +213,18 @@ export default function SettingsPage() {
                   </label>
                 ))}
               </div>
+            </div>
+
+            {/* 品牌主色：客製化的範圍就是「內容區塊 + 一個主色」，字體與完整主題不開放（見 docs/adr/0006）。
+                套用範圍刻意很窄，導覽列與背景一律不動 —— 那會讓各店商城品質參差。 */}
+            <div style={{ marginTop: 18 }}>
+              <div style={{ fontSize: 13, color: 'var(--text-2)', marginBottom: 6 }}>
+                品牌主色（商城的主要按鈕、連結、標籤與價格強調）
+              </div>
+              <BrandColorPicker
+                value={form.brand_color}
+                onChange={(hex) => { setForm(prev => ({ ...prev, brand_color: hex })); setSaved(false) }}
+              />
             </div>
           </div>
         </div>
