@@ -379,6 +379,13 @@ verify_jwt = false
 [functions.line-login]
 verify_jwt = false
 
+# 站內客服：商城的匿名訪客直接呼叫，瀏覽器的 OPTIONS 預檢不會帶 Authorization，
+# 平台層驗證會讓預檢拿不到 2xx（瀏覽器一律報成 CORS 錯誤）。身分改由函式自己驗
+# （index.ts 用 admin.auth.getUser 讀 Authorization），濫用則靠 Turnstile（fail closed）
+# 與每訪客每分鐘／每店每日兩層限流擋——平台的 verify_jwt 從來不是這支的防線。
+[functions.chat]
+verify_jwt = false
+
 [edge_runtime]
 enabled = true
 # Supported request policies: `oneshot`, `per_worker`.
