@@ -139,34 +139,9 @@
 .pp-cta .add-btn { border-radius: 999px; margin-top: 0; }
 .pp-cta-auto .add-btn { width: auto; padding-left: 36px; padding-right: 36px; }
 
-/* ── 黏底購買列 ──────────────────────────
-   ⚠️ 這一段是 globals.css 的副本。同一份樣式正在另一條分支上進 globals.css
-   （連同 shop/src/lib/useBuyBar.js 與 ProductDetail 的黏底列），但還沒進這條分支。
-   兩邊合併之後這一段整段刪掉，改吃 globals.css 的那份 —— 樣式只能有一份。
-   在那之前少了它，編排過的商品頁會在頁尾長出一條沒有樣式的列。 */
-.buy-bar {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 95;
-  background: rgba(255,255,255,.93); backdrop-filter: blur(16px);
-  border-top: 1px solid var(--border);
-  transform: translateY(110%);
-  transition: transform .32s ease-out;
-  padding-bottom: env(safe-area-inset-bottom);
-}
-.buy-bar.is-on { transform: translateY(0); }
-.buy-bar-inner {
-  max-width: var(--detail-max, 1000px); margin: 0 auto;
-  padding: 12px 20px; display: flex; align-items: center; gap: 16px;
-}
-@media (max-width: 600px) { .buy-bar-inner { padding: 10px 14px; gap: 12px; } }
-.buy-bar-price { flex: 1; min-width: 0; }
-.buy-bar-label { font-size: 11.5px; color: var(--text-3); line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.buy-bar-value { font-size: 20px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
-@media (max-width: 600px) { .buy-bar-value { font-size: 18px; } }
-.buy-bar .add-btn { width: auto; margin-top: 0; padding: 14px 30px; font-size: 15px; flex-shrink: 0; border-radius: 999px; }
-@media (max-width: 600px) { .buy-bar .add-btn { padding: 13px 20px; font-size: 14.5px; } }
-/* 黏底列會蓋住頁面最後一段，補等高的內距 */
-.has-buy-bar { padding-bottom: 92px; }
-@media (prefers-reduced-motion: reduce) { .buy-bar { transition: none; } }
+/* 黏底列的按鈕就是 product_cta 那一顆捲走之後接手的同一顆，所以圓角要一致。
+   其餘樣式（位置、背景、進場）全部吃 globals.css 的共用版本，這裡不重寫一份。 */
+.pp-page .buy-bar .add-btn { border-radius: 999px; }
 
 /* ── 編輯模式（只有後台預覽的 iframe 會進來）────
    外框畫在 outline 而不是 border：border 會撐開盒子，店主看到的版面就跟發佈後不一樣了。

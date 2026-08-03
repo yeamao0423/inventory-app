@@ -11,11 +11,11 @@
 //
 // 靜態區塊（hero / media_text / text / products）交給既有的 BlocksView，不另寫一份 ——
 // 兩份渲染器遲早漂移，首頁與商品頁的同一個區塊看起來就會不一樣。
-import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import ProductStateProvider, { useProductState } from './ProductStateProvider'
 import { PRODUCT_RENDERERS } from './blocks'
 import BlocksView from '../../blocks/BlocksView'
+import { useBuyBar } from '../../../lib/useBuyBar'
 import './product-blocks.css'
 
 /**
@@ -132,33 +132,4 @@ function PageBody({ blocks, productsByBlock, editing, selectedId, highlightId, o
       </div>
     </div>
   )
-}
-
-// 黏底購買列的顯示時機。
-//
-// ⚠️ 這是暫時的本地副本：同一支 hook 正在另一條分支上以 shop/src/lib/useBuyBar.js 落地
-//（那邊的 ProductDetail 與 BundleDetail 已經在用）。兩條分支合併之後，這裡應該改成
-// `import { useBuyBar } from '../../../lib/useBuyBar'`、把 anchorKey 一併帶進共用版本，
-// 然後刪掉這段 —— 邏輯必須只有一份。
-//
-// 規則刻意寫死成「版面裡的 CTA 被捲到畫面上方之後才顯示」，不是「捲了 N px 就顯示」：
-// 後者在不同螢幕高度會亂掉，而且會出現兩顆加入購物車同時在畫面上的情形。
-// 用 IntersectionObserver 而不是 scroll 事件：scroll 每一幀都跑，手機直接掉幀。
-function useBuyBar(anchorKey = '') {
-  const anchorRef = useRef(null)
-  const [visible, setVisible] = useState(false)
-
-  useEffect(() => {
-    const el = anchorRef.current
-    if (!el || typeof IntersectionObserver === 'undefined') return
-    const io = new IntersectionObserver(([entry]) => {
-      // boundingClientRect.top < 0 才算「已經捲過去」；
-      // 少了這個判斷，還沒捲到 CTA（它在畫面下方）時也會被當成看不見而彈出來。
-      setVisible(!entry.isIntersecting && entry.boundingClientRect.top < 0)
-    }, { threshold: 0 })
-    io.observe(el)
-    return () => io.disconnect()
-  }, [anchorKey])
-
-  return { anchorRef, visible }
 }
