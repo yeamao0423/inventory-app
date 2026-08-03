@@ -1,0 +1,24 @@
+// 工具登記處：新增能力 = 建一個 tools/xxx.ts，再 import 加進 tools[] 即可。
+import type { AnthropicToolDef, Tool } from "../types.ts";
+import { searchProducts } from "./search-products.ts";
+import { getStock } from "./get-stock.ts";
+import { getMyOrders } from "./get-order-status.ts";
+import { requestHuman } from "./request-human.ts";
+
+export const tools: Tool[] = [
+  searchProducts,
+  getStock,
+  getMyOrders, // 個人資料工具：需已識別身分，只查本人（handler 內以 ctx.consumer 把關）
+  requestHuman, // 助理舉手轉真人
+];
+
+export const toolMap: Record<string, Tool> = Object.fromEntries(
+  tools.map((t) => [t.name, t]),
+);
+
+// 轉成 Anthropic messages API 需要的宣告格式（每次呼叫送出）
+export const toolDefs: AnthropicToolDef[] = tools.map((t) => ({
+  name: t.name,
+  description: t.description,
+  input_schema: t.inputSchema,
+}));

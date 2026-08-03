@@ -8,6 +8,11 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['icon-192.png', 'icon-512.png', 'logo.png'],
+      // 客服推播：把 push / notificationclick 的處理掛進 workbox 產生的 sw.js。
+      // 沿用 generateSW 策略（不改成 injectManifest），既有的離線快取行為不受影響。
+      workbox: {
+        importScripts: ['push-sw.js'],
+      },
       manifest: {
         name: 'Daigogo 庫存管理系統',
         short_name: 'Daigogo',
