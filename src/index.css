@@ -610,11 +610,14 @@ html, body, #root {
 }
 
 /* ── 即時預覽（首頁編排／商品介紹）──────────────────────────
-   右欄嵌的是商城本人（iframe），所以版面斷點以「放得下 420px 預覽」為準；
-   放不下時頁面完全不掛 iframe（見 useMediaQuery），只留開新分頁那顆按鈕。 */
+   右欄嵌的是商城本人（iframe）。窄螢幕放不下時頁面完全不掛 iframe
+   （見 useMediaQuery），只留開新分頁那顆按鈕。
+
+   編輯面板固定寬、預覽吃掉剩下全部：預覽是這頁的主角，面板只是控制器。
+   反過來給預覽百分比寬，螢幕再大也換不到更多預覽空間。 */
 .hd-split { display: grid; gap: 20px; align-items: start; }
 @media (min-width: 1200px) {
-  .hd-split { grid-template-columns: minmax(0, 1fr) minmax(420px, 46%); }
+  .hd-split { grid-template-columns: minmax(320px, 380px) minmax(0, 1fr); }
 }
 
 .lp-shell {
@@ -632,13 +635,20 @@ html, body, #root {
   flex-shrink: 0; display: flex; align-items: center; gap: 8px;
   padding: 8px 10px; border-bottom: 0.5px solid var(--border-light);
 }
+/* 縮放畫布。--lp-device-w 與 --lp-scale 由 LivePreview 掛在這個元素上。
+   iframe 一律用裝置寬度渲染（商城的 media query 量的是 iframe 自己的寬度，
+   把它調窄就等於騙商城說螢幕很小），再整塊縮到欄位放得下。
+   縮放後 iframe 右側／底部會露出這層底色，所以給個中性灰而不是白 ——
+   白底會讓人分不清哪裡是商城頁面的邊界。 */
 .lp-body {
-  flex: 1; min-height: 0; overflow: auto;
-  background: #fff; display: flex; justify-content: center;
+  flex: 1; min-height: 0; overflow: hidden;
+  background: var(--bg);
 }
-.lp-frame { border: 0; width: 100%; height: 100%; }
-/* 手機預覽：iframe 真的縮成 390px，商城的 media query 才會跟著切成手機版 */
-.lp-frame-mobile {
-  width: 390px; max-width: 100%; flex-shrink: 0;
-  border-left: 0.5px solid var(--border); border-right: 0.5px solid var(--border);
+.lp-frame {
+  display: block; border: 0;
+  width: var(--lp-device-w, 100%);
+  /* 視覺高度 = 實際高度 × scale，不先除回去的話底部會空一大塊 */
+  height: calc(100% / var(--lp-scale, 1));
+  transform: scale(var(--lp-scale, 1));
+  transform-origin: top left;
 }
