@@ -1,7 +1,9 @@
 import { notFound, redirect } from 'next/navigation'
-import { getProductDetail, getAllPublishedProductParams } from '../../../../lib/data'
+import { getProductDetail, getAllPublishedProductParams, getBlockProducts } from '../../../../lib/data'
 import { slugifyName } from '../../../../lib/slug'
+import { normalizeProductContent, resolveProductContent } from '../../../../lib/contentBlocks'
 import ProductDetail from '../ProductDetail'
+import ProductPageView from '../ProductPageView'
 import Blocks, { hasBlocks } from '../../../blocks/Blocks'
 import BrandStyle from '../../../BrandStyle'
 
@@ -100,6 +102,28 @@ export default async function ProductDetailPage({ params }) {
     (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'),
   )
 
+  // 這件商品的版面走哪一條：單品覆寫 → 全店範本 → 都沒有就 null。
+  // null 是這次改動最重要的一條路 —— 沒有編排過的店，商品頁與今天完全一樣，
+  // 連 ProductPageView 的 JS 都不會載到瀏覽器。
+  const pageContent = resolveProductContent({
+    override: data.sp.page_blocks,
+    template: data.store?.product_template_blocks,
+  })
+  // 有單品覆寫 = 店主已經在編排器裡處理過這件商品（舊的 intro_blocks 在那時會被接進版面），
+  // 這時再把 intro 畫一次就是重複。走全店範本的商品沒有經過那道手續，intro 照舊顯示。
+  const overridden = normalizeProductContent(data.sp.page_blocks) != null
+  const showIntro = !overridden && hasBlocks(data.sp.intro_blocks)
+
+  // 「商品精選」區塊要顯示哪些商品只有 server 查得到（ProductPageView 是 client）。
+  // 先在這裡查好帶下去，跟首頁的 Blocks.jsx 是同一支 getBlockProducts、同一個挑選規則。
+  const productsByBlock = pageContent
+    ? Object.fromEntries(await Promise.all(
+      pageContent.blocks
+        .filter(b => b.type === 'products')
+        .map(async b => [b.id, await getBlockProducts(data.sp.store_id, b)]),
+    ))
+    : {}
+
   return (
     <>
       <script
@@ -107,16 +131,28 @@ export default async function ProductDetailPage({ params }) {
         dangerouslySetInnerHTML={{ __html: jsonLdSafe }}
       />
       <BrandStyle store={data.store} />
-      <ProductDetail
-        sp={data.sp}
-        variants={data.variants}
-        customOptions={data.customOptions}
-        optTypes={data.optTypes}
-        productTags={data.productTags}
-      />
+      {pageContent ? (
+        <ProductPageView
+          sp={data.sp}
+          variants={data.variants}
+          customOptions={data.customOptions}
+          optTypes={data.optTypes}
+          productTags={data.productTags}
+          blocks={pageContent.blocks}
+          productsByBlock={productsByBlock}
+        />
+      ) : (
+        <ProductDetail
+          sp={data.sp}
+          variants={data.variants}
+          customOptions={data.customOptions}
+          optTypes={data.optTypes}
+          productTags={data.productTags}
+        />
+      )}
       {/* 商品介紹（區塊內容）。ProductDetail 是 client component，介紹刻意留在這一層
           server render，才進得了靜態 HTML；沒編過（intro_blocks 為 null）就連分隔線都不長出來。 */}
-      {hasBlocks(data.sp.intro_blocks) && (
+      {showIntro && (
         <div className="blk-intro">
           <Blocks content={data.sp.intro_blocks} storeId={data.sp.store_id} />
         </div>

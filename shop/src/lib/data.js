@@ -159,7 +159,9 @@ export const getProductDetail = cache(async (productId) => {
           .eq('store_id', storeId)
           .order('sort_order'),
         supabase.from('product_tags').select('tag_id, tags(id, name, name_en)').eq('product_id', sp.product_id),
-        supabase.from('stores').select(STORE_COLS).eq('id', storeId).maybeSingle(),
+        // 商品頁範本只有這一頁用得到，不併進 STORE_COLS —— 否則每一頁的店家查詢都要多背一份
+        // 可能上百 KB 的 jsonb（首頁、清單頁、購物車都會查店家）。
+        supabase.from('stores').select(`${STORE_COLS}, product_template_blocks`).eq('id', storeId).maybeSingle(),
       ])
 
       return {
