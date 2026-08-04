@@ -1,7 +1,7 @@
 import { notFound, redirect } from 'next/navigation'
 import { getProductDetail, getAllPublishedProductParams, getBlockProducts } from '../../../../lib/data'
 import { slugifyName } from '../../../../lib/slug'
-import { normalizeProductContent, resolveProductContent } from '../../../../lib/contentBlocks'
+import { normalizeProductContent, resolveProductContent, flattenBlocks } from '../../../../lib/contentBlocks'
 import ProductDetail from '../ProductDetail'
 import ProductPageView from '../ProductPageView'
 import Blocks, { hasBlocks } from '../../../blocks/Blocks'
@@ -116,9 +116,10 @@ export default async function ProductDetailPage({ params }) {
 
   // 「商品精選」區塊要顯示哪些商品只有 server 查得到（ProductPageView 是 client）。
   // 先在這裡查好帶下去，跟首頁的 Blocks.jsx 是同一支 getBlockProducts、同一個挑選規則。
+  // 攤平之後才找：商品精選也可能被店主放進欄容器裡，只看頂層會查不到而畫成空的。
   const productsByBlock = pageContent
     ? Object.fromEntries(await Promise.all(
-      pageContent.blocks
+      flattenBlocks(pageContent.blocks)
         .filter(b => b.type === 'products')
         .map(async b => [b.id, await getBlockProducts(data.sp.store_id, b)]),
     ))

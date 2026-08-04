@@ -273,6 +273,24 @@ export function normalizeProductContent(raw) {
   return normalizeContent(raw, { allow: ALL_BLOCK_TYPES })
 }
 
+/**
+ * 巢狀的區塊樹 → 一維陣列（欄容器本身也在裡面，欄的子區塊接在它後面）。
+ *
+ * 「找出所有 products 區塊去查商品」「湊一個含所有 id 的 key」這類事情
+ * 在加了欄容器之後都不能只看頂層了，而那個走訪不該在三個檔案裡各寫一份。
+ */
+export function flattenBlocks(blocks) {
+  const out = []
+  for (const b of blocks ?? []) {
+    if (!b) continue
+    out.push(b)
+    if (b.type === 'columns') {
+      for (const col of b.columns ?? []) out.push(...(col?.blocks ?? []))
+    }
+  }
+  return out
+}
+
 export function blockCount(raw, options) {
   const content = normalizeContent(raw, options)
   return content ? content.blocks.length : 0

@@ -6,7 +6,7 @@ import {
   TEMPLATES, buildTemplate, safeHref, splitParagraphs,
   getBlockAt, insertBlockAt, removeBlockAt, replaceBlockAt,
   duplicateBlockAt, moveBlockAt, moveBlockTo, createColumns, removeColumnAt,
-  buildProductTemplate, mergeIntroIntoTemplate,
+  buildProductTemplate, mergeIntroIntoTemplate, flattenBlocks,
 } from './contentBlocks'
 
 // 這份測試的重點不是「好資料能過」，而是「壞資料不能讓商城炸掉」。
@@ -496,6 +496,19 @@ describe('buildProductTemplate — 左圖右資訊', () => {
     const t = buildProductTemplate()
     const ids = t.blocks.flatMap(b => [b.id, ...b.columns.flatMap(c => [c.id, ...c.blocks.map(x => x.id)])])
     expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('flattenBlocks 把欄裡的子區塊也攤出來', () => {
+    const t = buildProductTemplate()
+    const flatTypes = flattenBlocks(t.blocks).map(b => b.type)
+    expect(flatTypes[0]).toBe('columns')
+    expect(flatTypes.filter(x => x !== 'columns')).toHaveLength(9)
+    expect(flatTypes).toContain('product_cta')
+  })
+
+  it('flattenBlocks 對 null／壞資料不丟例外', () => {
+    expect(flattenBlocks(null)).toEqual([])
+    expect(flattenBlocks([null, { type: 'columns' }])).toHaveLength(1)
   })
 
   it('mergeIntroIntoTemplate 把既有 intro 接在最後、各佔滿版', () => {

@@ -6,6 +6,9 @@
 //   1. 麵包屑固定在最上方，不進區塊系統。它是導覽而不是內容，讓店主把它排到頁面中間
 //      只會做出一個沒有人回得去的商品頁。
 //   2. 區塊照順序流進十二欄格線（.blk-grid），每塊吃 span 欄；900px 以下一律 12 欄。
+//      欄容器（columns）是唯一的例外：它自己吃滿整列，內部再開一層十二欄格線，
+//      欄裡的子區塊垂直堆疊。那是為了排得出「左邊一根長圖、右邊一疊資訊」——
+//      扁平格線逐列填，圖庫很高就會把右欄後面的區塊擠到圖庫下面去。
 //   3. 黏底購買列畫在區塊樹外，它不是第二顆 CTA，是 product_cta 捲走之後接手的同一顆。
 //      anchorRef 因此掛在 product_cta 上，而不是掛在某個固定位置。
 //
@@ -16,6 +19,7 @@ import ProductStateProvider, { useProductState } from './ProductStateProvider'
 import { PRODUCT_RENDERERS } from './blocks'
 import BlocksView from '../../blocks/BlocksView'
 import { useBuyBar } from '../../../lib/useBuyBar'
+import { flattenBlocks } from '../../../lib/contentBlocks'
 import './product-blocks.css'
 
 /**
@@ -56,7 +60,11 @@ function PageBody({ blocks, productsByBlock, editing, selectedId, highlightId, o
   const { name, zh, price, qty, variantLabel, ctaLabel, isUnavailable, addToCart } = useProductState()
   // 傳區塊組成當 key：預覽裡店主一搬動區塊，product_cta 就是另一個 DOM 節點了，
   // observer 得重掛才不會盯著一個已經被移掉的節點看（正式站版面固定，這個值不會變）。
-  const { anchorRef, visible: barVisible } = useBuyBar(blocks.map(b => b.id).join(','))
+  //
+  // 攤平所有 id（含欄裡的）：只看頂層的話，店主把 CTA 從左欄搬到右欄時 key 不會變，
+  // observer 就會一直盯著一個已經不存在的節點。
+  const blockKey = flattenBlocks(blocks).map(b => b.id).join(',')
+  const { anchorRef, visible: barVisible } = useBuyBar(blockKey)
 
   // 編輯模式的委派 listener：整頁只掛這一個，而不是每個區塊各掛一個。
   // 區塊數量會隨店主編排長到幾十個，每塊一個 listener 等於每次重排都重掛幾十次。
@@ -69,6 +77,58 @@ function PageBody({ blocks, productsByBlock, editing, selectedId, highlightId, o
     e.stopPropagation()
     const hit = e.target?.closest?.('[data-block-id]')
     onSelectBlock?.(hit?.getAttribute('data-block-id') ?? null)
+  }
+
+  // 一塊區塊 → 一個格線儲存格。欄容器多包一層格線，子區塊在欄內垂直堆疊。
+  function renderCell(block) {
+    const isColumns = block.type === 'columns'
+    const cls = [
+      'pp-cell',
+      isColumns ? 'pp-columns' : '',
+      editing && block.id === selectedId ? 'is-selected' : '',
+      editing && block.id === highlightId ? 'is-highlighted' : '',
+    ].filter(Boolean).join(' ')
+
+    if (isColumns) {
+      const columns = block.columns ?? []
+      // 一個子區塊都沒有的欄容器（店主剛建好還沒放東西）在正式站不佔位 ——
+      // 留著會在版面上多出一段對不上任何東西的空白。編輯器裡仍要畫出來，
+      // 看不到就選不到，也就刪不掉。
+      if (!editing && columns.every(col => col.blocks.length === 0)) return null
+      return (
+        <div
+          key={block.id}
+          className={cls}
+          style={{ '--pp-span': 12 }}
+          data-block-id={editing ? block.id : undefined}
+        >
+          <div className="blk-grid">
+            {columns.map(col => (
+              <div key={col.id} className="pp-col" style={{ '--pp-span': col.span }}>
+                {col.blocks.map(child => renderCell(child))}
+              </div>
+            ))}
+          </div>
+        </div>
+      )
+    }
+
+    const Renderer = PRODUCT_RENDERERS[block.type]
+    return (
+      <div
+        key={block.id}
+        className={cls}
+        style={{ '--pp-span': block.span }}
+        // 正式站不吐這個屬性：它只是編輯器的把手，沒必要出現在客人的 HTML 裡
+        data-block-id={editing ? block.id : undefined}
+      >
+        {Renderer
+          ? <Renderer block={block} anchorRef={block.type === 'product_cta' ? anchorRef : undefined} />
+          // 靜態區塊沿用商城既有的渲染器。一次只餵一塊：BlocksView 自己的垂直節奏
+          // 在格線裡不適用（格線的 gap 已經負責間距），CSS 那邊會把它歸零。
+          : <BlocksView blocks={[block]} productsByBlock={productsByBlock} />}
+      </div>
+    )
   }
 
   return (
@@ -89,29 +149,7 @@ function PageBody({ blocks, productsByBlock, editing, selectedId, highlightId, o
 
       <div className="pp-wrap">
         <div className="container blk-grid pp-grid">
-          {blocks.map(block => {
-            const Renderer = PRODUCT_RENDERERS[block.type]
-            const cls = [
-              'pp-cell',
-              editing && block.id === selectedId ? 'is-selected' : '',
-              editing && block.id === highlightId ? 'is-highlighted' : '',
-            ].filter(Boolean).join(' ')
-            return (
-              <div
-                key={block.id}
-                className={cls}
-                style={{ '--pp-span': block.span }}
-                // 正式站不吐這個屬性：它只是編輯器的把手，沒必要出現在客人的 HTML 裡
-                data-block-id={editing ? block.id : undefined}
-              >
-                {Renderer
-                  ? <Renderer block={block} anchorRef={block.type === 'product_cta' ? anchorRef : undefined} />
-                  // 靜態區塊沿用商城既有的渲染器。一次只餵一塊：BlocksView 自己的垂直節奏
-                  // 在格線裡不適用（格線的 gap 已經負責間距），CSS 那邊會把它歸零。
-                  : <BlocksView blocks={[block]} productsByBlock={productsByBlock} />}
-              </div>
-            )
-          })}
+          {blocks.map(block => renderCell(block))}
         </div>
       </div>
 
