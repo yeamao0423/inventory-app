@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase'
 import { compressImage } from '../lib/imageUtils'
 import CustomSelect from './CustomSelect'
 import {
-  SPANS, DEFAULT_SPAN,
+  SPANS, DEFAULT_SPAN, COLUMN_PRESETS,
   GALLERY_RATIOS, PRICE_SIZES, CHIP_STYLES, IMAGE_RATIOS,
 } from '../lib/contentBlocks'
 import '../styles/product-editor.css'
@@ -33,7 +33,12 @@ export default function BlockInspector({ block, onChange, storeId, products = []
         {BLOCK_HINTS[block.type]}
       </div>
 
-      <SpanField value={block.span ?? DEFAULT_SPAN} onChange={set('span')} />
+      {/* 欄容器沒有自己的欄寬（一律吃滿整列），它調的是「裡面分成幾欄、各佔多寬」 */}
+      {block.type !== 'columns' && (
+        <SpanField value={block.span ?? DEFAULT_SPAN} onChange={set('span')} />
+      )}
+
+      {block.type === 'columns' && <ColumnsField block={block} onChange={onChange} />}
 
       {block.type === 'product_gallery' && (
         <>
@@ -103,6 +108,7 @@ export const BLOCK_HINTS = {
   product_qty: '購買數量。',
   product_note: '客製備註欄位。商品沒開放備註時不會出現。',
   product_cta: '加入購物車按鈕。捲離畫面後會由底部的黏底購買列接手。',
+  columns: '把幾個區塊裝進同一欄，排得出「左邊一根長圖、右邊一疊資訊」。',
 }
 
 // 內容完全來自商品本身、店主在這裡沒有東西可調的區塊
@@ -153,6 +159,62 @@ function SpanField({ value, onChange }) {
         </div>
       )}
     </Field>
+  )
+}
+
+// ── 欄容器 ─────────────────────────────────
+// 欄數與比例。刻意不開放「手機是否反序」之類的選項 ——
+// 多一個開關就多一種店主排得出來的壞版面，而他在自己的手機上不一定會發現。
+function ColumnsField({ block, onChange }) {
+  const columns = block.columns || []
+  const spans = columns.map(c => c.span)
+  const activeKey = COLUMN_PRESETS.find(p =>
+    p.spans.length === spans.length && p.spans.every((v, i) => v === spans[i]))?.key
+
+  function applyPreset(preset) {
+    const next = preset.spans.map((span, i) => (
+      columns[i]
+        ? { ...columns[i], span }
+        // 從兩欄變三欄：新的那欄是空的
+        : { id: `col-${Date.now()}-${i}`, span, blocks: [] }
+    ))
+    // 從三欄變兩欄：被砍掉那欄的內容併進最後保留的那欄，不要弄丟店主的東西
+    const dropped = columns.slice(preset.spans.length).flatMap(c => c.blocks)
+    if (dropped.length) {
+      const last = next.length - 1
+      next[last] = { ...next[last], blocks: [...next[last].blocks, ...dropped] }
+    }
+    onChange({ ...block, columns: next })
+  }
+
+  return (
+    <>
+      <Field label="欄位比例" hint="只在桌機生效 —— 手機一律整列堆疊，並排會每一欄都太窄。">
+        <div className="pe-chip-row">
+          {COLUMN_PRESETS.map(p => (
+            <button key={p.key} type="button"
+              className={`pe-chip ${activeKey === p.key ? 'is-active' : ''}`}
+              onClick={() => applyPreset(p)}>
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </Field>
+      {columns.map((c, i) => (
+        <Field key={c.id} label={`第 ${i + 1} 欄寬度`}>
+          <CustomSelect
+            label="— 選擇欄寬 —"
+            value={c.span}
+            options={SPANS.map(n => ({ value: n, label: `${n} / 12 欄` }))}
+            onChange={(v) => {
+              if (v == null) return
+              onChange({ ...block, columns: columns.map((x, xi) => (xi === i ? { ...x, span: v } : x)) })
+            }}
+            allowClear={false}
+          />
+        </Field>
+      ))}
+    </>
   )
 }
 
@@ -404,6 +466,7 @@ function ImageField({ label, value, onChange, storeId }) {
  */
 export function blockSummary(block) {
   if (!block) return ''
+  if (block.type === 'columns') return `${(block.columns || []).length} 欄`
   if (block.type === 'products') {
     if (block.mode === 'category') return block.title || '（依分類挑選）'
     return block.title || `${(block.productIds || []).length} 件商品`
