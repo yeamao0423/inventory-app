@@ -92,15 +92,28 @@ describe('resolveProductContent', () => {
 })
 
 describe('buildProductTemplate', () => {
-  it('重建目前的商品頁：九個動態區塊、桌機各半', () => {
+  // 舊版是九塊各佔一半的扁平區塊，畫出來是鋸齒（格線逐列填，圖庫很高）。
+  // 現在是一個欄容器：左欄一根長圖、右欄一疊購買動線。
+  it('左圖右資訊：一個欄容器，九個動態區塊分在兩欄', () => {
     const tpl = buildProductTemplate()
     expect(tpl.version).toBe(CONTENT_VERSION)
-    expect(tpl.blocks.map(b => b.type)).toEqual([
-      'product_gallery', 'product_title', 'product_price', 'product_desc',
-      'product_options', 'product_status', 'product_qty', 'product_note', 'product_cta',
+    expect(tpl.blocks.map(b => b.type)).toEqual(['columns'])
+    const cols = tpl.blocks[0]
+    expect(cols.span).toBeUndefined()
+    expect(cols.columns.map(c => c.span)).toEqual([6, 6])
+    expect(cols.columns[0].blocks.map(b => b.type)).toEqual(['product_gallery'])
+    expect(cols.columns[1].blocks.map(b => b.type)).toEqual([
+      'product_title', 'product_price', 'product_desc', 'product_options',
+      'product_status', 'product_qty', 'product_note', 'product_cta',
     ])
-    expect(tpl.blocks.every(b => b.span === 6)).toBe(true)
-    expect(new Set(tpl.blocks.map(b => b.id)).size).toBe(tpl.blocks.length)
+  })
+
+  it('欄內的子區塊吃滿自己那一欄（span 12），且 id 互不相同', () => {
+    const cols = buildProductTemplate().blocks[0]
+    const children = cols.columns.flatMap(c => c.blocks)
+    expect(children.every(b => b.span === 12)).toBe(true)
+    const ids = [cols.id, ...cols.columns.flatMap(c => [c.id, ...c.blocks.map(b => b.id)])]
+    expect(new Set(ids).size).toBe(ids.length)
   })
 })
 
@@ -128,7 +141,8 @@ describe('mergeIntroIntoTemplate', () => {
 
   it('範本是空的（還沒編過）就從預設版型長出來，不會只剩 intro', () => {
     const out = mergeIntroIntoTemplate(null, intro)
-    expect(out.blocks[0].type).toBe('product_gallery')
+    expect(out.blocks[0].type).toBe('columns')
+    expect(out.blocks[0].columns[0].blocks[0].type).toBe('product_gallery')
     expect(out.blocks.at(-1).type).toBe('text')
   })
 

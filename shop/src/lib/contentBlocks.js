@@ -24,7 +24,32 @@ export const PRODUCT_BLOCK_TYPES = [
   'product_options', 'product_status', 'product_qty', 'product_note', 'product_cta',
 ]
 
-export const ALL_BLOCK_TYPES = [...BLOCK_TYPES, ...PRODUCT_BLOCK_TYPES]
+// 版面容器：把幾個區塊裝進同一欄，讓「左邊一根長圖、右邊一疊資訊」排得出來。
+//
+// 為什麼需要它：扁平的十二欄格線是逐列填的，新的一列從最高那格的下緣開始。
+// 圖庫很高、標題很矮 → 第三塊會掉到圖庫下面而不是接在標題底下，右欄整片空白。
+// 一維的「順序 + 寬度」畫不出二維的欄結構，這是模型問題不是 CSS 問題。
+//
+// 巢狀刻意只有一層。欄裡再放欄能表達的版面，商品頁一個都用不到，
+// 但會讓正規化、編輯操作與渲染各多一層遞迴的錯誤空間。
+//
+// 只進商品頁那一側的放行清單：首頁的 BlocksView 根本不吃 span，
+// 讓欄容器進得了 home_blocks 只會得到畫不出來的空殼。
+export const LAYOUT_BLOCK_TYPES = ['columns']
+
+export const MIN_COLUMNS = 2
+export const MAX_COLUMNS = 3
+export const DEFAULT_COLUMN_SPAN = 6
+
+// 常用比例。店主不必在腦中把十二欄換算成版面。
+export const COLUMN_PRESETS = [
+  { key: '6-6', label: '對半', spans: [6, 6] },
+  { key: '4-8', label: '左窄右寬', spans: [4, 8] },
+  { key: '8-4', label: '左寬右窄', spans: [8, 4] },
+  { key: '4-4-4', label: '三等分', spans: [4, 4, 4] },
+]
+
+export const ALL_BLOCK_TYPES = [...BLOCK_TYPES, ...PRODUCT_BLOCK_TYPES, ...LAYOUT_BLOCK_TYPES]
 
 export const BLOCK_LABELS = {
   hero: '主視覺',
@@ -40,6 +65,7 @@ export const BLOCK_LABELS = {
   product_qty: '數量',
   product_note: '客製備註',
   product_cta: '加入購物車',
+  columns: '欄容器',
 }
 
 // 十二欄格線的欄寬（.blk-grid，globals.css:650）。手機一律吃滿 12 欄，
@@ -174,11 +200,45 @@ const NORMALIZERS = {
 }
 
 // 單一區塊：型別不在放行清單就回 null（呼叫端丟掉），認識就補齊所有欄位。
-function normalizeBlock(raw, index, allow) {
+//
+// budget 是「還能收幾個區塊」的可變計數器，由 normalizeContent 開場配額。
+// 巢狀之後「幾個區塊」要算總數（容器自己也算一個），否則 60 個欄容器各塞 60 個子塊就爆了。
+// 扣款一律在確定要收下這一塊之後才做 —— 被丟掉的壞資料不該吃掉配額。
+function normalizeBlock(raw, index, allow, budget) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const type = raw.type
   if (typeof type !== 'string' || !allow.includes(type)) return null
   const id = typeof raw.id === 'string' && raw.id ? raw.id : `${type}-${index}`
+
+  // 欄容器不走 NORMALIZERS：它要遞迴，而且沒有自己的 span（一律吃滿整列）。
+  if (type === 'columns') {
+    if (!Array.isArray(raw.columns)) return null
+    budget.left -= 1
+    // 欄裡不准再放欄：從放行清單移掉，遞迴自然就到底了
+    const innerAllow = allow.filter(t => t !== 'columns')
+    const cols = raw.columns.slice(0, MAX_COLUMNS).map((c, ci) => {
+      const src = c && typeof c === 'object' && !Array.isArray(c) ? c : {}
+      const list = Array.isArray(src.blocks) ? src.blocks : []
+      const blocks = []
+      for (let i = 0; i < list.length && budget.left > 0; i++) {
+        // 索引帶上欄的位置，兩欄的第一塊才不會都補成同一個 id
+        const b = normalizeBlock(list[i], `${index}-${ci}-${i}`, innerAllow, budget)
+        if (b) blocks.push(b)
+      }
+      return {
+        id: typeof src.id === 'string' && src.id ? src.id : `col-${index}-${ci}`,
+        span: oneOf(toInt(src.span), SPANS, DEFAULT_COLUMN_SPAN),
+        blocks,
+      }
+    })
+    // 少於下限就補空欄。一欄的「欄容器」沒有意義，而店主可能正在編排中途
+    while (cols.length < MIN_COLUMNS) {
+      cols.push({ id: `col-${index}-${cols.length}`, span: DEFAULT_COLUMN_SPAN, blocks: [] })
+    }
+    return { id, type, columns: cols }
+  }
+
+  budget.left -= 1
   // span 對每種區塊都一樣，所以在這裡補而不是散在九個 NORMALIZERS 裡。
   // 舊資料沒有這個欄位 → 落到 DEFAULT_SPAN=12 → 與加這個欄位之前的全寬行為相同。
   const span = oneOf(toInt(raw.span), SPANS, DEFAULT_SPAN)
@@ -199,8 +259,10 @@ export function normalizeContent(raw, { allow = BLOCK_TYPES } = {}) {
   if (typeof raw !== 'object' || Array.isArray(raw)) return null
   const list = Array.isArray(raw.blocks) ? raw.blocks : []
   const blocks = []
-  for (let i = 0; i < list.length && blocks.length < MAX_BLOCKS; i++) {
-    const block = normalizeBlock(list[i], i, allow)
+  // 巢狀之後「幾個區塊」要算總數，否則 60 個欄容器各塞 60 個子塊就爆了
+  const budget = { left: MAX_BLOCKS }
+  for (let i = 0; i < list.length && budget.left > 0; i++) {
+    const block = normalizeBlock(list[i], i, allow, budget)
     if (block) blocks.push(block)
   }
   return { version: CONTENT_VERSION, blocks }
@@ -245,7 +307,9 @@ const BLOCK_DEFAULTS = {
 }
 
 export function createBlock(type, span = DEFAULT_SPAN) {
-  if (!ALL_BLOCK_TYPES.includes(type)) return null
+  // 欄容器有自己的建構子（createColumns）：它沒有 span，也沒有 BLOCK_DEFAULTS 可以複製。
+  // 少了這一行，createBlock('columns') 會在 structuredCloneish(undefined) 丟例外。
+  if (type === 'columns' || !ALL_BLOCK_TYPES.includes(type)) return null
   return {
     id: makeId(type),
     type,
@@ -285,6 +349,149 @@ export function removeBlock(blocks, index) {
 export function replaceBlock(blocks, index, next) {
   if (!Array.isArray(blocks) || !blocks[index]) return blocks
   return blocks.map((b, i) => (i === index ? next : b))
+}
+
+// ── 路徑版編輯操作 ────────────────────────────────
+// path 只有兩種形狀：
+//   [i]        頂層第 i 塊
+//   [i, c, j]  頂層第 i 塊（欄容器）的第 c 欄的第 j 塊
+// 巢狀只有一層，所以不需要通用的樹走訪 —— 那會換來一堆用不到的分支。
+//
+// 全部回新陣列。路徑非法一律回**原陣列本身**（不是複本），
+// 呼叫端可以用 === 判斷「什麼都沒發生」。
+
+function columnOf(blocks, path) {
+  const [i, c] = path
+  const parent = blocks?.[i]
+  if (!parent || parent.type !== 'columns') return null
+  const col = parent.columns?.[c]
+  return col ?? null
+}
+
+export function getBlockAt(blocks, path) {
+  if (!Array.isArray(blocks) || !Array.isArray(path)) return null
+  if (path.length === 1) return blocks[path[0]] ?? null
+  if (path.length === 3) return columnOf(blocks, path)?.blocks?.[path[2]] ?? null
+  return null
+}
+
+// 對某一欄的 blocks 做一次替換，回新的頂層陣列
+function withColumnBlocks(blocks, i, c, fn) {
+  const parent = blocks[i]
+  const col = parent?.columns?.[c]
+  if (!col) return blocks
+  const nextBlocks = fn(col.blocks)
+  if (nextBlocks === col.blocks) return blocks
+  const columns = parent.columns.map((x, ci) => (ci === c ? { ...x, blocks: nextBlocks } : x))
+  return blocks.map((b, bi) => (bi === i ? { ...parent, columns } : b))
+}
+
+export function insertBlockAt(blocks, path, block) {
+  if (!Array.isArray(blocks) || !Array.isArray(path) || !block) return blocks
+  if (path.length === 1) {
+    const at = Math.max(0, Math.min(path[0], blocks.length))
+    const out = blocks.slice()
+    out.splice(at, 0, block)
+    return out
+  }
+  if (path.length === 3) {
+    return withColumnBlocks(blocks, path[0], path[1], list => {
+      const at = Math.max(0, Math.min(path[2], list.length))
+      const out = list.slice()
+      out.splice(at, 0, block)
+      return out
+    })
+  }
+  return blocks
+}
+
+export function removeBlockAt(blocks, path) {
+  if (getBlockAt(blocks, path) == null) return blocks
+  if (path.length === 1) return blocks.filter((_, i) => i !== path[0])
+  return withColumnBlocks(blocks, path[0], path[1], list => list.filter((_, j) => j !== path[2]))
+}
+
+export function replaceBlockAt(blocks, path, next) {
+  if (getBlockAt(blocks, path) == null) return blocks
+  if (path.length === 1) return blocks.map((b, i) => (i === path[0] ? next : b))
+  return withColumnBlocks(blocks, path[0], path[1], list => list.map((b, j) => (j === path[2] ? next : b)))
+}
+
+export function duplicateBlockAt(blocks, path) {
+  const src = getBlockAt(blocks, path)
+  if (!src) return blocks
+  const copy = { ...structuredCloneish(src), id: makeId(src.type || 'block') }
+  // 欄容器的複本要連子區塊的 id 都換掉，否則兩份共用同一組 id，選取與拖拉會認錯人
+  if (copy.type === 'columns') {
+    copy.columns = copy.columns.map(c => ({
+      ...c,
+      id: makeId('col'),
+      blocks: c.blocks.map(b => ({ ...b, id: makeId(b.type || 'block') })),
+    }))
+  }
+  const at = path.slice()
+  at[at.length - 1] += 1
+  return insertBlockAt(blocks, at, copy)
+}
+
+export function moveBlockAt(blocks, path, dir) {
+  if (!Array.isArray(blocks) || !Array.isArray(path)) return blocks
+  const at = path[path.length - 1]
+  const to = at + dir
+  if (to < 0) return blocks
+  if (path.length === 1) {
+    if (to >= blocks.length) return blocks
+    return moveBlock(blocks, at, dir)
+  }
+  const col = columnOf(blocks, path)
+  if (!col || to >= col.blocks.length) return blocks
+  return withColumnBlocks(blocks, path[0], path[1], list => moveBlock(list, at, dir))
+}
+
+export function moveBlockTo(blocks, fromPath, toPath) {
+  const src = getBlockAt(blocks, fromPath)
+  if (!src || !Array.isArray(toPath)) return blocks
+  const removed = removeBlockAt(blocks, fromPath)
+  if (removed === blocks) return blocks
+  // 移除來源後，同一個容器內位於來源之後的插入點要往回退一格
+  const to = toPath.slice()
+  const sameContainer = fromPath.length === toPath.length &&
+    fromPath.slice(0, -1).every((v, i) => v === toPath[i])
+  if (sameContainer && fromPath[fromPath.length - 1] < to[to.length - 1]) {
+    to[to.length - 1] -= 1
+  }
+  // 從頂層搬走一塊會讓後面的頂層索引往前一格，巢狀路徑的第一段也要跟著調
+  if (fromPath.length === 1 && to.length === 3 && fromPath[0] < to[0]) to[0] -= 1
+  const out = insertBlockAt(removed, to, src)
+  return out === removed ? blocks : out
+}
+
+export function createColumns(count = MIN_COLUMNS) {
+  const n = Math.max(MIN_COLUMNS, Math.min(MAX_COLUMNS, toInt(count) ?? MIN_COLUMNS))
+  const spans = n === 3 ? [4, 4, 4] : [6, 6]
+  return {
+    id: makeId('columns'),
+    type: 'columns',
+    columns: spans.map(span => ({ id: makeId('col'), span, blocks: [] })),
+  }
+}
+
+/**
+ * 刪掉一欄。裡面的區塊搬到前一欄（沒有前一欄就搬到後一欄）——
+ * 靜靜刪掉店主寫過的內容是最不該做的事。
+ * 剩下的欄數會低於下限時，整個欄容器不動（呼叫端該改成刪整塊）。
+ */
+export function removeColumnAt(blocks, columnsIndex, columnIndex) {
+  const parent = blocks?.[columnsIndex]
+  if (!parent || parent.type !== 'columns') return blocks
+  const cols = parent.columns
+  if (!cols?.[columnIndex] || cols.length <= 1) return blocks
+  const survivorIndex = columnIndex > 0 ? columnIndex - 1 : 1
+  const moved = cols[columnIndex].blocks
+  const next = cols
+    .map((c, i) => (i === survivorIndex ? { ...c, blocks: [...c.blocks, ...moved] } : c))
+    .filter((_, i) => i !== columnIndex)
+  return blocks.map((b, i) => (i === columnsIndex ? { ...parent, columns: next } : b))
 }
 
 // ── 起始模板 ──────────────────────────────
@@ -328,27 +535,29 @@ function seedBlocks(seeds) {
 }
 
 // ── 商品頁範本 ────────────────────────────────
+// 商品頁範本的起點：左欄一根長圖、右欄一疊購買動線。
 // 忠實重建目前寫死的商品頁版面（shop/.../ProductDetail.jsx）：
 // 桌機左右各半，圖庫在左、購買動線在右。手機一律堆疊（span 在 900px 以下失效）。
+//
+// 改成欄容器之前這裡是九塊各佔一半的扁平區塊，畫出來是鋸齒
+// （格線逐列填，圖庫很高所以第三塊掉到它下面而不是接在標題底下）。
 //
 // 現況 .detail-wrap 是 1.08fr / 1fr，十二欄的 6/6 會讓左欄窄約 4%。
 // 只有主動選擇編排的店主會看到這個差異，而他們正在改版面。
 
-const PRODUCT_TEMPLATE_SEEDS = [
-  { type: 'product_gallery', span: 6 },
-  { type: 'product_title', span: 6 },
-  { type: 'product_price', span: 6 },
-  { type: 'product_desc', span: 6 },
-  { type: 'product_options', span: 6 },
-  { type: 'product_status', span: 6 },
-  { type: 'product_qty', span: 6 },
-  { type: 'product_note', span: 6 },
-  { type: 'product_cta', span: 6 },
+const PRODUCT_TEMPLATE_LEFT = ['product_gallery']
+const PRODUCT_TEMPLATE_RIGHT = [
+  'product_title', 'product_price', 'product_desc', 'product_options',
+  'product_status', 'product_qty', 'product_note', 'product_cta',
 ]
 
 /** 店主第一次進商品頁編排器時的起點。 */
 export function buildProductTemplate() {
-  return { version: CONTENT_VERSION, blocks: seedBlocks(PRODUCT_TEMPLATE_SEEDS) }
+  // createBlock 的預設 span 是 12：欄裡的子區塊本來就該吃滿自己那一欄
+  const cols = createColumns(2)
+  cols.columns[0].blocks = PRODUCT_TEMPLATE_LEFT.map(t => createBlock(t))
+  cols.columns[1].blocks = PRODUCT_TEMPLATE_RIGHT.map(t => createBlock(t))
+  return { version: CONTENT_VERSION, blocks: [cols] }
 }
 
 /**
