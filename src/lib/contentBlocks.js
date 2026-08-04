@@ -351,6 +351,149 @@ export function replaceBlock(blocks, index, next) {
   return blocks.map((b, i) => (i === index ? next : b))
 }
 
+// ── 路徑版編輯操作 ────────────────────────────────
+// path 只有兩種形狀：
+//   [i]        頂層第 i 塊
+//   [i, c, j]  頂層第 i 塊（欄容器）的第 c 欄的第 j 塊
+// 巢狀只有一層，所以不需要通用的樹走訪 —— 那會換來一堆用不到的分支。
+//
+// 全部回新陣列。路徑非法一律回**原陣列本身**（不是複本），
+// 呼叫端可以用 === 判斷「什麼都沒發生」。
+
+function columnOf(blocks, path) {
+  const [i, c] = path
+  const parent = blocks?.[i]
+  if (!parent || parent.type !== 'columns') return null
+  const col = parent.columns?.[c]
+  return col ?? null
+}
+
+export function getBlockAt(blocks, path) {
+  if (!Array.isArray(blocks) || !Array.isArray(path)) return null
+  if (path.length === 1) return blocks[path[0]] ?? null
+  if (path.length === 3) return columnOf(blocks, path)?.blocks?.[path[2]] ?? null
+  return null
+}
+
+// 對某一欄的 blocks 做一次替換，回新的頂層陣列
+function withColumnBlocks(blocks, i, c, fn) {
+  const parent = blocks[i]
+  const col = parent?.columns?.[c]
+  if (!col) return blocks
+  const nextBlocks = fn(col.blocks)
+  if (nextBlocks === col.blocks) return blocks
+  const columns = parent.columns.map((x, ci) => (ci === c ? { ...x, blocks: nextBlocks } : x))
+  return blocks.map((b, bi) => (bi === i ? { ...parent, columns } : b))
+}
+
+export function insertBlockAt(blocks, path, block) {
+  if (!Array.isArray(blocks) || !Array.isArray(path) || !block) return blocks
+  if (path.length === 1) {
+    const at = Math.max(0, Math.min(path[0], blocks.length))
+    const out = blocks.slice()
+    out.splice(at, 0, block)
+    return out
+  }
+  if (path.length === 3) {
+    return withColumnBlocks(blocks, path[0], path[1], list => {
+      const at = Math.max(0, Math.min(path[2], list.length))
+      const out = list.slice()
+      out.splice(at, 0, block)
+      return out
+    })
+  }
+  return blocks
+}
+
+export function removeBlockAt(blocks, path) {
+  if (getBlockAt(blocks, path) == null) return blocks
+  if (path.length === 1) return blocks.filter((_, i) => i !== path[0])
+  return withColumnBlocks(blocks, path[0], path[1], list => list.filter((_, j) => j !== path[2]))
+}
+
+export function replaceBlockAt(blocks, path, next) {
+  if (getBlockAt(blocks, path) == null) return blocks
+  if (path.length === 1) return blocks.map((b, i) => (i === path[0] ? next : b))
+  return withColumnBlocks(blocks, path[0], path[1], list => list.map((b, j) => (j === path[2] ? next : b)))
+}
+
+export function duplicateBlockAt(blocks, path) {
+  const src = getBlockAt(blocks, path)
+  if (!src) return blocks
+  const copy = { ...structuredCloneish(src), id: makeId(src.type || 'block') }
+  // 欄容器的複本要連子區塊的 id 都換掉，否則兩份共用同一組 id，選取與拖拉會認錯人
+  if (copy.type === 'columns') {
+    copy.columns = copy.columns.map(c => ({
+      ...c,
+      id: makeId('col'),
+      blocks: c.blocks.map(b => ({ ...b, id: makeId(b.type || 'block') })),
+    }))
+  }
+  const at = path.slice()
+  at[at.length - 1] += 1
+  return insertBlockAt(blocks, at, copy)
+}
+
+export function moveBlockAt(blocks, path, dir) {
+  if (!Array.isArray(blocks) || !Array.isArray(path)) return blocks
+  const at = path[path.length - 1]
+  const to = at + dir
+  if (to < 0) return blocks
+  if (path.length === 1) {
+    if (to >= blocks.length) return blocks
+    return moveBlock(blocks, at, dir)
+  }
+  const col = columnOf(blocks, path)
+  if (!col || to >= col.blocks.length) return blocks
+  return withColumnBlocks(blocks, path[0], path[1], list => moveBlock(list, at, dir))
+}
+
+export function moveBlockTo(blocks, fromPath, toPath) {
+  const src = getBlockAt(blocks, fromPath)
+  if (!src || !Array.isArray(toPath)) return blocks
+  const removed = removeBlockAt(blocks, fromPath)
+  if (removed === blocks) return blocks
+  // 移除來源後，同一個容器內位於來源之後的插入點要往回退一格
+  const to = toPath.slice()
+  const sameContainer = fromPath.length === toPath.length &&
+    fromPath.slice(0, -1).every((v, i) => v === toPath[i])
+  if (sameContainer && fromPath[fromPath.length - 1] < to[to.length - 1]) {
+    to[to.length - 1] -= 1
+  }
+  // 從頂層搬走一塊會讓後面的頂層索引往前一格，巢狀路徑的第一段也要跟著調
+  if (fromPath.length === 1 && to.length === 3 && fromPath[0] < to[0]) to[0] -= 1
+  const out = insertBlockAt(removed, to, src)
+  return out === removed ? blocks : out
+}
+
+export function createColumns(count = MIN_COLUMNS) {
+  const n = Math.max(MIN_COLUMNS, Math.min(MAX_COLUMNS, toInt(count) ?? MIN_COLUMNS))
+  const spans = n === 3 ? [4, 4, 4] : [6, 6]
+  return {
+    id: makeId('columns'),
+    type: 'columns',
+    columns: spans.map(span => ({ id: makeId('col'), span, blocks: [] })),
+  }
+}
+
+/**
+ * 刪掉一欄。裡面的區塊搬到前一欄（沒有前一欄就搬到後一欄）——
+ * 靜靜刪掉店主寫過的內容是最不該做的事。
+ * 剩下的欄數會低於下限時，整個欄容器不動（呼叫端該改成刪整塊）。
+ */
+export function removeColumnAt(blocks, columnsIndex, columnIndex) {
+  const parent = blocks?.[columnsIndex]
+  if (!parent || parent.type !== 'columns') return blocks
+  const cols = parent.columns
+  if (!cols?.[columnIndex] || cols.length <= 1) return blocks
+  const survivorIndex = columnIndex > 0 ? columnIndex - 1 : 1
+  const moved = cols[columnIndex].blocks
+  const next = cols
+    .map((c, i) => (i === survivorIndex ? { ...c, blocks: [...c.blocks, ...moved] } : c))
+    .filter((_, i) => i !== columnIndex)
+  return blocks.map((b, i) => (i === columnsIndex ? { ...parent, columns: next } : b))
+}
+
 // ── 起始模板 ──────────────────────────────
 // 新店首次進來是空白畫布會不知所措，給兩套一鍵填入的起點，填完店主自己改內容。
 

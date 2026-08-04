@@ -4,6 +4,8 @@ import {
   createBlock, normalizeContent, normalizeProductContent, isEmptyContent, blockCount,
   moveBlock, duplicateBlock, removeBlock, replaceBlock,
   TEMPLATES, buildTemplate, safeHref, splitParagraphs,
+  getBlockAt, insertBlockAt, removeBlockAt, replaceBlockAt,
+  duplicateBlockAt, moveBlockAt, moveBlockTo, createColumns, removeColumnAt,
 } from './contentBlocks'
 
 // 這份測試的重點不是「好資料能過」，而是「壞資料不能讓商城炸掉」。
@@ -353,5 +355,119 @@ describe('欄容器 columns', () => {
     expect(out.blocks.map(b => [b.type, b.span])).toEqual([
       ['product_gallery', 6], ['product_title', 6],
     ])
+  })
+})
+
+describe('路徑版編輯操作', () => {
+  const flat = () => ([
+    { id: 'a', type: 'text', span: 12, title: 'A', body: '' },
+    { id: 'cols', type: 'columns', columns: [
+      { id: 'c0', span: 6, blocks: [{ id: 'x', type: 'text', span: 12, title: 'X', body: '' }] },
+      { id: 'c1', span: 6, blocks: [{ id: 'y', type: 'text', span: 12, title: 'Y', body: '' }] },
+    ] },
+    { id: 'b', type: 'text', span: 12, title: 'B', body: '' },
+  ])
+
+  it('getBlockAt 取得頂層與巢狀區塊', () => {
+    expect(getBlockAt(flat(), [0]).id).toBe('a')
+    expect(getBlockAt(flat(), [1, 1, 0]).id).toBe('y')
+    expect(getBlockAt(flat(), [9])).toBe(null)
+    expect(getBlockAt(flat(), [1, 5, 0])).toBe(null)
+  })
+
+  it('insertBlockAt 插進指定位置', () => {
+    const nb = { id: 'n', type: 'text', span: 12, title: 'N', body: '' }
+    expect(insertBlockAt(flat(), [0], nb).map(b => b.id)).toEqual(['n', 'a', 'cols', 'b'])
+    expect(insertBlockAt(flat(), [1, 0, 0], nb)[1].columns[0].blocks.map(b => b.id))
+      .toEqual(['n', 'x'])
+  })
+
+  it('removeBlockAt 移除頂層與巢狀', () => {
+    expect(removeBlockAt(flat(), [0]).map(b => b.id)).toEqual(['cols', 'b'])
+    expect(removeBlockAt(flat(), [1, 0, 0])[1].columns[0].blocks).toEqual([])
+  })
+
+  it('replaceBlockAt 換掉指定位置', () => {
+    const nb = { id: 'n', type: 'text', span: 12, title: 'N', body: '' }
+    expect(replaceBlockAt(flat(), [1, 1, 0], nb)[1].columns[1].blocks[0].id).toBe('n')
+  })
+
+  it('duplicateBlockAt 複製並給新 id', () => {
+    const out = duplicateBlockAt(flat(), [1, 0, 0])
+    const list = out[1].columns[0].blocks
+    expect(list).toHaveLength(2)
+    expect(list[1].id).not.toBe(list[0].id)
+    expect(list[1].title).toBe('X')
+  })
+
+  it('複製欄容器時連子區塊的 id 都換掉', () => {
+    const out = duplicateBlockAt(flat(), [1])
+    const orig = out[1]
+    const copy = out[2]
+    expect(copy.type).toBe('columns')
+    expect(copy.id).not.toBe(orig.id)
+    expect(copy.columns.map(c => c.id)).not.toEqual(orig.columns.map(c => c.id))
+    expect(copy.columns[0].blocks[0].id).not.toBe(orig.columns[0].blocks[0].id)
+    expect(copy.columns[0].blocks[0].title).toBe('X')
+  })
+
+  it('moveBlockAt 只在自己的容器內移動', () => {
+    const withTwo = insertBlockAt(flat(), [1, 0, 1], { id: 'x2', type: 'text', span: 12, title: '', body: '' })
+    expect(moveBlockAt(withTwo, [1, 0, 0], 1)[1].columns[0].blocks.map(b => b.id)).toEqual(['x2', 'x'])
+    // 到邊界就不動，不會跳到別的容器
+    expect(moveBlockAt(flat(), [1, 0, 0], -1)[1].columns[0].blocks.map(b => b.id)).toEqual(['x'])
+  })
+
+  it('moveBlockTo 可以跨容器', () => {
+    const out = moveBlockTo(flat(), [0], [1, 1, 0])       // 頂層 a → 第二欄最前面
+    expect(out.map(b => b.id)).toEqual(['cols', 'b'])
+    expect(out[0].columns[1].blocks.map(b => b.id)).toEqual(['a', 'y'])
+  })
+
+  it('moveBlockTo 從欄裡搬到頂層', () => {
+    const out = moveBlockTo(flat(), [1, 0, 0], [0])
+    expect(out.map(b => b.id)).toEqual(['x', 'a', 'cols', 'b'])
+    expect(out[2].columns[0].blocks).toEqual([])
+  })
+
+  it('moveBlockTo 在同一個容器內往後搬時不會多退一格', () => {
+    const out = moveBlockTo(flat(), [0], [2])   // a 搬到 cols 後面
+    expect(out.map(b => b.id)).toEqual(['cols', 'a', 'b'])
+  })
+
+  it('非法路徑一律回原陣列', () => {
+    const src = flat()
+    expect(removeBlockAt(src, [99])).toBe(src)
+    expect(replaceBlockAt(src, [1, 9, 0], {})).toBe(src)
+    expect(moveBlockTo(src, [9], [0])).toBe(src)
+  })
+
+  it('createColumns 給合法的預設形狀', () => {
+    const c2 = createColumns(2)
+    expect(c2.type).toBe('columns')
+    expect(c2.columns.map(c => c.span)).toEqual([6, 6])
+    expect(createColumns(3).columns.map(c => c.span)).toEqual([4, 4, 4])
+  })
+
+  it('createColumns 產出的欄容器原封不動通得過正規化', () => {
+    const content = { version: CONTENT_VERSION, blocks: [createColumns(3)] }
+    expect(normalizeProductContent(content)).toEqual(content)
+  })
+
+  it('removeColumnAt 把內容搬到相鄰欄，不刪掉店主的東西', () => {
+    const out = removeColumnAt(flat(), 1, 1)       // 刪第二欄
+    expect(out[1].columns).toHaveLength(1)
+    expect(out[1].columns[0].blocks.map(b => b.id)).toEqual(['x', 'y'])
+  })
+
+  it('removeColumnAt 刪第一欄時內容往後搬', () => {
+    const out = removeColumnAt(flat(), 1, 0)
+    expect(out[1].columns[0].blocks.map(b => b.id)).toEqual(['y', 'x'])
+  })
+
+  it('舊的扁平 API 行為不變', () => {
+    const src = flat()
+    expect(removeBlock(src, 0).map(b => b.id)).toEqual(['cols', 'b'])
+    expect(moveBlock(src, 0, 1).map(b => b.id)).toEqual(['cols', 'a', 'b'])
   })
 })
