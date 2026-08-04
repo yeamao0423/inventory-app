@@ -7,6 +7,7 @@ import Reveal from '../../Reveal'
 import { getActivePrice } from '../../../lib/salePrice'
 import { trackPixel } from '../../../lib/metaPixel'
 import { useBuyBar } from '../../../lib/useBuyBar'
+import { repImageFor, visibleImages } from '../../../lib/variantImages'
 
 // 資料由 server component（page.jsx）以 props 帶入，這裡只負責互動。
 export default function ProductDetail({ sp, variants, customOptions, optTypes, productTags }) {
@@ -40,8 +41,7 @@ export default function ProductDetail({ sp, variants, customOptions, optTypes, p
   const zh = lang === 'zh'
 
   // 依目前選到的規格過濾 gallery；若過濾後為空（該規格無專屬圖且無共用圖）則退回全部，避免開天窗
-  const matched = sortedImages.filter(img => imageMatches(img, selectedOptions))
-  const visibleImages = matched.length ? matched : sortedImages
+  const visible = visibleImages(sortedImages, selectedOptions)
 
   // Meta Pixel：瀏覽商品事件（每次進入詳情頁發一次）
   useEffect(() => {
@@ -143,7 +143,7 @@ export default function ProductDetail({ sp, variants, customOptions, optTypes, p
       <div className="detail-wrap">
         {/* Image gallery（規格切換時 remount，current 歸 0，不會停在已消失的圖）*/}
         <Reveal>
-          <ImageGallery key={visibleImages.map(i => i.id).join('-')} images={visibleImages} name={name} />
+          <ImageGallery key={visible.map(i => i.id).join('-')} images={visible} name={name} />
         </Reveal>
 
         {/* Info */}
@@ -308,26 +308,6 @@ export default function ProductDetail({ sp, variants, customOptions, optTypes, p
       </div>
     </div>
   )
-}
-
-// 規格對應圖片：tag_filter={"<typeId>":[valueId,...]}；null=共用圖。
-// 規則：每個有設限的維度，目前選到的值要落在允許清單內才顯示。
-function imageMatches(img, selectedOptions) {
-  const tf = img.tag_filter
-  if (!tf) return true
-  return Object.entries(tf).every(([typeId, vals]) => {
-    if (!Array.isArray(vals) || vals.length === 0) return true
-    const sel = selectedOptions[typeId]
-    return sel == null || vals.map(Number).includes(Number(sel))
-  })
-}
-
-// 某規格值的代表圖：images 已依 sort_order 排序，取第一張綁到該值的圖
-function repImageFor(images, typeId, valueId) {
-  return images.find(img => {
-    const allowed = img.tag_filter?.[String(typeId)]
-    return Array.isArray(allowed) && allowed.map(Number).includes(Number(valueId))
-  }) || null
 }
 
 function ImageGallery({ images, name }) {

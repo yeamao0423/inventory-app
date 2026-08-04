@@ -1,7 +1,8 @@
 'use client'
 // 規格選擇。選了什麼會同時牽動價格、庫存、能不能買、圖庫顯示哪幾張圖 ——
 // 那些連動全部住在 ProductStateProvider，這裡只負責畫按鈕與回報點了哪一個。
-import { useProductState, repImageFor } from '../ProductStateProvider'
+import { useProductState } from '../ProductStateProvider'
+import { repImageFor } from '../../../../lib/variantImages'
 
 export default function ProductOptionsBlock({ block }) {
   const {
