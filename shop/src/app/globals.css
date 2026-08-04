@@ -862,6 +862,11 @@ input, textarea, select { font-family: inherit; }
 @media (hover: hover) {
   .bundle-card:not(.is-off):hover .bundle-card-media img { transform: scale(1.035); }
 }
+/* 規格切換時換圖：淡入 120ms。不做交叉淡出或滑動 ——
+   這頁一次顯示好幾張卡，動得太多會搶掉「選規格」這個主要動作的注意力。 */
+.bundle-card-img { animation: bundleImgIn .12s var(--ease-out); }
+@keyframes bundleImgIn { from { opacity: .35 } to { opacity: 1 } }
+@media (prefers-reduced-motion: reduce) { .bundle-card-img { animation: none } }
 .bundle-card-flag {
   position: absolute; left: 10px; top: 10px;
   font-size: 11.5px; font-weight: 600; padding: 4px 11px; border-radius: var(--r-pill);

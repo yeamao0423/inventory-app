@@ -9,6 +9,7 @@ import { evaluateSelection } from '../../../lib/bundleCart'
 import { trackPixel } from '../../../lib/metaPixel'
 import { useCountUp } from '../../../lib/useCountUp'
 import { useBuyBar } from '../../../lib/useBuyBar'
+import { repImageFor, visibleImages } from '../../../lib/variantImages'
 
 // 組合商品落地頁。資料由 server component 以 props 帶入，這裡只負責互動。
 //
@@ -243,7 +244,8 @@ export default function BundleDetail({ bundle, items, missingProductIds = [], op
                 className={`bundle-card${off ? ' is-off' : ''}`}
               >
                 <Link href={productHref} className="bundle-card-media">
-                  {r.image && <img src={r.image} alt={r.name} loading="lazy" />}
+                  {/* key 綁圖片網址：換規格換圖時重新掛載，才播得出淡入 */}
+                  {r.image && <img key={r.image} src={r.image} alt={r.name} loading="lazy" className="bundle-card-img" />}
                   {r.unavailable
                     ? <span className="bundle-card-flag">
                         {r.collectionExpired ? (zh ? '收單已截止' : 'Closed') : (zh ? '已售完' : 'Sold out')}
@@ -449,6 +451,8 @@ function resolveItem(item, optTypes, options, lang) {
   }).filter(Boolean).join(' / ')
 
   const images = [...(p.product_images || [])].sort((a, b) => a.sort_order - b.sort_order)
+  // 選了什麼規格就顯示對應的圖。與商品詳情頁同一支函式，行為一致。
+  const shown = visibleImages(images, options)
 
   return {
     activeTypes,
@@ -460,7 +464,8 @@ function resolveItem(item, optTypes, options, lang) {
     original: sale.original,
     onSale: sale.onSale,
     variantLabel,
-    image: images[0]?.url || null,
+    image: shown[0]?.url || null,
+    images,
     name: lang === 'en' && sp.name_en ? sp.name_en : p.name,
   }
 }
