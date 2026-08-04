@@ -235,8 +235,12 @@ export default function InboxPage() {
         </div>
         {canReply && (
           <button className="btn" onClick={togglePush} disabled={busy || !push.supported}
+            title={push.deviceSupported && !push.configured
+              ? '部署環境缺少 VITE_VAPID_PUBLIC_KEY，不是裝置的問題' : undefined}
             style={{ width: 'auto', padding: '9px 16px', fontSize: 13 }}>
-            {!push.supported ? '此裝置不支援推播' : push.subscribed ? '關閉推播' : '開啟推播通知'}
+            {!push.deviceSupported ? '此裝置不支援推播'
+              : !push.configured ? '推播尚未設定'
+              : push.subscribed ? '關閉推播' : '開啟推播通知'}
           </button>
         )}
       </div>

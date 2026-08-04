@@ -27,22 +27,41 @@ function bufToBase64Url(buf) {
   return window.btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
+/**
+ * 裝置能力與設定完整性分開判斷。
+ *
+ * 兩者混成一個布林值害過人：線上漏設 VITE_VAPID_PUBLIC_KEY 時，收件匣顯示
+ * 「此裝置不支援推播」，看起來像手機或「加入主畫面」的問題，實際上是部署設定漏了。
+ * 純函式、不碰 window，方便測。
+ */
+export function evaluateSupport({ hasServiceWorker, hasPushManager, hasNotification, hasVapidKey }) {
+  const device = !!(hasServiceWorker && hasPushManager && hasNotification)
+  const configured = !!hasVapidKey
+  return { device, configured, supported: device && configured }
+}
+
 export function pushState() {
-  const supported = typeof window !== 'undefined'
-    && 'serviceWorker' in navigator
-    && 'PushManager' in window
-    && 'Notification' in window
-    && !!VAPID_PUBLIC_KEY
+  const hasWindow = typeof window !== 'undefined'
+  const { device, configured, supported } = evaluateSupport({
+    hasServiceWorker: hasWindow && 'serviceWorker' in navigator,
+    hasPushManager: hasWindow && 'PushManager' in window,
+    hasNotification: hasWindow && 'Notification' in window,
+    hasVapidKey: !!VAPID_PUBLIC_KEY,
+  })
   return {
     supported,
-    permission: supported ? Notification.permission : 'denied',
+    deviceSupported: device,
+    configured,
+    // 權限問得到與否只看裝置，跟有沒有設 VAPID 公鑰無關
+    permission: device ? Notification.permission : 'denied',
     subscribed: supported && localStorage.getItem(FLAG_KEY) === '1',
   }
 }
 
 export async function subscribePush({ storeId, userId }) {
   const state = pushState()
-  if (!state.supported) throw new Error('這台裝置或瀏覽器不支援推播（iOS 需先加入主畫面）')
+  if (!state.deviceSupported) throw new Error('這台裝置或瀏覽器不支援推播（iOS 需先加入主畫面）')
+  if (!state.configured) throw new Error('推播尚未設定：部署環境缺少 VITE_VAPID_PUBLIC_KEY')
   if (!storeId || !userId) throw new Error('缺少店家或使用者資訊')
 
   const permission = await Notification.requestPermission()
