@@ -820,6 +820,17 @@ input, textarea, select { font-family: inherit; }
 .bundle-items-head { font-size: clamp(19px, 2.4vw, 24px); font-weight: 700; letter-spacing: -.015em; margin-bottom: 6px; }
 .bundle-items-sub { font-size: 13.5px; color: var(--text-3); line-height: 1.7; max-width: var(--measure); margin-bottom: 24px; }
 
+/* 缺貨摘要：說明性文字，不是警示框。加底色只會讓它跟旁邊的套裝價卡片打架。 */
+.bundle-sold-note {
+  font-size: 13.5px; line-height: 1.7; color: var(--text-2);
+  max-width: var(--measure); margin-top: 10px;
+}
+.bundle-sold-link {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font: inherit; color: var(--text); font-weight: 600;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+
 /* 欄數由件數決定（--cols 由 JSX 帶入），不會出現「格子比商品多」的空洞。
    4 件走 2×2 而不是 3+1，避免最後一列只剩孤零零一張。 */
 .bundle-grid {
@@ -852,6 +863,13 @@ input, textarea, select { font-family: inherit; }
 .bundle-card.is-off .bundle-card-media,
 .bundle-card.is-off .bundle-card-body { filter: grayscale(1); opacity: .5; }
 .bundle-card.is-off .bundle-card-media { transform: scale(.985); }
+/* 從缺貨摘要點過來時閃一下外框，告訴眼睛「就是這張」 */
+.bundle-card.is-flash { animation: cardFlash 1.1s var(--ease-out); }
+@keyframes cardFlash {
+  0%, 100% { box-shadow: 0 0 0 0 transparent }
+  20%      { box-shadow: 0 0 0 2px var(--brand, var(--text)) }
+}
+@media (prefers-reduced-motion: reduce) { .bundle-card.is-flash { animation: none } }
 
 .bundle-card-media {
   display: block; position: relative; width: 100%; aspect-ratio: 4 / 5;
