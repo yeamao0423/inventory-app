@@ -459,7 +459,11 @@ export default function InboxPage() {
           order={orderSheet}
           canEdit={can('pay')}
           onClose={() => setOrderSheet(null)}
-          onSaved={() => { fetchCustomer(active); setOrderSheet(null) }}
+          // 只刷新、不關閉：ConsumerOrderDetailSheet 有幾條路徑是「存完繼續編輯」
+          // （折讓失焦、登記收付款、刪除收付款紀錄都只呼叫 onSaved），
+          // 在這裡順手關掉會讓客服登記一筆收款就被踢出 sheet。
+          // 該關的路徑（save()、退還優惠券）元件自己會呼叫 onClose()。
+          onSaved={() => fetchCustomer(active)}
         />
       )}
 
