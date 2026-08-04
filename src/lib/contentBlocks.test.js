@@ -6,6 +6,7 @@ import {
   TEMPLATES, buildTemplate, safeHref, splitParagraphs,
   getBlockAt, insertBlockAt, removeBlockAt, replaceBlockAt,
   duplicateBlockAt, moveBlockAt, moveBlockTo, createColumns, removeColumnAt,
+  buildProductTemplate, mergeIntroIntoTemplate,
 } from './contentBlocks'
 
 // 這份測試的重點不是「好資料能過」，而是「壞資料不能讓商城炸掉」。
@@ -469,5 +470,40 @@ describe('路徑版編輯操作', () => {
     const src = flat()
     expect(removeBlock(src, 0).map(b => b.id)).toEqual(['cols', 'b'])
     expect(moveBlock(src, 0, 1).map(b => b.id)).toEqual(['cols', 'a', 'b'])
+  })
+})
+
+describe('buildProductTemplate — 左圖右資訊', () => {
+  it('回傳一個欄容器：左欄圖庫、右欄購買動線', () => {
+    const t = buildProductTemplate()
+    expect(t.blocks).toHaveLength(1)
+    const cols = t.blocks[0]
+    expect(cols.type).toBe('columns')
+    expect(cols.columns).toHaveLength(2)
+    expect(cols.columns[0].blocks.map(b => b.type)).toEqual(['product_gallery'])
+    expect(cols.columns[1].blocks.map(b => b.type)).toEqual([
+      'product_title', 'product_price', 'product_desc', 'product_options',
+      'product_status', 'product_qty', 'product_note', 'product_cta',
+    ])
+  })
+
+  it('產出的內容通得過正規化且不變形', () => {
+    const t = buildProductTemplate()
+    expect(normalizeProductContent(t)).toEqual(t)
+  })
+
+  it('每個區塊都有互不相同的 id', () => {
+    const t = buildProductTemplate()
+    const ids = t.blocks.flatMap(b => [b.id, ...b.columns.flatMap(c => [c.id, ...c.blocks.map(x => x.id)])])
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('mergeIntroIntoTemplate 把既有 intro 接在最後、各佔滿版', () => {
+    const merged = mergeIntroIntoTemplate(buildProductTemplate(), {
+      version: 1, blocks: [{ type: 'text', title: '購買須知', body: '內容' }],
+    })
+    expect(merged.blocks).toHaveLength(2)
+    expect(merged.blocks[1].type).toBe('text')
+    expect(merged.blocks[1].span).toBe(12)
   })
 })

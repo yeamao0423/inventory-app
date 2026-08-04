@@ -535,27 +535,29 @@ function seedBlocks(seeds) {
 }
 
 // ── 商品頁範本 ────────────────────────────────
+// 商品頁範本的起點：左欄一根長圖、右欄一疊購買動線。
 // 忠實重建目前寫死的商品頁版面（shop/.../ProductDetail.jsx）：
 // 桌機左右各半，圖庫在左、購買動線在右。手機一律堆疊（span 在 900px 以下失效）。
+//
+// 改成欄容器之前這裡是九塊各佔一半的扁平區塊，畫出來是鋸齒
+// （格線逐列填，圖庫很高所以第三塊掉到它下面而不是接在標題底下）。
 //
 // 現況 .detail-wrap 是 1.08fr / 1fr，十二欄的 6/6 會讓左欄窄約 4%。
 // 只有主動選擇編排的店主會看到這個差異，而他們正在改版面。
 
-const PRODUCT_TEMPLATE_SEEDS = [
-  { type: 'product_gallery', span: 6 },
-  { type: 'product_title', span: 6 },
-  { type: 'product_price', span: 6 },
-  { type: 'product_desc', span: 6 },
-  { type: 'product_options', span: 6 },
-  { type: 'product_status', span: 6 },
-  { type: 'product_qty', span: 6 },
-  { type: 'product_note', span: 6 },
-  { type: 'product_cta', span: 6 },
+const PRODUCT_TEMPLATE_LEFT = ['product_gallery']
+const PRODUCT_TEMPLATE_RIGHT = [
+  'product_title', 'product_price', 'product_desc', 'product_options',
+  'product_status', 'product_qty', 'product_note', 'product_cta',
 ]
 
 /** 店主第一次進商品頁編排器時的起點。 */
 export function buildProductTemplate() {
-  return { version: CONTENT_VERSION, blocks: seedBlocks(PRODUCT_TEMPLATE_SEEDS) }
+  // createBlock 的預設 span 是 12：欄裡的子區塊本來就該吃滿自己那一欄
+  const cols = createColumns(2)
+  cols.columns[0].blocks = PRODUCT_TEMPLATE_LEFT.map(t => createBlock(t))
+  cols.columns[1].blocks = PRODUCT_TEMPLATE_RIGHT.map(t => createBlock(t))
+  return { version: CONTENT_VERSION, blocks: [cols] }
 }
 
 /**
