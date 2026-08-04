@@ -6,6 +6,7 @@ import CustomSelect from '../components/CustomSelect'
 import ProcurementBatchTab, { CreateBatchSheet } from '../components/ProcurementBatchTab'
 import ListToolbar from '../components/ListToolbar'
 import { Pill } from '../components/MenuPopover'
+import Sheet from '../components/Sheet'
 
 export default function OrdersPage() {
   const { can, profile, storeId } = useAuth()
@@ -2700,20 +2701,5 @@ function ExportRevenueSheet({ onClose }) {
         </button>
       </div>
     </Sheet>
-  )
-}
-
-function Sheet({ title, onClose, children }) {
-  return (
-    <div className="sheet-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="sheet">
-        <div className="sheet-handle" />
-        <div className="row-sb" style={{marginBottom:20}}>
-          <div className="sheet-title" style={{margin:0}}>{title}</div>
-          <button onClick={onClose} style={{background:'none',border:'none',fontSize:22,cursor:'pointer',color:'var(--text-3)'}}>×</button>
-        </div>
-        {children}
-      </div>
-    </div>
   )
 }
