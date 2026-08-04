@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
-  BLOCK_TYPES, CONTENT_VERSION, IMAGE_RATIOS,
-  createBlock, normalizeContent, isEmptyContent, blockCount,
+  BLOCK_TYPES, ALL_BLOCK_TYPES, CONTENT_VERSION, IMAGE_RATIOS,
+  createBlock, normalizeContent, normalizeProductContent, isEmptyContent, blockCount,
   moveBlock, duplicateBlock, removeBlock, replaceBlock,
   TEMPLATES, buildTemplate, safeHref, splitParagraphs,
 } from './contentBlocks'
@@ -255,5 +255,103 @@ describe('splitParagraphs — body 允許換行但不解析 Markdown', () => {
 
   it('不解析 Markdown、不吃掉標記字元 —— 原樣留給渲染層逸出', () => {
     expect(splitParagraphs('**粗體** 與 <b>標籤</b>')).toEqual(['**粗體** 與 <b>標籤</b>'])
+  })
+})
+
+describe('欄容器 columns', () => {
+  const col = (span, blocks) => ({ span, blocks })
+  const wrap = (columns) => ({ version: 1, blocks: [{ type: 'columns', columns }] })
+
+  it('只有商品頁那組放行清單認得欄容器', () => {
+    expect(ALL_BLOCK_TYPES).toContain('columns')
+    expect(BLOCK_TYPES).not.toContain('columns')
+  })
+
+  it('正規化保留欄與子區塊，並補上 id', () => {
+    const out = normalizeProductContent(wrap([
+      col(6, [{ type: 'product_gallery' }]),
+      col(6, [{ type: 'product_title' }, { type: 'product_price' }]),
+    ]))
+    expect(out.blocks).toHaveLength(1)
+    const b = out.blocks[0]
+    expect(b.type).toBe('columns')
+    expect(b.id).toBeTruthy()
+    expect(b.columns).toHaveLength(2)
+    expect(b.columns[0].span).toBe(6)
+    expect(b.columns[0].id).toBeTruthy()
+    expect(b.columns[1].blocks.map(x => x.type)).toEqual(['product_title', 'product_price'])
+  })
+
+  it('欄容器沒有自己的 span（一律吃滿整列）', () => {
+    const b = normalizeProductContent(wrap([col(6, []), col(6, [])])).blocks[0]
+    expect(b.span).toBeUndefined()
+  })
+
+  it('欄裡再放欄會被丟棄', () => {
+    const b = normalizeProductContent(wrap([
+      col(6, [{ type: 'columns', columns: [col(6, []), col(6, [])] }, { type: 'text', title: 'ok' }]),
+      col(6, []),
+    ])).blocks[0]
+    expect(b.columns[0].blocks.map(x => x.type)).toEqual(['text'])
+  })
+
+  it('欄數少於 2 補到 2、多於 3 截到 3', () => {
+    expect(normalizeProductContent(wrap([col(12, [])])).blocks[0].columns).toHaveLength(2)
+    expect(normalizeProductContent(wrap([col(3, []), col(3, []), col(3, []), col(3, [])]))
+      .blocks[0].columns).toHaveLength(3)
+  })
+
+  it('壞掉的欄變成空欄，不丟例外', () => {
+    const b = normalizeProductContent({ version: 1, blocks: [
+      { type: 'columns', columns: [null, 'nope', { span: 6, blocks: 'x' }] },
+    ] }).blocks[0]
+    expect(b.columns).toHaveLength(3)
+    b.columns.forEach(c => expect(c.blocks).toEqual([]))
+  })
+
+  it('columns 不是陣列時整塊丟棄', () => {
+    expect(normalizeProductContent({ version: 1, blocks: [{ type: 'columns', columns: 'nope' }] }).blocks)
+      .toEqual([])
+  })
+
+  it('span 不在允許值內時退回 6', () => {
+    const b = normalizeProductContent(wrap([col(99, []), col('x', [])])).blocks[0]
+    expect(b.columns[0].span).toBe(6)
+    expect(b.columns[1].span).toBe(6)
+  })
+
+  it('首頁（預設放行清單）不接受欄容器', () => {
+    expect(normalizeContent(wrap([col(6, []), col(6, [])])).blocks).toEqual([])
+  })
+
+  it('巢狀總數受 MAX_BLOCKS 限制', () => {
+    const many = Array.from({ length: 40 }, () => ({ type: 'text', title: 't' }))
+    const out = normalizeProductContent({ version: 1, blocks: [
+      { type: 'columns', columns: [col(6, many), col(6, many)] },
+      { type: 'text', title: '最後' },
+    ] })
+    const count = out.blocks.reduce((n, b) =>
+      n + 1 + (b.columns ? b.columns.reduce((m, c) => m + c.blocks.length, 0) : 0), 0)
+    expect(count).toBeLessThanOrEqual(60)
+  })
+
+  it('同一個欄容器裡的子區塊不會撞 id', () => {
+    const b = normalizeProductContent(wrap([
+      col(6, [{ type: 'text', title: 'a' }]),
+      col(6, [{ type: 'text', title: 'b' }]),
+    ])).blocks[0]
+    expect(b.columns[0].blocks[0].id).not.toBe(b.columns[1].blocks[0].id)
+    expect(b.columns[0].id).not.toBe(b.columns[1].id)
+  })
+
+  it('舊的扁平內容正規化後與加這個功能之前相同（回歸）', () => {
+    const flat = { version: 1, blocks: [
+      { type: 'product_gallery', span: 6 },
+      { type: 'product_title', span: 6 },
+    ] }
+    const out = normalizeProductContent(flat)
+    expect(out.blocks.map(b => [b.type, b.span])).toEqual([
+      ['product_gallery', 6], ['product_title', 6],
+    ])
   })
 })

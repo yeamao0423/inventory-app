@@ -24,7 +24,32 @@ export const PRODUCT_BLOCK_TYPES = [
   'product_options', 'product_status', 'product_qty', 'product_note', 'product_cta',
 ]
 
-export const ALL_BLOCK_TYPES = [...BLOCK_TYPES, ...PRODUCT_BLOCK_TYPES]
+// 版面容器：把幾個區塊裝進同一欄，讓「左邊一根長圖、右邊一疊資訊」排得出來。
+//
+// 為什麼需要它：扁平的十二欄格線是逐列填的，新的一列從最高那格的下緣開始。
+// 圖庫很高、標題很矮 → 第三塊會掉到圖庫下面而不是接在標題底下，右欄整片空白。
+// 一維的「順序 + 寬度」畫不出二維的欄結構，這是模型問題不是 CSS 問題。
+//
+// 巢狀刻意只有一層。欄裡再放欄能表達的版面，商品頁一個都用不到，
+// 但會讓正規化、編輯操作與渲染各多一層遞迴的錯誤空間。
+//
+// 只進商品頁那一側的放行清單：首頁的 BlocksView 根本不吃 span，
+// 讓欄容器進得了 home_blocks 只會得到畫不出來的空殼。
+export const LAYOUT_BLOCK_TYPES = ['columns']
+
+export const MIN_COLUMNS = 2
+export const MAX_COLUMNS = 3
+export const DEFAULT_COLUMN_SPAN = 6
+
+// 常用比例。店主不必在腦中把十二欄換算成版面。
+export const COLUMN_PRESETS = [
+  { key: '6-6', label: '對半', spans: [6, 6] },
+  { key: '4-8', label: '左窄右寬', spans: [4, 8] },
+  { key: '8-4', label: '左寬右窄', spans: [8, 4] },
+  { key: '4-4-4', label: '三等分', spans: [4, 4, 4] },
+]
+
+export const ALL_BLOCK_TYPES = [...BLOCK_TYPES, ...PRODUCT_BLOCK_TYPES, ...LAYOUT_BLOCK_TYPES]
 
 export const BLOCK_LABELS = {
   hero: '主視覺',
@@ -40,6 +65,7 @@ export const BLOCK_LABELS = {
   product_qty: '數量',
   product_note: '客製備註',
   product_cta: '加入購物車',
+  columns: '欄容器',
 }
 
 // 十二欄格線的欄寬（.blk-grid，globals.css:650）。手機一律吃滿 12 欄，
@@ -174,11 +200,45 @@ const NORMALIZERS = {
 }
 
 // 單一區塊：型別不在放行清單就回 null（呼叫端丟掉），認識就補齊所有欄位。
-function normalizeBlock(raw, index, allow) {
+//
+// budget 是「還能收幾個區塊」的可變計數器，由 normalizeContent 開場配額。
+// 巢狀之後「幾個區塊」要算總數（容器自己也算一個），否則 60 個欄容器各塞 60 個子塊就爆了。
+// 扣款一律在確定要收下這一塊之後才做 —— 被丟掉的壞資料不該吃掉配額。
+function normalizeBlock(raw, index, allow, budget) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const type = raw.type
   if (typeof type !== 'string' || !allow.includes(type)) return null
   const id = typeof raw.id === 'string' && raw.id ? raw.id : `${type}-${index}`
+
+  // 欄容器不走 NORMALIZERS：它要遞迴，而且沒有自己的 span（一律吃滿整列）。
+  if (type === 'columns') {
+    if (!Array.isArray(raw.columns)) return null
+    budget.left -= 1
+    // 欄裡不准再放欄：從放行清單移掉，遞迴自然就到底了
+    const innerAllow = allow.filter(t => t !== 'columns')
+    const cols = raw.columns.slice(0, MAX_COLUMNS).map((c, ci) => {
+      const src = c && typeof c === 'object' && !Array.isArray(c) ? c : {}
+      const list = Array.isArray(src.blocks) ? src.blocks : []
+      const blocks = []
+      for (let i = 0; i < list.length && budget.left > 0; i++) {
+        // 索引帶上欄的位置，兩欄的第一塊才不會都補成同一個 id
+        const b = normalizeBlock(list[i], `${index}-${ci}-${i}`, innerAllow, budget)
+        if (b) blocks.push(b)
+      }
+      return {
+        id: typeof src.id === 'string' && src.id ? src.id : `col-${index}-${ci}`,
+        span: oneOf(toInt(src.span), SPANS, DEFAULT_COLUMN_SPAN),
+        blocks,
+      }
+    })
+    // 少於下限就補空欄。一欄的「欄容器」沒有意義，而店主可能正在編排中途
+    while (cols.length < MIN_COLUMNS) {
+      cols.push({ id: `col-${index}-${cols.length}`, span: DEFAULT_COLUMN_SPAN, blocks: [] })
+    }
+    return { id, type, columns: cols }
+  }
+
+  budget.left -= 1
   // span 對每種區塊都一樣，所以在這裡補而不是散在九個 NORMALIZERS 裡。
   // 舊資料沒有這個欄位 → 落到 DEFAULT_SPAN=12 → 與加這個欄位之前的全寬行為相同。
   const span = oneOf(toInt(raw.span), SPANS, DEFAULT_SPAN)
@@ -199,8 +259,10 @@ export function normalizeContent(raw, { allow = BLOCK_TYPES } = {}) {
   if (typeof raw !== 'object' || Array.isArray(raw)) return null
   const list = Array.isArray(raw.blocks) ? raw.blocks : []
   const blocks = []
-  for (let i = 0; i < list.length && blocks.length < MAX_BLOCKS; i++) {
-    const block = normalizeBlock(list[i], i, allow)
+  // 巢狀之後「幾個區塊」要算總數，否則 60 個欄容器各塞 60 個子塊就爆了
+  const budget = { left: MAX_BLOCKS }
+  for (let i = 0; i < list.length && budget.left > 0; i++) {
+    const block = normalizeBlock(list[i], i, allow, budget)
     if (block) blocks.push(block)
   }
   return { version: CONTENT_VERSION, blocks }
@@ -245,7 +307,9 @@ const BLOCK_DEFAULTS = {
 }
 
 export function createBlock(type, span = DEFAULT_SPAN) {
-  if (!ALL_BLOCK_TYPES.includes(type)) return null
+  // 欄容器有自己的建構子（createColumns）：它沒有 span，也沒有 BLOCK_DEFAULTS 可以複製。
+  // 少了這一行，createBlock('columns') 會在 structuredCloneish(undefined) 丟例外。
+  if (type === 'columns' || !ALL_BLOCK_TYPES.includes(type)) return null
   return {
     id: makeId(type),
     type,
