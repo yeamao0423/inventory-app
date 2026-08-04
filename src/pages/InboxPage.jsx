@@ -20,6 +20,11 @@ const STATUS_LABEL = {
   closed: '已結束',
 }
 
+// AI 關閉後，開關打開時留下的舊對話還停在 bot，但已經沒有助理會回它們了。
+// 顧客下次發話就會轉進 waiting_human，在那之前別讓標籤說謊。
+const statusLabel = (status, aiEnabled) =>
+  status === 'bot' && !aiEnabled ? '尚未回覆' : STATUS_LABEL[status]
+
 const STATUS_BADGE = {
   bot: 'badge',
   waiting_human: 'badge badge-warn',
@@ -28,7 +33,10 @@ const STATUS_BADGE = {
 }
 
 export default function InboxPage() {
-  const { profile, storeId, user } = useAuth()
+  const { profile, storeId, user, store } = useAuth()
+  // AI 自動回覆預設關閉，逐店開通。關著的時候沒有助理可以「交還」，
+  // 也不會有助理插話，所以底下的按鈕與提示都要跟著換。
+  const aiEnabled = store?.settings?.ai_reply === true
   const [conversations, setConversations] = useState([])
   const [activeId, setActiveId] = useState(null)
   const [messages, setMessages] = useState([])
@@ -155,7 +163,7 @@ export default function InboxPage() {
   }
 
   const takeover = () => setStatus(nextStatusOnTakeover(), { assigned_to: user?.id ?? null })
-  const handback = () => setStatus(nextStatusOnHandback(), { assigned_to: null })
+  const handback = () => setStatus(nextStatusOnHandback({ aiEnabled }), { assigned_to: null })
   const closeConv = () => setStatus('closed', { assigned_to: null })
 
   async function send() {
@@ -298,7 +306,7 @@ export default function InboxPage() {
               <div className="inbox-thread-head">
                 <div className="inbox-thread-title">
                   <b>{displayName(active)}</b>
-                  <span className={STATUS_BADGE[active.status]}>{STATUS_LABEL[active.status]}</span>
+                  <span className={STATUS_BADGE[active.status]}>{statusLabel(active.status, aiEnabled)}</span>
                   {active.assigned_to && (
                     <span className="badge badge-blue">
                       {active.assigned_to === user?.id ? '你在處理' : '同事處理中'}
@@ -337,7 +345,7 @@ export default function InboxPage() {
                     {active.status !== 'human' && (
                       <button className="btn" onClick={takeover} disabled={busy}>接管</button>
                     )}
-                    {active.status === 'human' && (
+                    {active.status === 'human' && aiEnabled && (
                       <button className="btn btn-outline" onClick={handback} disabled={busy}>交還助理</button>
                     )}
                     {active.status !== 'closed' && (
@@ -349,7 +357,7 @@ export default function InboxPage() {
                       className="form-input"
                       rows={2}
                       value={draft}
-                      placeholder={active.status === 'human'
+                      placeholder={active.status === 'human' || !aiEnabled
                         ? '輸入回覆，按 Enter 送出，Shift + Enter 換行'
                         : '接管後回覆才不會被助理插話'}
                       onChange={e => setDraft(e.target.value)}

@@ -8,9 +8,14 @@
 // 消費者端不直接連資料庫（ADR-0002），所以這支用 service role，
 // 每一次讀寫都自己把 store_id 與訪客識別碼對起來，不能少。
 //
+// AI 自動回覆預設關閉，逐店開通（stores.settings.ai_reply === true）。關著的店走的是
+// 「純人工客服」：訊息照常寫入、照常推播店主，對話直接排進 waiting_human 等真人回覆。
+// 平台端另有一個急停開關 ASSISTANT_KILL_SWITCH，設成 1 就無視所有店家設定全部關掉。
+//
 // 需要的環境變數（Supabase Function Secrets）：
 //   ANTHROPIC_API_KEY、TURNSTILE_SECRET_KEY
 //   （選填）ANTHROPIC_MODEL、CHAT_RATE_PER_MIN、CHAT_RATE_PER_DAY、CHAT_MEMORY_LIMIT
+//   （選填，急停）ASSISTANT_KILL_SWITCH=1
 //   （選填，推播用）VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT
 //   SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY 由平台自動注入
 // ============================================================
@@ -18,6 +23,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   DEFAULT_MEMORY_LIMIT,
+  initialStatus,
   isValidVisitorToken,
   nextStatusOnConsumerMessage,
   nextStatusOnRequestHuman,
@@ -35,6 +41,10 @@ const RATE_PER_MIN = Number(Deno.env.get("CHAT_RATE_PER_MIN") ?? "6");
 const RATE_PER_DAY = Number(Deno.env.get("CHAT_RATE_PER_DAY") ?? "300");
 const MEMORY_LIMIT = Number(Deno.env.get("CHAT_MEMORY_LIMIT") ?? String(DEFAULT_MEMORY_LIMIT));
 const MAX_TEXT = 2000;
+
+// 平台急停：出事時一秒關掉全平台的 AI 回覆，不用改任何店家設定、不用等快取。
+// 沒設 = 不啟用（各店照自己的 settings.ai_reply 走）。
+const KILL_SWITCH = Deno.env.get("ASSISTANT_KILL_SWITCH") === "1";
 
 const admin = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -63,6 +73,26 @@ interface ConversationRow {
   consumer_id: string | null;
   visitor_token: string | null;
   unread_for_store: number;
+}
+
+interface StoreRow {
+  name: string;
+  isActive: boolean;
+  aiEnabled: boolean;
+}
+
+// 店家設定。aiEnabled 一律走「明確設 true 才開」——
+// 新開的店、settings 沒這個鍵、整包 settings 是 null，全部視為關。
+async function loadStore(storeId: number): Promise<StoreRow | null> {
+  const { data } = await admin
+    .from("stores").select("name, is_active, settings").eq("id", storeId).maybeSingle();
+  if (!data) return null;
+  const settings = (data.settings ?? {}) as Record<string, unknown>;
+  return {
+    name: data.name ?? "本店",
+    isActive: !!data.is_active,
+    aiEnabled: !KILL_SWITCH && settings.ai_reply === true,
+  };
 }
 
 // ── Turnstile（開新對話時的主防線）─────────────────────────
@@ -165,6 +195,11 @@ async function handleGet(url: URL) {
   if (!Number.isInteger(storeId) || storeId <= 0) return json({ error: "缺少 storeId" }, 400);
   if (!isValidVisitorToken(visitorToken)) return json({ error: "訪客識別碼格式錯誤" }, 400);
 
+  // 首次載入才撈店家設定：widget 要靠 aiEnabled 決定標題寫「客服助理」還是「客服訊息」。
+  // 之後的輪詢（sinceId > 0）不撈 —— 開關不會在一次對話中途改，不值得每幾秒多一次查詢。
+  const store = sinceId > 0 ? null : await loadStore(storeId);
+  const aiFields = store ? { aiEnabled: store.aiEnabled } : {};
+
   // 沒帶對話就以 (店, 訪客識別碼) 找最近一條，讓「重新整理後歷史還在」成立
   let conv: ConversationRow | null = null;
   if (Number.isInteger(conversationId) && conversationId > 0) {
@@ -189,7 +224,7 @@ async function handleGet(url: URL) {
     conv = data as ConversationRow | null;
   }
 
-  if (!conv) return json({ conversationId: null, status: null, messages: [] });
+  if (!conv) return json({ conversationId: null, status: null, messages: [], ...aiFields });
 
   const { data: msgs } = await admin
     .from("messages")
@@ -199,7 +234,7 @@ async function handleGet(url: URL) {
     .order("id", { ascending: true })
     .limit(200);
 
-  return json({ conversationId: conv.id, status: conv.status, messages: msgs ?? [] });
+  return json({ conversationId: conv.id, status: conv.status, messages: msgs ?? [], ...aiFields });
 }
 
 // ── POST action=claim：認領 ─────────────────────────────────
@@ -260,6 +295,14 @@ async function handlePost(req: Request) {
   }
   await admin.from("chat_rate_log").insert({ store_id: storeId, visitor_key: visitorToken });
 
+  // ── 店家設定 ──
+  // 對話一定屬於這家店（下面每個查詢都 .eq("store_id", storeId)），所以撈一次就夠，
+  // 名稱（推播標題用）與 AI 開關都從這裡來。
+  const store = await loadStore(storeId);
+  if (!store) return json({ error: "店家不存在或未營運" }, 404);
+  const storeName = store.name;
+  const aiEnabled = store.aiEnabled;
+
   // ── 找出或建立對話 ──
   const conversationId = Number(body.conversationId ?? 0);
   let conv: ConversationRow | null = null;
@@ -279,22 +322,21 @@ async function handlePost(req: Request) {
     const ok = await verifyTurnstile(body.turnstileToken, ip);
     if (!ok) return json({ error: "人機驗證失敗，請重新整理再試" }, 403);
 
-    const { data: store } = await admin
-      .from("stores").select("id, name, is_active").eq("id", storeId).maybeSingle();
-    if (!store?.is_active) return json({ error: "店家不存在或未營運" }, 404);
+    if (!store.isActive) return json({ error: "店家不存在或未營運" }, 404);
 
     const { data, error } = await admin
       .from("conversations")
-      .insert({ store_id: storeId, channel: "web", visitor_token: visitorToken, status: "bot" })
+      .insert({
+        store_id: storeId,
+        channel: "web",
+        visitor_token: visitorToken,
+        status: initialStatus({ aiEnabled }),
+      })
       .select("id, store_id, status, consumer_id, visitor_token, unread_for_store")
       .single();
     if (error) return json({ error: "建立對話失敗" }, 500);
     conv = data as ConversationRow;
   }
-
-  const { data: store } = await admin
-    .from("stores").select("name").eq("id", conv.store_id).maybeSingle();
-  const storeName = store?.name ?? "本店";
 
   // ── 消費者要求真人 ──
   if (action === "request_human") {
@@ -309,14 +351,16 @@ async function handlePost(req: Request) {
       conversationId: conv.id,
     });
     await broadcast(visitorTopic(visitorToken), "status", { conversationId: conv.id, status });
-    return json({ conversationId: conv.id, status, messages: [] });
+    return json({ conversationId: conv.id, status, messages: [], aiEnabled });
   }
 
   // ── 寫入消費者訊息 ──
-  // 接管後閒置逾時會自動交還給助理；已關閉的對話由消費者重新開啟
+  // 接管後閒置逾時會自動交還給助理；已關閉的對話由消費者重新開啟。
+  // AI 關著的店不會落到 bot，一律進 waiting_human 等真人。
   const status = nextStatusOnConsumerMessage({
     status: conv.status,
     lastStaffAt: conv.status === "human" ? await lastStaffAt(conv.id) : null,
+    aiEnabled,
   });
 
   const consumerMsg = await insertMessage(conv, "consumer", text);
@@ -330,7 +374,7 @@ async function handlePost(req: Request) {
 
   const out = [consumerMsg];
 
-  if (shouldRunAssistant(status)) {
+  if (shouldRunAssistant(status, { aiEnabled })) {
     const consumer = await loadConsumer(conv.consumer_id);
     const history = await loadMemory(admin, {
       storeId: conv.store_id,
@@ -389,10 +433,12 @@ async function handlePost(req: Request) {
       conversationId: conv.id,
       status: raisedHand ? "waiting_human" : status,
       messages: out,
+      aiEnabled,
     });
   }
 
-  // 助理靜音中（等真人／真人接管中）：只寫入並通知店主
+  // 助理靜音中（等真人／真人接管中／整店關閉 AI）：只寫入並通知店主。
+  // 關閉 AI 的店每一則訊息都走這裡 —— 推播是店主唯一會知道有人在等的管道。
   await notifyStore(admin, {
     storeId: conv.store_id,
     title: `${storeName}｜新的客服訊息`,
@@ -400,7 +446,7 @@ async function handlePost(req: Request) {
     conversationId: conv.id,
   });
 
-  return json({ conversationId: conv.id, status, messages: out });
+  return json({ conversationId: conv.id, status, messages: out, aiEnabled });
 }
 
 // ── 進入點 ──────────────────────────────────────────────────

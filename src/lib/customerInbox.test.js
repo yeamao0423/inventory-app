@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   IDLE_HANDBACK_MS,
   shouldRunAssistant,
+  initialStatus,
   nextStatusOnConsumerMessage,
   nextStatusOnRequestHuman,
   nextStatusOnTakeover,
@@ -64,6 +65,49 @@ describe('狀態機', () => {
     const now = Date.parse('2026-08-02T10:00:00Z')
     const lastStaffAt = new Date(now - IDLE_HANDBACK_MS).toISOString()
     expect(nextStatusOnConsumerMessage({ status: 'human', lastStaffAt, now })).toBe('human')
+  })
+})
+
+describe('AI 自動回覆關閉時', () => {
+  it('助理一律不回，連 bot 狀態的對話也不回', () => {
+    expect(shouldRunAssistant('bot', { aiEnabled: false })).toBe(false)
+    expect(shouldRunAssistant('bot', { aiEnabled: true })).toBe(true)
+    expect(shouldRunAssistant('bot')).toBe(true) // 沒帶 = 開，既有呼叫端不受影響
+  })
+
+  it('新對話直接排隊等真人，不會停在沒有助理的 bot', () => {
+    expect(initialStatus({ aiEnabled: false })).toBe('waiting_human')
+    expect(initialStatus({ aiEnabled: true })).toBe('bot')
+    expect(initialStatus()).toBe('bot')
+  })
+
+  it('消費者發話：所有原本會落到 bot 的路徑改落 waiting_human', () => {
+    const now = Date.parse('2026-08-02T10:00:00Z')
+    const off = { aiEnabled: false, now }
+    // 開關打開時建立、之後才關掉的舊對話
+    expect(nextStatusOnConsumerMessage({ status: 'bot', lastStaffAt: null, ...off })).toBe('waiting_human')
+    // 已關閉的對話被重新開啟
+    expect(nextStatusOnConsumerMessage({ status: 'closed', lastStaffAt: null, ...off })).toBe('waiting_human')
+    // 真人接管後閒置逾時，本來會自動交還給助理
+    const stale = new Date(now - IDLE_HANDBACK_MS - 1000).toISOString()
+    expect(nextStatusOnConsumerMessage({ status: 'human', lastStaffAt: stale, ...off })).toBe('waiting_human')
+  })
+
+  it('真人正在處理中的對話不受開關影響', () => {
+    const now = Date.parse('2026-08-02T10:00:00Z')
+    const fresh = new Date(now - 5 * 60_000).toISOString()
+    expect(nextStatusOnConsumerMessage({ status: 'human', lastStaffAt: fresh, aiEnabled: false, now })).toBe('human')
+    expect(nextStatusOnConsumerMessage({ status: 'waiting_human', lastStaffAt: null, aiEnabled: false, now }))
+      .toBe('waiting_human')
+  })
+
+  it('交還也不會落回 bot（後台若漏擋按鈕，狀態仍然誠實）', () => {
+    expect(nextStatusOnHandback({ aiEnabled: false })).toBe('waiting_human')
+    expect(nextStatusOnHandback()).toBe('bot')
+  })
+
+  it('接管不受影響（真人隨時都能接手）', () => {
+    expect(nextStatusOnTakeover()).toBe('human')
   })
 })
 

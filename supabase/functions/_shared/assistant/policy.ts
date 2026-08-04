@@ -4,13 +4,25 @@
 // 那一份有 vitest（src/lib/customerInbox.test.js）且被後台工作台使用；
 // 這一份給 Edge Function 用。改任何一條規則兩邊都要改。
 
+// AI 自動回覆可以整店關掉（stores.settings.ai_reply，預設關）。關掉時 bot 是「不可能狀態」——
+// 標著助理在服務、實際上沒有任何人會回話。所以每一條原本會落到 bot 的路徑都得吃 aiEnabled，
+// 一律改落 waiting_human。詳見 src/lib/customerInbox.js 的同段註解。
 export const IDLE_HANDBACK_MS = 30 * 60 * 1000;
 
 export type ConversationStatus = "bot" | "waiting_human" | "human" | "closed";
 
-/** 助理是否該自動回覆這條對話。接管期間助理靜音。 */
-export function shouldRunAssistant(status: ConversationStatus): boolean {
+/** 助理是否該自動回覆這條對話。接管期間、以及整店關閉 AI 時靜音。 */
+export function shouldRunAssistant(
+  status: ConversationStatus,
+  { aiEnabled = true }: { aiEnabled?: boolean } = {},
+): boolean {
+  if (!aiEnabled) return false;
   return status === "bot";
+}
+
+/** 新對話的起始狀態。 */
+export function initialStatus({ aiEnabled = true }: { aiEnabled?: boolean } = {}): ConversationStatus {
+  return aiEnabled ? "bot" : "waiting_human";
 }
 
 /**
@@ -18,19 +30,23 @@ export function shouldRunAssistant(status: ConversationStatus): boolean {
  * 只有兩種會變：真人接管後閒置太久自動交還、已關閉的對話被重新開啟。
  */
 export function nextStatusOnConsumerMessage(
-  { status, lastStaffAt, now = Date.now(), idleMs = IDLE_HANDBACK_MS }: {
+  { status, lastStaffAt, now = Date.now(), idleMs = IDLE_HANDBACK_MS, aiEnabled = true }: {
     status: ConversationStatus;
     lastStaffAt?: string | null;
     now?: number;
     idleMs?: number;
+    aiEnabled?: boolean;
   },
 ): ConversationStatus {
-  if (status === "closed") return "bot";
+  const idle: ConversationStatus = aiEnabled ? "bot" : "waiting_human";
+  if (status === "closed") return idle;
   if (status === "human") {
     const last = lastStaffAt ? new Date(lastStaffAt).getTime() : null;
-    if (last !== null && now - last > idleMs) return "bot";
+    if (last !== null && now - last > idleMs) return idle;
     return "human";
   }
+  // AI 關掉之前建立的對話還停在 bot，這時候要把它接回真人佇列
+  if (status === "bot" && !aiEnabled) return "waiting_human";
   return status;
 }
 

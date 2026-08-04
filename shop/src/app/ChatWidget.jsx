@@ -28,6 +28,9 @@ export default function ChatWidget() {
   const [visitorToken, setVisitorToken] = useState(null)
   const [conversationId, setConversationId] = useState(null)
   const [status, setStatus] = useState('bot')
+  // 這家店有沒有開 AI 自動回覆（由 chat function 首次載入時告知）。
+  // null = 還沒問到；關著的時候整個視窗的口吻要換成「留言給真人」，不能假裝有助理在。
+  const [aiEnabled, setAiEnabled] = useState(null)
   const [messages, setMessages] = useState([])
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
@@ -68,6 +71,7 @@ export default function ChatWidget() {
     loadHistory({ storeId: store.id, visitorToken, conversationId: convIdRef.current })
       .then(res => {
         if (cancelled || !res) return
+        if (typeof res.aiEnabled === 'boolean') setAiEnabled(res.aiEnabled)
         if (res.conversationId) {
           setConversationId(res.conversationId)
           setStatus(res.status || 'bot')
@@ -193,6 +197,7 @@ export default function ChatWidget() {
         turnstileToken: tsTokenRef.current || undefined,
       })
       setMessages(prev => prev.filter(m => m.id !== optimisticId))
+      if (typeof res.aiEnabled === 'boolean') setAiEnabled(res.aiEnabled)
       if (res.conversationId) setConversationId(res.conversationId)
       if (res.status) setStatus(res.status)
       mergeMessages(res.messages)
@@ -216,8 +221,11 @@ export default function ChatWidget() {
     }
   }
 
+  // AI 關著的店沒有 bot 狀態（後端會直接排進 waiting_human），但視窗剛開、還沒有對話時
+  // status 的初始值是 'bot' —— 那一瞬間也不能寫「客服助理」，否則等於承諾了一個不存在的服務。
+  const aiOff = aiEnabled === false
   const statusLabel = {
-    bot: zh ? '客服助理' : 'Assistant',
+    bot: aiOff ? (zh ? '留言給客服' : 'Leave a message') : (zh ? '客服助理' : 'Assistant'),
     waiting_human: zh ? '已通知真人客服，請稍候' : 'Waiting for a human',
     human: zh ? '真人客服對話中' : 'Talking to a human',
     closed: zh ? '對話已結束' : 'Closed',
@@ -247,9 +255,13 @@ export default function ChatWidget() {
           <div className="chat-body" ref={bodyRef}>
             {messages.length === 0 && (
               <div className="chat-hint">
-                {zh
-                  ? '嗨！有什麼想問的嗎？商品庫存、售價都可以直接問我。'
-                  : 'Hi! Ask me anything about products, stock or prices.'}
+                {aiOff
+                  ? (zh
+                    ? '嗨！在這裡留言，客服看到後會盡快回覆你。'
+                    : 'Hi! Leave a message here and our team will get back to you.')
+                  : (zh
+                    ? '嗨！有什麼想問的嗎？商品庫存、售價都可以直接問我。'
+                    : 'Hi! Ask me anything about products, stock or prices.')}
               </div>
             )}
             {messages.map(m => (
@@ -260,7 +272,16 @@ export default function ChatWidget() {
                 <div className="chat-bubble">{m.content}</div>
               </div>
             ))}
-            {sending && <div className="chat-msg them"><div className="chat-bubble chat-typing">…</div></div>}
+            {/* 打字中的泡泡代表「助理正在想」，AI 關著時沒有人在打字，顯示它是騙人的 */}
+            {sending && !aiOff && <div className="chat-msg them"><div className="chat-bubble chat-typing">…</div></div>}
+            {/* 送出後給一個明確回覆：沒有這行，訊息就這樣沉下去，顧客不知道有沒有人會理他。
+                刻意只顯示在畫面上、不寫進 messages —— 寫進去會被當成助理說過的話進到記憶窗，
+                也會把收件匣列表的最後一則預覽洗成千篇一律的罐頭句。 */}
+            {!sending && status === 'waiting_human' && messages.length > 0 && (
+              <div className="chat-hint">
+                {zh ? '已送出，客服看到後會回覆你。' : 'Sent — our team will reply here.'}
+              </div>
+            )}
           </div>
 
           {needTurnstile && (
