@@ -53,7 +53,8 @@
 ### 一、庫存查詢 API
 
 新增 `shop/src/app/api/stock/route.js`，與 `/api/revalidate`、`/api/send-order-email` 同一層
-（消費者端不直連資料庫，ADR-0002；這支在 server 端用 `SUPABASE_SECRET_KEY`）。
+（消費者端不直連資料庫，ADR-0002）。**用 anon key 走 RLS**，與商城既有的 server 資料層一致
+（`shop/src/lib/data.js:2-3`）——migration 39 對 anon 封鎖了 `variant_cost`，走 anon 等於白拿一層成本保護。
 
 ```
 POST /api/stock
@@ -66,8 +67,9 @@ body: { productIds: number[] }        // 上限 50，超過回 400
 ```
 
 - 明列欄位查詢：`product_variants` 只取 `id, product_id, stock`。
-  **不可用 `select('*')`**——那張表有 `variant_cost`，成本不能出現在消費者拿得到的回應裡
-  （`shop/src/lib/data.js:292` 已有同樣的註記）。
+  **不可用 `select('*')`**——那張表有 `variant_cost`，成本不能出現在消費者拿得到的回應裡。
+  走 anon key 時 `select('*')` 會直接整句失效（`shop/src/lib/data.js:292` 已有同樣的註記），
+  但不要靠那個報錯當防線，明列欄位才是。
 - 回應加 `Cache-Control: no-store`。這支的意義就是不被快取。
 - 只回庫存數字。庫存本來就顯示在頁面上，不是新的洩漏面；但也因此**不要**順手多回別的欄位。
 - 不需要 Turnstile 或限流：它比 SSR 頁面本身便宜，而且沒有寫入與外部 API 成本。
@@ -146,7 +148,7 @@ API 失敗（網路斷）**不阻擋**加入購物車——`place_order` 仍會�
 ```
 SSR/ISR：商品頁 → 快照庫存（最舊可能一小時前）→ 完整 HTML（SEO 拿得到）
   ↓ 掛載
-useFreshStock([productIds]) → POST /api/stock → server 用 secret key 查即時庫存
+useFreshStock([productIds]) → POST /api/stock → server 用 anon key 走 RLS 查即時庫存
   ↓
 mergeStock(SSR variants, fresh) → isValueSoldOut 用新鮮值 → 缺貨 chip 不可選
   ↓ 加入購物車
