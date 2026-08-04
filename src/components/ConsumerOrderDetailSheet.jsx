@@ -435,7 +435,7 @@ export default function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, c
       if (o.coupon_id) {
         await supabase.rpc('refund_coupon', { p_order_id: o.id })
       }
-      if (window.confirm('訂單已標記為「已取消」，是否寄出取消通知 Email 給消��者？')) {
+      if (window.confirm('訂單已標記為「已取消」，是否寄出取消通知 Email 給消費者？')) {
         await triggerStatusEmail(buildEmailPayload('cancelled'))
       }
     }
