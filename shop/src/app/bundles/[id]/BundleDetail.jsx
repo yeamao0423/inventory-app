@@ -296,6 +296,9 @@ export default function BundleDetail({ bundle, items, missingProductIds = [], op
                           {values.map(val => {
                             const isSelected = r.options[String(type.id)] === val.id
                             const soldOut = isValueSoldOut(r.variants, r.options, type.id, val.id, r.skipStock)
+                            // 代表圖與商品詳情頁同一支函式、同一套 .spec-chip-img 樣式：
+                            // 兩頁的同一個動作要長得一樣。沒綁圖就只有文字（chip 高度由 min-height 撐住）。
+                            const rep = repImageFor(r.images, type.id, val.id)
                             return (
                               <button
                                 key={val.id}
@@ -303,7 +306,10 @@ export default function BundleDetail({ bundle, items, missingProductIds = [], op
                                 onClick={() => !soldOut && pickOption(r.productId, type.id, val.id)}
                                 disabled={soldOut}
                                 aria-pressed={isSelected}
-                              >{val.value}</button>
+                              >
+                                {rep && <img className="spec-chip-img" src={rep.url} alt="" loading="lazy" />}
+                                {val.value}
+                              </button>
                             )
                           })}
                         </div>
