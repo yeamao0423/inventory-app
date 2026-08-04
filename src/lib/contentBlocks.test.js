@@ -212,6 +212,12 @@ describe('isEmptyContent / blockCount', () => {
     expect(blockCount(null)).toBe(0)
     expect(blockCount({ blocks: [{ type: 'text' }, { type: 'nope' }] })).toBe(1)
   })
+
+  it('blockCount 算巢狀總數（欄容器自己也算一個）', () => {
+    // 只算頂層的話，一個裝了九塊的欄容器會被說成「1 個區塊」
+    expect(blockCount(buildProductTemplate(), { allow: ALL_BLOCK_TYPES })).toBe(10)
+    expect(isEmptyContent(buildProductTemplate(), { allow: ALL_BLOCK_TYPES })).toBe(false)
+  })
 })
 
 describe('起始模板', () => {

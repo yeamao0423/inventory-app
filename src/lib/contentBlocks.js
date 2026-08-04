@@ -291,9 +291,11 @@ export function flattenBlocks(blocks) {
   return out
 }
 
+// 算的是巢狀總數（欄容器自己也算一個）。後台用它顯示「目前線上版有 N 個區塊」，
+// 只算頂層的話，一個裝了九塊的欄容器會被說成「1 個區塊」。
 export function blockCount(raw, options) {
   const content = normalizeContent(raw, options)
-  return content ? content.blocks.length : 0
+  return content ? flattenBlocks(content.blocks).length : 0
 }
 
 export function isEmptyContent(raw, options) {

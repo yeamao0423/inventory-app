@@ -8,7 +8,7 @@ import ProductPageEditor from '../components/ProductPageEditor'
 import CustomSelect from '../components/CustomSelect'
 import {
   ALL_BLOCK_TYPES, CONTENT_VERSION,
-  blockCount, buildProductTemplate, normalizeProductContent,
+  blockCount, buildProductTemplate, normalizeProductContent, flattenBlocks,
 } from '../lib/contentBlocks'
 import '../styles/product-editor.css'
 
@@ -205,7 +205,8 @@ export default function ProductTemplatePage() {
 
   const publishedCount = blockCount(published, { allow: ALL_BLOCK_TYPES })
   const templateCount = blockCount(templateRaw, { allow: ALL_BLOCK_TYPES })
-  const missingCta = blocks.length > 0 && !blocks.some(b => b.type === 'product_cta')
+  // 攤平之後才找：預設範本把加入購物車放在欄容器的右欄裡，只看頂層會誤報「沒有購買按鈕」
+  const missingCta = blocks.length > 0 && !flattenBlocks(blocks).some(b => b.type === 'product_cta')
 
   const footer = (
     <div>
