@@ -8,25 +8,37 @@
 
 ---
 
-## 〇、進行中：2026-08-05 這一批
+## 〇、2026-08-05 這一批：已在 main，未驗收、未上線
 
-四項使用者回饋拆成五份 spec，三條 track 平行開發，各自 git worktree。
-設計在 `docs/superpowers/specs/`，檔名前綴對應下表：
+五份 spec 全部合併進本地 `main`（設計與計畫在 `docs/superpowers/specs/`、`plans/`）：
+客服訂單 popup、客服對話依會員彙整、組合商品規格連動照片＋缺貨點名、
+賣完的不能再被選、商品頁欄容器版面模型。
 
-| | 內容 | 分支 | 狀態 |
-|---|---|---|---|
-| S1 | 客服收件匣的訂單詳情 popup | `feat/inbox-order-detail` | 已合併 main，**待瀏覽器驗收** |
-| S2 | 客服對話依會員彙整（多裝置併成一列） | `feat/inbox-conversation-merge` | 開發中 |
-| S3 | 組合商品：規格連動照片＋缺貨呈現 | `feat/bundle-variant-images` | 已合併 main，**待瀏覽器驗收** |
-| S4 | 賣完的不能再被選（庫存新鮮度＋結帳前檢查） | `feat/stock-freshness` | 開發中 |
-| S5 | 商品頁編排改用欄容器版面模型 | `feat/product-page-columns` | 已合併 main，**待瀏覽器驗收** |
+**驗過的**：362 個單元測試、兩個專案的正式 build（商城預先產生 228 頁）、
+客服對話存取權的 Edge Function 層 curl 實測（拿別人的對話 id 讀不到）。
 
-已合併的三支只驗過純函式（329 個測試）與兩個專案的正式 build（商城預先產生 227 頁），
-**UI 行為還沒有人眼看過** —— 訂單詳情的金流、編排器的拖拉、版面的實際長相都還沒驗。
-main 沒有 push，所以還沒有部署出去。
+**沒驗過的**：所有 UI 行為。訂單詳情的收付款與折讓、編排器的拖拉與刪欄、
+商品頁版面的實際長相、規格切換換圖、缺貨攔截的文案位置 —— 都還沒有人眼看過。
 
-S5 第一階段不做預覽 iframe 內的直接拖放，那留成後續，是這一節刪掉後唯一要留下的項目。
-五支全部驗收通過之後，把這一節換成那一行後續。
+**上線前要做的三件事**（順序不可換）：
+
+1. 跑完各份計畫末尾的人工驗收清單
+2. `20260805120000_conversation_devices.sql` 用 MCP `apply_migration` 上 remote
+   —— **絕不可 `supabase db push`**（remote 有五支 repo 沒有的 migration）
+3. `supabase functions deploy chat`，然後才推 main（Vercel 會自動部署兩個專案）
+
+### 這一批刻意留下的後續
+
+- **商品頁編排：預覽 iframe 內的直接拖放**。目前只有左側清單能拖，iframe 負責點選與高亮。
+  要處理跨 frame 座標換算、自動捲動、drag image，值得單獨一份 spec
+- **chat 小型加固**（兩件事併一次做，都在 `supabase/functions/chat/`）：
+  後台回覆時把該組所有裝置 token 登記到實際寫入的那條對話上 —— 沒有這個，
+  改版前就已分裂、且舊裝置目前登出的對話，那位客人仍收不到回覆；
+  以及 `findConversation` 的 token 反查在已登入時要加上「只接受 `consumer_id` 為 null 或等於我」，
+  擋掉共用電腦上 B 登入後讀到 A 的聊天記錄（含訂單、電話）。後者是既有行為不是新回歸，
+  但 `conversation_devices` 沒有清理機制，一個 token 會隨時間累積出對多個人對話的連結
+- **商品列表頁的庫存仍是 ISR 快照**。這一批只修了詳情頁、組合頁與結帳。
+  列表有分頁、一頁可能幾十件，會撞到 `/api/stock` 的 50 筆上限，需要另一種端點形狀
 
 ---
 
