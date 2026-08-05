@@ -34,6 +34,32 @@
 }
 .pp-editing .pp-cell:empty::after { content: '這一塊在這件商品上沒有內容，客人不會看到它'; }
 
+/* ── 欄容器 ──────────────────────────────────
+   欄容器自己吃滿整列（--pp-span 固定 12），內部再一層十二欄格線。
+   欄裡是垂直堆疊而不是又一層格線 —— 欄的意義就是「這一疊東西排在一起」。 */
+.pp-columns > .blk-grid { align-items: start; row-gap: var(--space-5); }
+.pp-col {
+  grid-column: span var(--pp-span, 12);
+  min-width: 0;
+  display: flex; flex-direction: column; gap: var(--space-5);
+}
+/* 手機一律堆疊，與外層格線同一條規則、同一個斷點 */
+@media (max-width: 900px) { .pp-col { grid-column: span 12; } }
+
+/* 一個子區塊都沒有的欄不佔位。
+   （整個欄容器都空的情況在 ProductPageView 就不畫了，那是資料層看得出來的事。）
+
+   注意 :empty 只認「沒有子節點」。.pp-cell:empty { display: none } 已經讓畫不出東西的
+   儲存格消失，但那些 <div> 仍是 .pp-col 的子節點，所以 .pp-col:empty 不會成立。
+   這是刻意的：只有真的一個區塊都沒有的欄才不佔位。 */
+.pp-col:empty { display: none; }
+/* 編輯器裡仍要看得見（看不到就沒辦法把東西拖進去） */
+.pp-editing .pp-col:empty {
+  display: block; padding: 14px; border-radius: var(--r-card);
+  background: var(--border-light); color: var(--text-3); font-size: 12.5px;
+}
+.pp-editing .pp-col:empty::after { content: '空的欄，把區塊拖進來'; }
+
 /* 靜態區塊落在格線儲存格裡時，把它自己那一套外層節奏歸零：
    垂直間距已經由格線的 row-gap 負責，左右內距也已經由外層 .container 給過了。
    兩層都算一次的話，一個 6 欄的文字區塊會被擠成一條。 */

@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import {
-  BLOCK_TYPES, CONTENT_VERSION, IMAGE_RATIOS,
-  createBlock, normalizeContent, isEmptyContent, blockCount,
+  BLOCK_TYPES, ALL_BLOCK_TYPES, CONTENT_VERSION, IMAGE_RATIOS,
+  createBlock, normalizeContent, normalizeProductContent, isEmptyContent, blockCount,
   moveBlock, duplicateBlock, removeBlock, replaceBlock,
   TEMPLATES, buildTemplate, safeHref, splitParagraphs,
+  getBlockAt, insertBlockAt, removeBlockAt, replaceBlockAt,
+  duplicateBlockAt, moveBlockAt, moveBlockTo, createColumns, removeColumnAt,
+  buildProductTemplate, mergeIntroIntoTemplate, flattenBlocks,
 } from './contentBlocks'
 
 // 這份測試的重點不是「好資料能過」，而是「壞資料不能讓商城炸掉」。
@@ -209,6 +212,12 @@ describe('isEmptyContent / blockCount', () => {
     expect(blockCount(null)).toBe(0)
     expect(blockCount({ blocks: [{ type: 'text' }, { type: 'nope' }] })).toBe(1)
   })
+
+  it('blockCount 算巢狀總數（欄容器自己也算一個）', () => {
+    // 只算頂層的話，一個裝了九塊的欄容器會被說成「1 個區塊」
+    expect(blockCount(buildProductTemplate(), { allow: ALL_BLOCK_TYPES })).toBe(10)
+    expect(isEmptyContent(buildProductTemplate(), { allow: ALL_BLOCK_TYPES })).toBe(false)
+  })
 })
 
 describe('起始模板', () => {
@@ -255,5 +264,265 @@ describe('splitParagraphs — body 允許換行但不解析 Markdown', () => {
 
   it('不解析 Markdown、不吃掉標記字元 —— 原樣留給渲染層逸出', () => {
     expect(splitParagraphs('**粗體** 與 <b>標籤</b>')).toEqual(['**粗體** 與 <b>標籤</b>'])
+  })
+})
+
+describe('欄容器 columns', () => {
+  const col = (span, blocks) => ({ span, blocks })
+  const wrap = (columns) => ({ version: 1, blocks: [{ type: 'columns', columns }] })
+
+  it('只有商品頁那組放行清單認得欄容器', () => {
+    expect(ALL_BLOCK_TYPES).toContain('columns')
+    expect(BLOCK_TYPES).not.toContain('columns')
+  })
+
+  it('正規化保留欄與子區塊，並補上 id', () => {
+    const out = normalizeProductContent(wrap([
+      col(6, [{ type: 'product_gallery' }]),
+      col(6, [{ type: 'product_title' }, { type: 'product_price' }]),
+    ]))
+    expect(out.blocks).toHaveLength(1)
+    const b = out.blocks[0]
+    expect(b.type).toBe('columns')
+    expect(b.id).toBeTruthy()
+    expect(b.columns).toHaveLength(2)
+    expect(b.columns[0].span).toBe(6)
+    expect(b.columns[0].id).toBeTruthy()
+    expect(b.columns[1].blocks.map(x => x.type)).toEqual(['product_title', 'product_price'])
+  })
+
+  it('欄容器沒有自己的 span（一律吃滿整列）', () => {
+    const b = normalizeProductContent(wrap([col(6, []), col(6, [])])).blocks[0]
+    expect(b.span).toBeUndefined()
+  })
+
+  it('欄裡再放欄會被丟棄', () => {
+    const b = normalizeProductContent(wrap([
+      col(6, [{ type: 'columns', columns: [col(6, []), col(6, [])] }, { type: 'text', title: 'ok' }]),
+      col(6, []),
+    ])).blocks[0]
+    expect(b.columns[0].blocks.map(x => x.type)).toEqual(['text'])
+  })
+
+  it('欄數少於 2 補到 2、多於 3 截到 3', () => {
+    expect(normalizeProductContent(wrap([col(12, [])])).blocks[0].columns).toHaveLength(2)
+    expect(normalizeProductContent(wrap([col(3, []), col(3, []), col(3, []), col(3, [])]))
+      .blocks[0].columns).toHaveLength(3)
+  })
+
+  it('壞掉的欄變成空欄，不丟例外', () => {
+    const b = normalizeProductContent({ version: 1, blocks: [
+      { type: 'columns', columns: [null, 'nope', { span: 6, blocks: 'x' }] },
+    ] }).blocks[0]
+    expect(b.columns).toHaveLength(3)
+    b.columns.forEach(c => expect(c.blocks).toEqual([]))
+  })
+
+  it('columns 不是陣列時整塊丟棄', () => {
+    expect(normalizeProductContent({ version: 1, blocks: [{ type: 'columns', columns: 'nope' }] }).blocks)
+      .toEqual([])
+  })
+
+  it('span 不在允許值內時退回 6', () => {
+    const b = normalizeProductContent(wrap([col(99, []), col('x', [])])).blocks[0]
+    expect(b.columns[0].span).toBe(6)
+    expect(b.columns[1].span).toBe(6)
+  })
+
+  it('首頁（預設放行清單）不接受欄容器', () => {
+    expect(normalizeContent(wrap([col(6, []), col(6, [])])).blocks).toEqual([])
+  })
+
+  it('巢狀總數受 MAX_BLOCKS 限制', () => {
+    const many = Array.from({ length: 40 }, () => ({ type: 'text', title: 't' }))
+    const out = normalizeProductContent({ version: 1, blocks: [
+      { type: 'columns', columns: [col(6, many), col(6, many)] },
+      { type: 'text', title: '最後' },
+    ] })
+    const count = out.blocks.reduce((n, b) =>
+      n + 1 + (b.columns ? b.columns.reduce((m, c) => m + c.blocks.length, 0) : 0), 0)
+    expect(count).toBeLessThanOrEqual(60)
+  })
+
+  it('同一個欄容器裡的子區塊不會撞 id', () => {
+    const b = normalizeProductContent(wrap([
+      col(6, [{ type: 'text', title: 'a' }]),
+      col(6, [{ type: 'text', title: 'b' }]),
+    ])).blocks[0]
+    expect(b.columns[0].blocks[0].id).not.toBe(b.columns[1].blocks[0].id)
+    expect(b.columns[0].id).not.toBe(b.columns[1].id)
+  })
+
+  it('舊的扁平內容正規化後與加這個功能之前相同（回歸）', () => {
+    const flat = { version: 1, blocks: [
+      { type: 'product_gallery', span: 6 },
+      { type: 'product_title', span: 6 },
+    ] }
+    const out = normalizeProductContent(flat)
+    expect(out.blocks.map(b => [b.type, b.span])).toEqual([
+      ['product_gallery', 6], ['product_title', 6],
+    ])
+  })
+})
+
+describe('路徑版編輯操作', () => {
+  const flat = () => ([
+    { id: 'a', type: 'text', span: 12, title: 'A', body: '' },
+    { id: 'cols', type: 'columns', columns: [
+      { id: 'c0', span: 6, blocks: [{ id: 'x', type: 'text', span: 12, title: 'X', body: '' }] },
+      { id: 'c1', span: 6, blocks: [{ id: 'y', type: 'text', span: 12, title: 'Y', body: '' }] },
+    ] },
+    { id: 'b', type: 'text', span: 12, title: 'B', body: '' },
+  ])
+
+  it('getBlockAt 取得頂層與巢狀區塊', () => {
+    expect(getBlockAt(flat(), [0]).id).toBe('a')
+    expect(getBlockAt(flat(), [1, 1, 0]).id).toBe('y')
+    expect(getBlockAt(flat(), [9])).toBe(null)
+    expect(getBlockAt(flat(), [1, 5, 0])).toBe(null)
+  })
+
+  it('insertBlockAt 插進指定位置', () => {
+    const nb = { id: 'n', type: 'text', span: 12, title: 'N', body: '' }
+    expect(insertBlockAt(flat(), [0], nb).map(b => b.id)).toEqual(['n', 'a', 'cols', 'b'])
+    expect(insertBlockAt(flat(), [1, 0, 0], nb)[1].columns[0].blocks.map(b => b.id))
+      .toEqual(['n', 'x'])
+  })
+
+  it('removeBlockAt 移除頂層與巢狀', () => {
+    expect(removeBlockAt(flat(), [0]).map(b => b.id)).toEqual(['cols', 'b'])
+    expect(removeBlockAt(flat(), [1, 0, 0])[1].columns[0].blocks).toEqual([])
+  })
+
+  it('replaceBlockAt 換掉指定位置', () => {
+    const nb = { id: 'n', type: 'text', span: 12, title: 'N', body: '' }
+    expect(replaceBlockAt(flat(), [1, 1, 0], nb)[1].columns[1].blocks[0].id).toBe('n')
+  })
+
+  it('duplicateBlockAt 複製並給新 id', () => {
+    const out = duplicateBlockAt(flat(), [1, 0, 0])
+    const list = out[1].columns[0].blocks
+    expect(list).toHaveLength(2)
+    expect(list[1].id).not.toBe(list[0].id)
+    expect(list[1].title).toBe('X')
+  })
+
+  it('複製欄容器時連子區塊的 id 都換掉', () => {
+    const out = duplicateBlockAt(flat(), [1])
+    const orig = out[1]
+    const copy = out[2]
+    expect(copy.type).toBe('columns')
+    expect(copy.id).not.toBe(orig.id)
+    expect(copy.columns.map(c => c.id)).not.toEqual(orig.columns.map(c => c.id))
+    expect(copy.columns[0].blocks[0].id).not.toBe(orig.columns[0].blocks[0].id)
+    expect(copy.columns[0].blocks[0].title).toBe('X')
+  })
+
+  it('moveBlockAt 只在自己的容器內移動', () => {
+    const withTwo = insertBlockAt(flat(), [1, 0, 1], { id: 'x2', type: 'text', span: 12, title: '', body: '' })
+    expect(moveBlockAt(withTwo, [1, 0, 0], 1)[1].columns[0].blocks.map(b => b.id)).toEqual(['x2', 'x'])
+    // 到邊界就不動，不會跳到別的容器
+    expect(moveBlockAt(flat(), [1, 0, 0], -1)[1].columns[0].blocks.map(b => b.id)).toEqual(['x'])
+  })
+
+  it('moveBlockTo 可以跨容器', () => {
+    const out = moveBlockTo(flat(), [0], [1, 1, 0])       // 頂層 a → 第二欄最前面
+    expect(out.map(b => b.id)).toEqual(['cols', 'b'])
+    expect(out[0].columns[1].blocks.map(b => b.id)).toEqual(['a', 'y'])
+  })
+
+  it('moveBlockTo 從欄裡搬到頂層', () => {
+    const out = moveBlockTo(flat(), [1, 0, 0], [0])
+    expect(out.map(b => b.id)).toEqual(['x', 'a', 'cols', 'b'])
+    expect(out[2].columns[0].blocks).toEqual([])
+  })
+
+  it('moveBlockTo 在同一個容器內往後搬時不會多退一格', () => {
+    const out = moveBlockTo(flat(), [0], [2])   // a 搬到 cols 後面
+    expect(out.map(b => b.id)).toEqual(['cols', 'a', 'b'])
+  })
+
+  it('非法路徑一律回原陣列', () => {
+    const src = flat()
+    expect(removeBlockAt(src, [99])).toBe(src)
+    expect(replaceBlockAt(src, [1, 9, 0], {})).toBe(src)
+    expect(moveBlockTo(src, [9], [0])).toBe(src)
+  })
+
+  it('createColumns 給合法的預設形狀', () => {
+    const c2 = createColumns(2)
+    expect(c2.type).toBe('columns')
+    expect(c2.columns.map(c => c.span)).toEqual([6, 6])
+    expect(createColumns(3).columns.map(c => c.span)).toEqual([4, 4, 4])
+  })
+
+  it('createColumns 產出的欄容器原封不動通得過正規化', () => {
+    const content = { version: CONTENT_VERSION, blocks: [createColumns(3)] }
+    expect(normalizeProductContent(content)).toEqual(content)
+  })
+
+  it('removeColumnAt 把內容搬到相鄰欄，不刪掉店主的東西', () => {
+    const out = removeColumnAt(flat(), 1, 1)       // 刪第二欄
+    expect(out[1].columns).toHaveLength(1)
+    expect(out[1].columns[0].blocks.map(b => b.id)).toEqual(['x', 'y'])
+  })
+
+  it('removeColumnAt 刪第一欄時內容往後搬', () => {
+    const out = removeColumnAt(flat(), 1, 0)
+    expect(out[1].columns[0].blocks.map(b => b.id)).toEqual(['y', 'x'])
+  })
+
+  it('舊的扁平 API 行為不變', () => {
+    const src = flat()
+    expect(removeBlock(src, 0).map(b => b.id)).toEqual(['cols', 'b'])
+    expect(moveBlock(src, 0, 1).map(b => b.id)).toEqual(['cols', 'a', 'b'])
+  })
+})
+
+describe('buildProductTemplate — 左圖右資訊', () => {
+  it('回傳一個欄容器：左欄圖庫、右欄購買動線', () => {
+    const t = buildProductTemplate()
+    expect(t.blocks).toHaveLength(1)
+    const cols = t.blocks[0]
+    expect(cols.type).toBe('columns')
+    expect(cols.columns).toHaveLength(2)
+    expect(cols.columns[0].blocks.map(b => b.type)).toEqual(['product_gallery'])
+    expect(cols.columns[1].blocks.map(b => b.type)).toEqual([
+      'product_title', 'product_price', 'product_desc', 'product_options',
+      'product_status', 'product_qty', 'product_note', 'product_cta',
+    ])
+  })
+
+  it('產出的內容通得過正規化且不變形', () => {
+    const t = buildProductTemplate()
+    expect(normalizeProductContent(t)).toEqual(t)
+  })
+
+  it('每個區塊都有互不相同的 id', () => {
+    const t = buildProductTemplate()
+    const ids = t.blocks.flatMap(b => [b.id, ...b.columns.flatMap(c => [c.id, ...c.blocks.map(x => x.id)])])
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('flattenBlocks 把欄裡的子區塊也攤出來', () => {
+    const t = buildProductTemplate()
+    const flatTypes = flattenBlocks(t.blocks).map(b => b.type)
+    expect(flatTypes[0]).toBe('columns')
+    expect(flatTypes.filter(x => x !== 'columns')).toHaveLength(9)
+    expect(flatTypes).toContain('product_cta')
+  })
+
+  it('flattenBlocks 對 null／壞資料不丟例外', () => {
+    expect(flattenBlocks(null)).toEqual([])
+    expect(flattenBlocks([null, { type: 'columns' }])).toHaveLength(1)
+  })
+
+  it('mergeIntroIntoTemplate 把既有 intro 接在最後、各佔滿版', () => {
+    const merged = mergeIntroIntoTemplate(buildProductTemplate(), {
+      version: 1, blocks: [{ type: 'text', title: '購買須知', body: '內容' }],
+    })
+    expect(merged.blocks).toHaveLength(2)
+    expect(merged.blocks[1].type).toBe('text')
+    expect(merged.blocks[1].span).toBe(12)
   })
 })

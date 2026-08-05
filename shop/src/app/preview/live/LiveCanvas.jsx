@@ -13,7 +13,7 @@
 // 商品不重新查資料庫：server 端已經把精簡快照帶下來，挑選規則走 pickBlockProducts
 // （與正式站同一支純函式），所以預覽挑出來的商品順序、數量都跟發佈後一致。
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { normalizeContent, normalizeProductContent } from '../../../lib/contentBlocks'
+import { normalizeContent, normalizeProductContent, flattenBlocks } from '../../../lib/contentBlocks'
 import { pickBlockProducts } from '../../../lib/blockProducts'
 import {
   readPreviewMessage, readHighlightMessage, PREVIEW_READY, PREVIEW_SELECT,
@@ -74,9 +74,10 @@ export default function LiveCanvas({ catalog, categories, parentOrigin, target =
     return norm?.blocks ?? null
   }, [content, isProduct])
 
+  // 攤平之後才找：商品精選也可能被放進欄容器裡，只看頂層會查不到而畫成空的
   const productsByBlock = useMemo(() => {
     const out = {}
-    for (const b of blocks || []) {
+    for (const b of flattenBlocks(blocks)) {
       if (b.type === 'products') out[b.id] = pickBlockProducts(catalog, categories, b)
     }
     return out
