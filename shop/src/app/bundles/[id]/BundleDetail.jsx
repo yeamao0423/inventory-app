@@ -11,7 +11,7 @@ import { useCountUp } from '../../../lib/useCountUp'
 import { useBuyBar } from '../../../lib/useBuyBar'
 import { repImageFor, visibleImages } from '../../../lib/variantImages'
 import { isValueSoldOut, initialOptions, valuesForType } from '../../../lib/variantStock'
-import { useFreshStock, mergeStock } from '../../../lib/useFreshStock'
+import { useFreshStock, mergeStock, mergeQuantity } from '../../../lib/useFreshStock'
 
 // 組合商品落地頁。資料由 server component 以 props 帶入，這裡只負責互動。
 //
@@ -35,8 +35,20 @@ export default function BundleDetail({ bundle, items, missingProductIds = [], op
   // 自然就是用真的數字判斷 —— 不需要另外寫「把某個 chip 標成缺貨」的邏輯。
   const productIds = items.map(it => it.productId)
   const fresh = useFreshStock(productIds)
+  // 沒有規格的商品看的是 products.quantity，一起補 —— 只換 variants 的話，
+  // 組合裡那些單一規格的商品會停在舊快照上顯示還有貨。
   const freshItems = useMemo(
-    () => items.map(it => ({ ...it, variants: mergeStock(it.variants, fresh) })),
+    () => items.map(it => ({
+      ...it,
+      variants: mergeStock(it.variants, fresh),
+      sp: {
+        ...it.sp,
+        products: {
+          ...it.sp.products,
+          quantity: mergeQuantity(it.sp.products.quantity, it.productId, fresh),
+        },
+      },
+    })),
     [items, fresh.at, fresh.status], // eslint-disable-line react-hooks/exhaustive-deps
   )
 
