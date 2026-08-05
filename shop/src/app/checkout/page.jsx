@@ -11,7 +11,7 @@ import { useI18n, useCart, useUser } from '../layout'
 
 export default function CheckoutPage() {
   const { t, lang } = useI18n()
-  const { cart, clearCart, appendTo, cancelAppend, hydrated } = useCart()
+  const { cart, clearCart, removeItem, updateQty, appendTo, cancelAppend, hydrated } = useCart()
   const { user } = useUser()
   const router = useRouter()
   // 加購模式：購物車要併進既有訂單，不建新單也不重填收件資料
@@ -22,6 +22,17 @@ export default function CheckoutPage() {
   const [submitting, setSubmitting] = useState(false)
   const [profileLoaded, setProfileLoaded] = useState(false)
   const [store, setStore] = useState(null)
+  // 送出前的庫存攔截與 place_order 的錯誤共用同一塊區域。
+  // 兩者都是「按了送出卻沒成功」，用 alert 打回票等於把人趕出流程。
+  const [stockIssues, setStockIssues] = useState([])
+  const [placeError, setPlaceError] = useState('')
+  // 手機版是單欄，送出鈕在上、摘要在下：不捲過去的話按了送出像是什麼都沒發生
+  const issueRef = useRef(null)
+  useEffect(() => {
+    if (stockIssues.length > 0 || placeError) {
+      issueRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }, [stockIssues, placeError])
 
   useEffect(() => {
     getStore().then(setStore).catch(() => {})
@@ -240,8 +251,22 @@ export default function CheckoutPage() {
     return Object.keys(e).length === 0
   }
 
+  // 庫存不夠時給的兩個出路。key 一律用 cartLineKey —— 購物車的 removeItem／updateQty
+  // 認的就是這個鍵，用別的格式會刪不到（同商品不同組合是兩列）。
+  function dropShortItems() {
+    stockIssues.forEach(s => removeItem(s.key))
+    setStockIssues([])
+  }
+  function clampShortItems() {
+    // 剩 0 的直接移除，其餘改成剩餘數量
+    stockIssues.forEach(s => (s.left > 0 ? updateQty(s.key, s.left) : removeItem(s.key)))
+    setStockIssues([])
+  }
+
   async function submit() {
     if (!validate() || cart.length === 0) return
+    setStockIssues([])
+    setPlaceError('')
     setSubmitting(true)
 
     const storeId = await getStoreId()
@@ -268,6 +293,37 @@ export default function CheckoutPage() {
       return
     }
 
+    // 購物車可能放了很久。送出前再確認一次，不要在 place_order 丟例外之後才用 alert 打回票。
+    // 查不到就放行 —— 交給 place_order 的 FOR UPDATE 檢查擋，那才是最後防線。
+    const stockIds = [...new Set(cart.map(i => Number(i.id)).filter(Boolean))]
+    let shortages = []
+    if (stockIds.length) {
+      try {
+        const res = await fetch('/api/stock', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ productIds: stockIds }),
+        })
+        if (res.ok) {
+          const now = await res.json()
+          const leftOf = i => (i.variantId ? now.variants?.[i.variantId] : now.products?.[i.id])
+          shortages = cart
+            // 預購／收單品項不看庫存，與 place_order 第 78-80 行的規則一致
+            .filter(i => !i.isCollection)
+            .filter(i => { const left = leftOf(i); return left != null && left < i.qty })
+            .map(i => ({
+              key: cartLineKey(i),
+              name: i.name,
+              variantLabel: i.variantLabel,
+              want: i.qty,
+              left: leftOf(i) ?? 0,
+            }))
+        }
+      } catch {
+        // 查不到就放行，交給 place_order 擋
+      }
+    }
+    if (shortages.length) { setStockIssues(shortages); setSubmitting(false); return }
+
     const itemsStr = cart.map(i =>
       `${i.name}${i.variantLabel ? ' ' + i.variantLabel : ''} × ${i.qty}${i.customNote ? ' [' + i.customNote + ']' : ''}`
     ).join(', ')
@@ -275,7 +331,7 @@ export default function CheckoutPage() {
     // 原子操作：檢查庫存 + 驗證優惠券 → 扣庫存 + 建立訂單 + 記錄優惠券（單一 transaction）
     const orderTotal = subtotal + shippingFee  // 未折扣金額，RPC 內部會扣除折扣
 
-    const { data: placeResult, error: placeError } = await supabase.rpc('place_order', {
+    const { data: placeResult, error: placeErr } = await supabase.rpc('place_order', {
       p_store_id: storeId,
       p_customer_name: form.name,
       p_email: form.email,
@@ -296,9 +352,9 @@ export default function CheckoutPage() {
       p_consumer_email: form.email,
     })
 
-    if (placeError || !placeResult?.ok) {
-      const errMsg = placeResult?.error || placeError?.message || t('common.error')
-      alert(errMsg)
+    if (placeErr || !placeResult?.ok) {
+      // 檢查與下單之間又被買走仍有可能。那時的訊息與上面的庫存攔截顯示在同一塊，不用 alert。
+      setPlaceError(placeResult?.error || placeErr?.message || t('common.error'))
       setSubmitting(false)
       return
     }
@@ -556,6 +612,42 @@ export default function CheckoutPage() {
 
         {/* Order Summary */}
         <div>
+          {/* 庫存不夠或 place_order 打回票時，把話講在購物車摘要上方 ——
+              客人要處理的東西就在下面那張清單裡。 */}
+          {(stockIssues.length > 0 || placeError) && (
+            <div className="checkout-stock-issue" ref={issueRef}>
+              <div className="checkout-stock-title">
+                {stockIssues.length > 0
+                  ? (lang === 'zh' ? '有商品的庫存不夠了' : 'Some items are no longer available')
+                  : (lang === 'zh' ? '這筆訂單沒有送出' : 'Your order was not placed')}
+              </div>
+              {stockIssues.length > 0 ? (
+                <>
+                  <ul className="checkout-stock-list">
+                    {stockIssues.map(s => (
+                      <li key={s.key}>
+                        {s.name}{s.variantLabel ? `（${s.variantLabel}）` : ''}
+                        {lang === 'zh'
+                          ? `你要 ${s.want} 件，只剩 ${s.left} 件`
+                          : `you want ${s.want}, only ${s.left} left`}
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="checkout-stock-actions">
+                    <button type="button" className="btn-outline" onClick={dropShortItems}>
+                      {lang === 'zh' ? '移除這幾件' : 'Remove them'}
+                    </button>
+                    <button type="button" className="btn-primary" onClick={clampShortItems}>
+                      {lang === 'zh' ? '改成剩餘數量' : 'Use remaining quantity'}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="checkout-stock-list" style={{ paddingLeft: 0, marginBottom: 0 }}>{placeError}</div>
+              )}
+            </div>
+          )}
+
           <div className="order-summary-card">
             <div className="order-summary-title">{t('checkout.order_summary')}</div>
             {cart.map(item => (

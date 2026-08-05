@@ -517,6 +517,17 @@ input, textarea, select { font-family: inherit; }
 .form-input { width: 100%; padding: 12px 14px; border: 0.5px solid var(--border); border-radius: 10px; font-size: 15px; outline: none; transition: border .15s; background: var(--surface); -webkit-appearance: none; }
 .form-input:focus { border-color: var(--text); }
 .form-error { font-size: 12px; color: var(--red); margin-top: 4px; }
+/* 結帳的庫存問題：需要客人動手處理，所以是有邊框的區塊而不是一行小字。
+   不加底色 —— 結帳頁已經夠花了。 */
+.checkout-stock-issue {
+  border: 1px solid var(--red); border-radius: var(--r-card);
+  padding: 14px 16px; margin-bottom: 16px;
+}
+.checkout-stock-title { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+.checkout-stock-list { font-size: 13px; line-height: 1.8; color: var(--text-2); margin: 0 0 12px; padding-left: 18px; }
+.checkout-stock-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.checkout-stock-actions button { flex: 1; min-width: 140px; cursor: pointer; }
+
 .order-summary-card { background: var(--surface); border: 0.5px solid var(--border); border-radius: 14px; padding: 20px; position: sticky; top: 80px; }
 .order-summary-title { font-size: 15px; font-weight: 600; margin-bottom: 16px; }
 .order-summary-item { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 10px; }

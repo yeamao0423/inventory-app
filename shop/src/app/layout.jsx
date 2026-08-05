@@ -25,7 +25,7 @@ export function useI18n() { return useContext(I18nContext) }
 
 // ── Cart Context ───────────────────────────
 export const CartContext = createContext({
-  cart: [], addItem: () => {}, addItems: () => {}, removeItem: () => {}, clearCart: () => {},
+  cart: [], addItem: () => {}, addItems: () => {}, removeItem: () => {}, updateQty: () => {}, clearCart: () => {},
   // 加購模式：購物車綁定到某張既有訂單，結帳時走 append_to_order 而非 place_order
   appendTo: null, startAppend: () => {}, cancelAppend: () => {},
   // localStorage 是否已讀入。在此之前 cart/appendTo 都還是初始值，
@@ -201,6 +201,14 @@ export default function RootLayout({ children }) {
     setCart(prev => prev.filter(i => cartLineKey(i) !== key))
   }
 
+  // 結帳前發現庫存不夠時，把數量改成剩餘的（見 checkout 的「改成剩餘數量」）。
+  // 傳 0 或負數等於不要這一列，直接移除 —— 購物車裡沒有「0 件」這種東西。
+  function updateQty(key, qty) {
+    const n = Math.floor(Number(qty))
+    if (!Number.isFinite(n) || n < 1) { removeItem(key); return }
+    setCart(prev => prev.map(i => (cartLineKey(i) === key ? { ...i, qty: n } : i)))
+  }
+
   function clearCart() { setCart([]) }
 
   function startAppend(info) {
@@ -246,7 +254,7 @@ export default function RootLayout({ children }) {
         {brandStyle && <style dangerouslySetInnerHTML={{ __html: brandStyle }} />}
         <UserContext.Provider value={{ user, loading: userLoading }}>
           <I18nContext.Provider value={{ t, lang, setLang }}>
-            <CartContext.Provider value={{ cart, addItem, addItems, removeItem, clearCart, appendTo, startAppend, cancelAppend, hydrated }}>
+            <CartContext.Provider value={{ cart, addItem, addItems, removeItem, updateQty, clearCart, appendTo, startAppend, cancelAppend, hydrated }}>
               <nav className="nav">
                 <div className="nav-inner">
                   <Link href="/" className="nav-logo">
