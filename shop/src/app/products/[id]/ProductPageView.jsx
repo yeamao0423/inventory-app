@@ -57,7 +57,7 @@ export default function ProductPageView({
 
 // 版面本體拆出來只為了能用 useProductState（Provider 的值在同一個元件裡讀不到）
 function PageBody({ blocks, productsByBlock, editing, selectedId, highlightId, onSelectBlock }) {
-  const { name, zh, price, qty, variantLabel, ctaLabel, isUnavailable, addToCart } = useProductState()
+  const { name, zh, price, qty, variantLabel, ctaLabel, isUnavailable, addToCart, addError } = useProductState()
   // 傳區塊組成當 key：預覽裡店主一搬動區塊，product_cta 就是另一個 DOM 節點了，
   // observer 得重掛才不會盯著一個已經被移掉的節點看（正式站版面固定，這個值不會變）。
   //
@@ -155,6 +155,9 @@ function PageBody({ blocks, productsByBlock, editing, selectedId, highlightId, o
 
       {/* 黏底購買列：不是第二顆 CTA，是上面那顆捲走之後接手的同一顆 */}
       <div className={`buy-bar${barVisible ? ' is-on' : ''}`} aria-hidden={!barVisible}>
+        {/* 同一則訊息在頁面裡那顆 CTA 旁邊也有一份。兩者不會同時被看到 ——
+            黏底列滑出來的前提就是那顆 CTA 已經捲離畫面。 */}
+        {addError && <div className="buy-bar-error" role="status">{addError}</div>}
         <div className="buy-bar-inner">
           <div className="buy-bar-price">
             <div className="buy-bar-label">

@@ -479,6 +479,15 @@ input, textarea, select { font-family: inherit; }
 @media (max-width: 600px) { .buy-bar-value { font-size: 18px; } }
 .buy-bar .add-btn { width: auto; margin-top: 0; padding: 14px 30px; font-size: 15px; flex-shrink: 0; }
 @media (max-width: 600px) { .buy-bar .add-btn { padding: 13px 20px; font-size: 14.5px; } }
+/* 從黏底列按下去被庫存擋掉時，訊息要長在這一列裡。
+   頁面裡那顆 CTA 旁邊的 .pp-add-error 正好在「已經捲走」的位置 ——
+   客人從黏底列按下去只會看到購物車沒動、畫面沒反應，那等於白做防呆。
+   對齊方式與 .buy-bar-inner 相同，兩行才會切齊。 */
+.buy-bar-error {
+  max-width: var(--detail-max); margin: 0 auto;
+  padding: 10px 20px 0; font-size: 13px; line-height: 1.5; color: var(--red);
+}
+@media (max-width: 600px) { .buy-bar-error { padding: 8px 14px 0; font-size: 12.5px; } }
 /* 黏底列會蓋住頁面最後一段，補等高的內距 */
 .has-buy-bar { padding-bottom: 92px; }
 @media (prefers-reduced-motion: reduce) { .buy-bar { transition: none; } }

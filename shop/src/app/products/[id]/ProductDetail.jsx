@@ -346,6 +346,9 @@ export default function ProductDetail({ sp, variants: rawVariants, customOptions
 
       {/* 黏底購買列：不是第二顆 CTA，是上面那顆捲走之後接手的同一顆 */}
       <div className={`buy-bar${barVisible ? ' is-on' : ''}`} aria-hidden={!barVisible}>
+        {/* 同一則訊息在上面那顆 CTA 旁邊也有一份。兩者不會同時被看到 ——
+            黏底列滑出來的前提就是那顆 CTA 已經捲離畫面。 */}
+        {addError && <div className="buy-bar-error" role="status">{addError}</div>}
         <div className="buy-bar-inner">
           <div className="buy-bar-price">
             <div className="buy-bar-label">

@@ -475,6 +475,9 @@ export default function BundleDetail({ bundle, items, missingProductIds = [], op
 
       {/* 黏底購買列：不是第二顆 CTA，是上面那顆捲走之後接手的同一顆 */}
       <div className={`buy-bar${barVisible ? ' is-on' : ''}`} aria-hidden={!barVisible}>
+        {/* 這一頁一次好幾張卡片，捲哪裡都不對 —— 訊息就留在客人剛按下去的地方。
+            上面那顆 CTA 旁邊也有一份，但那顆此刻已經捲離畫面。 */}
+        {addError && <div className="buy-bar-error" role="status">{addError}</div>}
         <div className="buy-bar-inner">
           <div className="buy-bar-price">
             <div className="buy-bar-label">
