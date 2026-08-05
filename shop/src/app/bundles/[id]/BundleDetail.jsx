@@ -9,6 +9,7 @@ import { evaluateSelection } from '../../../lib/bundleCart'
 import { trackPixel } from '../../../lib/metaPixel'
 import { useCountUp } from '../../../lib/useCountUp'
 import { useBuyBar } from '../../../lib/useBuyBar'
+import { repImageFor, visibleImages } from '../../../lib/variantImages'
 
 // 組合商品落地頁。資料由 server component 以 props 帶入，這裡只負責互動。
 //
@@ -53,6 +54,9 @@ export default function BundleDetail({ bundle, items, missingProductIds = [], op
     bundle.bundle_price,
   )
 
+  // rows 已經算好 unavailable，直接挑出來。已下架的走 missingProductIds 那條既有路徑。
+  const soldOutRows = rows.filter(r => r.unavailable)
+
   const listPrice = rows.reduce((s, r) => s + r.price, 0) // 全套原價加總（含未勾選的，作為對比用）
   const anyIncluded = selection.includedCount > 0
   const totalItems = items.length + missingProductIds.length
@@ -68,6 +72,21 @@ export default function BundleDetail({ bundle, items, missingProductIds = [], op
       ...p,
       [productId]: { ...p[productId], options: { ...p[productId]?.options, [String(typeId)]: valueId } },
     }))
+  }
+
+  // 點品名捲到那張卡並閃一下。block:'center' 是為了避開黏底購買列 ——
+  // 用 'start' 的話卡片底部會被那條列擋住。
+  function focusCard(productId) {
+    const el = document.getElementById(`bundle-card-${productId}`)
+    if (!el) return
+    // 目標卡片可能還沒被 Reveal 揭示（.reveal 未加 is-in 時 opacity 是 0），
+    // 那樣閃了也看不見。直接補上 is-in，讓它立刻現身再閃。
+    el.classList.add('is-in')
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.classList.remove('is-flash')
+    // 強制重排，否則連點兩次不會重播動畫
+    void el.offsetWidth
+    el.classList.add('is-flash')
   }
 
   function handleAdd() {
@@ -199,8 +218,13 @@ export default function BundleDetail({ bundle, items, missingProductIds = [], op
                   : selection.complete
                     ? (zh ? `套裝價 NT$${Number(bundle.bundle_price).toLocaleString()} 未低於目前原價加總，以原價計算。`
                           : 'The bundle price is not lower than the current total, so regular prices apply.')
-                    : (zh ? `套裝價只在整套齊全時成立。目前少了 ${selection.totalCount - selection.includedCount} 件，其餘以原價購買。`
-                          : `The bundle price applies only to the complete set. ${selection.totalCount - selection.includedCount} item(s) are missing, so the rest are at regular price.`)}
+                    : (zh
+                        ? `套裝價只在整套齊全時成立。目前少了 ${selection.totalCount - selection.includedCount} 件${
+                            soldOutRows.length ? `（${soldOutRows.map(r => r.name).join('、')}）` : ''
+                          }，其餘以原價購買。`
+                        : `The bundle price applies only to the complete set. ${selection.totalCount - selection.includedCount} item(s) are missing${
+                            soldOutRows.length ? ` (${soldOutRows.map(r => r.name).join(', ')})` : ''
+                          }, so the rest are at regular price.`)}
               </div>
             </div>
           )}
@@ -229,6 +253,28 @@ export default function BundleDetail({ bundle, items, missingProductIds = [], op
               ? '每件各自選尺寸／規格。整套齊全才適用套裝價，少拿一件就以原價計算。'
               : 'Pick a size for each item. The bundle price applies only to the complete set.'}
           </p>
+          {/* 缺貨點名：卡片上的「已售完」要往下捲才看得到，這裡先講清楚是哪幾件 */}
+          {soldOutRows.length > 0 && (
+            <p className="bundle-sold-note">
+              {zh
+                ? <>這一套有 {soldOutRows.length} 件目前缺貨：{soldOutRows.map((r, i) => (
+                    <span key={r.productId}>
+                      {i > 0 && '、'}
+                      <button type="button" className="bundle-sold-link" onClick={() => focusCard(r.productId)}>
+                        {r.name}
+                      </button>
+                    </span>
+                  ))}。缺貨的不列入結帳，其餘仍可以原價購買。</>
+                : <>{soldOutRows.length} item(s) in this set are sold out: {soldOutRows.map((r, i) => (
+                    <span key={r.productId}>
+                      {i > 0 && ', '}
+                      <button type="button" className="bundle-sold-link" onClick={() => focusCard(r.productId)}>
+                        {r.name}
+                      </button>
+                    </span>
+                  ))}. They are excluded from checkout; the rest can still be bought at regular price.</>}
+            </p>
+          )}
         </Reveal>
 
         <div className="bundle-grid" style={{ '--cols': cols }}>
@@ -239,11 +285,13 @@ export default function BundleDetail({ bundle, items, missingProductIds = [], op
               <Reveal
                 as="article"
                 key={r.productId}
+                id={`bundle-card-${r.productId}`}
                 delay={idx * 70}
                 className={`bundle-card${off ? ' is-off' : ''}`}
               >
                 <Link href={productHref} className="bundle-card-media">
-                  {r.image && <img src={r.image} alt={r.name} loading="lazy" />}
+                  {/* key 綁圖片網址：換規格換圖時重新掛載，才播得出淡入 */}
+                  {r.image && <img key={r.image} src={r.image} alt={r.name} loading="lazy" className="bundle-card-img" />}
                   {r.unavailable
                     ? <span className="bundle-card-flag">
                         {r.collectionExpired ? (zh ? '收單已截止' : 'Closed') : (zh ? '已售完' : 'Sold out')}
@@ -294,6 +342,9 @@ export default function BundleDetail({ bundle, items, missingProductIds = [], op
                           {values.map(val => {
                             const isSelected = r.options[String(type.id)] === val.id
                             const soldOut = isValueSoldOut(r.variants, r.options, type.id, val.id, r.skipStock)
+                            // 代表圖與商品詳情頁同一支函式、同一套 .spec-chip-img 樣式：
+                            // 兩頁的同一個動作要長得一樣。沒綁圖就只有文字（chip 高度由 min-height 撐住）。
+                            const rep = repImageFor(r.images, type.id, val.id)
                             return (
                               <button
                                 key={val.id}
@@ -301,7 +352,12 @@ export default function BundleDetail({ bundle, items, missingProductIds = [], op
                                 onClick={() => !soldOut && pickOption(r.productId, type.id, val.id)}
                                 disabled={soldOut}
                                 aria-pressed={isSelected}
-                              >{val.value}</button>
+                                aria-label={soldOut ? `${val.value}（${zh ? '已售完' : 'sold out'}）` : undefined}
+                                title={soldOut ? (zh ? '已售完' : 'Sold out') : undefined}
+                              >
+                                {rep && <img className="spec-chip-img" src={rep.url} alt="" loading="lazy" />}
+                                {val.value}
+                              </button>
                             )
                           })}
                         </div>
@@ -449,6 +505,8 @@ function resolveItem(item, optTypes, options, lang) {
   }).filter(Boolean).join(' / ')
 
   const images = [...(p.product_images || [])].sort((a, b) => a.sort_order - b.sort_order)
+  // 選了什麼規格就顯示對應的圖。與商品詳情頁同一支函式，行為一致。
+  const shown = visibleImages(images, options)
 
   return {
     activeTypes,
@@ -460,7 +518,8 @@ function resolveItem(item, optTypes, options, lang) {
     original: sale.original,
     onSale: sale.onSale,
     variantLabel,
-    image: images[0]?.url || null,
+    image: shown[0]?.url || null,
+    images,
     name: lang === 'en' && sp.name_en ? sp.name_en : p.name,
   }
 }
