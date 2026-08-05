@@ -36,6 +36,9 @@ export default function ChatWidget() {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const [needsVerify, setNeedsVerify] = useState(false)
+  // 登入憑證：帶著它呼叫 chat function，對話才會歸到「人」而不是這台裝置。
+  // 沒登入時是 null，chat.js 的 headers() 會退回 anon key —— 與改版前行為相同。
+  const [accessToken, setAccessToken] = useState(null)
 
   const bodyRef = useRef(null)
   const tsMountRef = useRef(null)
@@ -53,6 +56,20 @@ export default function ChatWidget() {
     getStore().then(setStore).catch(() => {})
   }, [])
 
+  // 跟著登入狀態走。刻意獨立於 store／visitorToken 之外 ——
+  // token 到手的時機比它們晚，綁在一起會漏掉「先開視窗、稍後才拿到 session」那一輪。
+  useEffect(() => {
+    if (!supabase) return
+    let alive = true
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (alive) setAccessToken(session?.access_token ?? null)
+    })
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => {
+      setAccessToken(session?.access_token ?? null)
+    })
+    return () => { alive = false; subscription?.unsubscribe() }
+  }, [])
+
   function mergeMessages(incoming) {
     if (!incoming?.length) return
     setMessages(prev => {
@@ -65,10 +82,13 @@ export default function ChatWidget() {
   }
 
   // ── 開啟時載入歷史（重新整理後歷史還在）──
+  // accessToken 也在依賴裡：新裝置上先開視窗、session 稍後才到手時要再問一次 ——
+  // 沒有這一輪，換裝置登入的人得重新整理才看得到自己先前的對話。
+  // mergeMessages 以 id 去重，重跑一次不會出現重複訊息。
   useEffect(() => {
     if (!open || !store || !visitorToken) return
     let cancelled = false
-    loadHistory({ storeId: store.id, visitorToken, conversationId: convIdRef.current })
+    loadHistory({ storeId: store.id, visitorToken, conversationId: convIdRef.current, accessToken })
       .then(res => {
         if (cancelled || !res) return
         if (typeof res.aiEnabled === 'boolean') setAiEnabled(res.aiEnabled)
@@ -80,7 +100,7 @@ export default function ChatWidget() {
       })
       .catch(() => {})
     return () => { cancelled = true }
-  }, [open, store, visitorToken])
+  }, [open, store, visitorToken, accessToken])
 
   // ── 認領：已登入就把這個訪客識別碼底下的對話掛到本人名下 ──
   const claim = useCallback(async () => {
@@ -126,7 +146,7 @@ export default function ChatWidget() {
       if (document.hidden || !convIdRef.current) return
       try {
         const res = await loadHistory({
-          storeId: store.id, visitorToken,
+          storeId: store.id, visitorToken, accessToken,
           conversationId: convIdRef.current, sinceId: lastIdRef.current,
         })
         if (res?.status) setStatus(res.status)
@@ -134,7 +154,7 @@ export default function ChatWidget() {
       } catch { /* 網路瞬斷就等下一輪 */ }
     }, POLL_MS)
     return () => clearInterval(timer)
-  }, [open, store, visitorToken])
+  }, [open, store, visitorToken, accessToken])
 
   // 有新訊息就捲到底
   useEffect(() => {
@@ -193,7 +213,7 @@ export default function ChatWidget() {
     setDraft('')
     try {
       const res = await sendMessage({
-        storeId: store.id, visitorToken, conversationId, text,
+        storeId: store.id, visitorToken, conversationId, text, accessToken,
         turnstileToken: tsTokenRef.current || undefined,
       })
       setMessages(prev => prev.filter(m => m.id !== optimisticId))
@@ -214,7 +234,7 @@ export default function ChatWidget() {
   async function handleRequestHuman() {
     if (!conversationId || !store || !visitorToken) return
     try {
-      const res = await requestHuman({ storeId: store.id, visitorToken, conversationId })
+      const res = await requestHuman({ storeId: store.id, visitorToken, conversationId, accessToken })
       setStatus(res.status)
     } catch (e) {
       setError(e.message)
