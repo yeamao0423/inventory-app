@@ -147,14 +147,96 @@ export function isValidVisitorToken(token) {
 
 const STATUS_RANK = { waiting_human: 0, human: 1, bot: 2, closed: 3 }
 
+function rank(status) {
+  return STATUS_RANK[status] ?? 9
+}
+
 export function sortConversations(list) {
   return [...list].sort((a, b) => {
-    const sa = STATUS_RANK[a.status] ?? 9
-    const sb = STATUS_RANK[b.status] ?? 9
+    const sa = rank(a.status)
+    const sb = rank(b.status)
     if (sa !== sb) return sa - sb
     const ua = (a.unread_for_store ?? 0) > 0 ? 0 : 1
     const ub = (b.unread_for_store ?? 0) > 0 ? 0 : 1
     if (ua !== ub) return ua - ub
     return new Date(b.last_message_at ?? 0) - new Date(a.last_message_at ?? 0)
+  })
+}
+
+// ── 依「人」分組 ────────────────────────────────────────────
+// 同一位會員可能在好幾台裝置留下好幾條對話（換瀏覽器、清快取、換手機）。
+// 客服要處理的是「這個人」，不是「這條記錄」，所以列表以人為單位。
+//
+// 這是純顯示層的收斂：資料表不動、既有對話不搬。
+// 只有後台用 —— 不要複製到 Edge Function 的 policy.ts。
+
+/** a 是不是比 b 新。b 為空視為「還沒有值」，所以 a 只要有值就算新。 */
+function newer(a, b) {
+  if (!a) return false
+  if (!b) return true
+  return new Date(a) > new Date(b)
+}
+
+/**
+ * @param {Array} list conversations 的原始列（可含壞資料）
+ * @returns {Array} 每位顧客一組
+ */
+export function groupConversations(list) {
+  const map = new Map()
+  for (const c of Array.isArray(list) ? list : []) {
+    if (!c || typeof c !== 'object') continue
+    // 已識別的以人為鍵；未識別的訪客各自成組（他們之間本來就是不同的人）
+    const key = c.consumer_id ? `c:${c.consumer_id}` : `v:${c.id}`
+    let g = map.get(key)
+    if (!g) {
+      g = {
+        key,
+        consumerId: c.consumer_id ?? null,
+        conversationIds: [],
+        label: null,
+        channel: c.channel ?? 'web',
+        status: null,
+        unread: 0,
+        assignedTo: null,
+        lastMessageAt: null,
+        lastMessagePreview: null,
+        lastMessageSender: null,
+        _assignedAt: null,
+      }
+      map.set(key, g)
+    }
+    g.conversationIds.push(c.id)
+    g.unread += Number(c.unread_for_store) || 0
+    if (!g.label && c.customer_label) g.label = c.customer_label
+    // 狀態取最急的：客服看列表是在找「誰在等我」
+    if (g.status === null || rank(c.status) < rank(g.status)) g.status = c.status
+    // 最後訊息與指派對象跟著最新那條走
+    if (newer(c.last_message_at, g.lastMessageAt)) {
+      g.lastMessageAt = c.last_message_at ?? g.lastMessageAt
+      g.lastMessagePreview = c.last_message_preview ?? null
+      g.lastMessageSender = c.last_message_sender ?? null
+    }
+    if (c.assigned_to && newer(c.last_message_at, g._assignedAt)) {
+      g.assignedTo = c.assigned_to
+      g._assignedAt = c.last_message_at ?? null
+    }
+  }
+  return [...map.values()].map(({ _assignedAt, ...g }) => ({
+    ...g,
+    status: g.status ?? 'bot',
+    conversationIds: g.conversationIds.filter(id => id != null),
+  }))
+}
+
+/** 與 sortConversations 同一套規則，只是吃分組後的形狀。 */
+export function sortGroups(list) {
+  return [...list].sort((a, b) => {
+    const sa = rank(a.status)
+    const sb = rank(b.status)
+    if (sa !== sb) return sa - sb
+    const ua = (a.unread ?? 0) > 0 ? 0 : 1
+    const ub = (b.unread ?? 0) > 0 ? 0 : 1
+    if (ua !== ub) return ua - ub
+    return new Date(b.lastMessageAt ?? 0) - new Date(a.lastMessageAt ?? 0)
   })
 }

@@ -3,6 +3,9 @@
 // 消費者端不直接連資料庫（ADR-0002），所有讀寫都經過這支 Edge Function。
 // 訪客識別碼是隨機 UUID，只存 localStorage —— 它同時是 Realtime Broadcast 的頻道名，
 // 等同一把能力型鑰匙，「不可」放進 URL 或任何會被記錄的地方。
+//
+// 已登入時每一支都帶上自己的 access token：Edge Function 據此把對話歸到「人」而不是
+// 「這台裝置」，換瀏覽器、清快取、換手機都接得回同一條對話。沒登入就照舊只帶 anon key。
 
 const TOKEN_KEY = 'daigogo_visitor_token'
 const FN_URL = `${process.env.NEXT_PUBLIC_SUPABASE_URL || ''}/functions/v1/chat`
@@ -46,28 +49,28 @@ async function parse(res) {
 }
 
 /** 載入歷史或輪詢新訊息。sinceId 給輪詢用（只取比它新的）。 */
-export async function loadHistory({ storeId, visitorToken, conversationId, sinceId = 0 }) {
+export async function loadHistory({ storeId, visitorToken, conversationId, sinceId = 0, accessToken }) {
   const qs = new URLSearchParams({ storeId: String(storeId), visitorToken, sinceId: String(sinceId) })
   if (conversationId) qs.set('conversationId', String(conversationId))
-  const res = await fetch(`${FN_URL}?${qs}`, { headers: headers() })
+  const res = await fetch(`${FN_URL}?${qs}`, { headers: headers(accessToken) })
   return parse(res)
 }
 
 /** 送出一則訊息。turnstileToken 只有「開新對話」時才需要。 */
-export async function sendMessage({ storeId, visitorToken, conversationId, text, turnstileToken }) {
+export async function sendMessage({ storeId, visitorToken, conversationId, text, turnstileToken, accessToken }) {
   const res = await fetch(FN_URL, {
     method: 'POST',
-    headers: headers(),
+    headers: headers(accessToken),
     body: JSON.stringify({ action: 'send', storeId, visitorToken, conversationId, text, turnstileToken }),
   })
   return parse(res)
 }
 
 /** 消費者主動要求真人客服。 */
-export async function requestHuman({ storeId, visitorToken, conversationId }) {
+export async function requestHuman({ storeId, visitorToken, conversationId, accessToken }) {
   const res = await fetch(FN_URL, {
     method: 'POST',
-    headers: headers(),
+    headers: headers(accessToken),
     body: JSON.stringify({ action: 'request_human', storeId, visitorToken, conversationId }),
   })
   return parse(res)
