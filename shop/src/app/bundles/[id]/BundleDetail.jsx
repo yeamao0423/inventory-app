@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useI18n, useCart } from '../../layout'
 import Reveal from '../../Reveal'
@@ -11,6 +11,7 @@ import { useCountUp } from '../../../lib/useCountUp'
 import { useBuyBar } from '../../../lib/useBuyBar'
 import { repImageFor, visibleImages } from '../../../lib/variantImages'
 import { isValueSoldOut, initialOptions, valuesForType } from '../../../lib/variantStock'
+import { useFreshStock, mergeStock } from '../../../lib/useFreshStock'
 
 // 組合商品落地頁。資料由 server component 以 props 帶入，這裡只負責互動。
 //
@@ -27,8 +28,20 @@ export default function BundleDetail({ bundle, items, missingProductIds = [], op
   const { addItems } = useCart()
   const zh = lang === 'zh'
   const [added, setAdded] = useState(false)
+  const [addError, setAddError] = useState(null)
   const { anchorRef, visible: barVisible } = useBuyBar()
 
+  // SSR 給的庫存最舊可能是一小時前的快照。掛載後補正，底下 rows / isValueSoldOut
+  // 自然就是用真的數字判斷 —— 不需要另外寫「把某個 chip 標成缺貨」的邏輯。
+  const productIds = items.map(it => it.productId)
+  const fresh = useFreshStock(productIds)
+  const freshItems = useMemo(
+    () => items.map(it => ({ ...it, variants: mergeStock(it.variants, fresh) })),
+    [items, fresh.at, fresh.status], // eslint-disable-line react-hooks/exhaustive-deps
+  )
+
+  // picks 的初始值用原始 items：首次 render 時 fresh 還沒回來，
+  // SSR 與 client 首渲染必須一致，否則 hydration 不匹配。
   const [picks, setPicks] = useState(() => {
     const init = {}
     items.forEach(it => {
@@ -38,7 +51,7 @@ export default function BundleDetail({ bundle, items, missingProductIds = [], op
     return init
   })
 
-  const rows = items.map(it => {
+  const rows = freshItems.map(it => {
     const options = picks[it.productId]?.options || {}
     const state = resolveItem(it, optTypes, options, lang)
     // 不可購買的品項一律不算在內（也不能勾選）
@@ -57,6 +70,32 @@ export default function BundleDetail({ bundle, items, missingProductIds = [], op
 
   // rows 已經算好 unavailable，直接挑出來。已下架的走 missingProductIds 那條既有路徑。
   const soldOutRows = rows.filter(r => r.unavailable)
+
+  // 補正回來時，若某件正選著的規格已賣完，換到同維度第一個有貨的。
+  // 這頁一次好幾件卡片，不逐件跳提示 —— 卡片上的缺貨標示已經說明了狀況。
+  useEffect(() => {
+    if (fresh.status !== 'ready') return
+    setPicks(prev => {
+      const next = { ...prev }
+      let changed = false
+      freshItems.forEach(it => {
+        const types = activeTypesFor(it.variants, optTypes)
+        const skip = skipStockFor(it.sp)
+        const cur = prev[it.productId]?.options || {}
+        const fixed = { ...cur }
+        types.forEach(type => {
+          const tid = String(type.id)
+          if (!fixed[tid]) return
+          if (!isValueSoldOut(it.variants, fixed, type.id, fixed[tid], skip)) return
+          const values = valuesForType(type, it.variants)
+          const avail = values.find(v => !isValueSoldOut(it.variants, fixed, type.id, v.id, skip))
+          if (avail) { fixed[tid] = avail.id; changed = true }
+        })
+        next[it.productId] = { ...prev[it.productId], options: fixed }
+      })
+      return changed ? next : prev
+    })
+  }, [fresh.at, fresh.status]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const listPrice = rows.reduce((s, r) => s + r.price, 0) // 全套原價加總（含未勾選的，作為對比用）
   const anyIncluded = selection.includedCount > 0
