@@ -3,15 +3,19 @@ import { isComposing } from '../lib/imeSafeEnter'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import {
-  nextStatusOnHandback, nextStatusOnTakeover, sortConversations,
+  nextStatusOnHandback, nextStatusOnTakeover, groupConversations, sortGroups,
 } from '../lib/customerInbox'
 import { subscribePush, unsubscribePush, pushState } from '../lib/pushNotify'
 import ConsumerOrderDetailSheet from '../components/ConsumerOrderDetailSheet'
 
-// 後台客服工作台：對話列表（waiting_human 置頂、未讀優先）＋ 對話詳情。
+// 後台客服工作台：顧客列表（waiting_human 置頂、未讀優先）＋ 對話詳情。
 //
 // 這一頁走既有的 Supabase JS + RLS，不經 Edge Function ——
 // 後台成員是 authenticated 身分，RLS 已經把跨店擋住了。
+//
+// 列表的單位是「人」不是「對話記錄」：同一位會員換瀏覽器、清快取、換手機都會多一條
+// conversations，客服要處理的卻是同一個人。收斂只發生在顯示層（groupConversations），
+// 資料表不動、既有對話不搬 —— 見 docs/superpowers/specs/2026-08-05-s2-…-design.md。
 const POLL_MS = 6000
 
 const STATUS_LABEL = {
@@ -39,7 +43,7 @@ export default function InboxPage() {
   // 也不會有助理插話，所以底下的按鈕與提示都要跟著換。
   const aiEnabled = store?.settings?.ai_reply === true
   const [conversations, setConversations] = useState([])
-  const [activeId, setActiveId] = useState(null)
+  const [activeKey, setActiveKey] = useState(null)   // 選的是「哪一組」，不是哪一條對話
   const [messages, setMessages] = useState([])
   const [customer, setCustomer] = useState(null)   // { name, email, phone, orders }
   const [draft, setDraft] = useState('')
@@ -50,17 +54,15 @@ export default function InboxPage() {
   const [orderLoading, setOrderLoading] = useState(null) // 正在撈的訂單 id，避免連點開兩個
   const bodyRef = useRef(null)
   // 推給訪客網頁用的 Broadcast 頻道（頻道名＝訪客識別碼，見 ADR-0002）。
+  // 一組可能掛了好幾台裝置，客人正在看哪一台我們並不知道，所以每一台都訂、每一台都推。
   // 必須先 subscribe 再 send —— 沒訂閱就送會退回 REST 路徑而失敗。
-  const channelRef = useRef(null)
+  const channelsRef = useRef([])
+  // ?c= 只在進頁時認一次。groups 每 6 秒換一次 identity，不擋的話會把客服
+  // 後來點開的那一組硬拉回推播帶進來的那一組。
+  const deepLinkedRef = useRef(false)
 
   const canReply = ['super_admin', 'admin', 'editor'].includes(profile?.role)
   const canAccess = canReply || profile?.role === 'viewer'
-
-  // 開啟網址帶 ?c=123（推播點進來）就直接開那條對話
-  useEffect(() => {
-    const c = Number(new URLSearchParams(window.location.search).get('c'))
-    if (Number.isInteger(c) && c > 0) setActiveId(c)
-  }, [])
 
   useEffect(() => {
     if (!storeId || !canAccess) return
@@ -71,15 +73,36 @@ export default function InboxPage() {
     return () => clearInterval(timer)
   }, [storeId, canAccess])
 
+  const groups = useMemo(
+    () => sortGroups(groupConversations(conversations)),
+    [conversations],
+  )
+  const active = useMemo(
+    () => groups.find(g => g.key === activeKey) ?? null,
+    [groups, activeKey],
+  )
+  // 組內對話的 id 清單。用字串當依賴，避免每次輪詢都因為陣列換了 identity 而重跑。
+  const activeIdsKey = active ? active.conversationIds.join(',') : ''
+
+  // 開啟網址帶 ?c=123（推播點進來）就直接開含有那條對話的那一組
   useEffect(() => {
-    if (!activeId) { setMessages([]); setCustomer(null); return }
-    fetchMessages(activeId)
-    markRead(activeId)
+    if (deepLinkedRef.current) return
+    const c = Number(new URLSearchParams(window.location.search).get('c'))
+    if (!Number.isInteger(c) || c <= 0) { deepLinkedRef.current = true; return }
+    const g = groups.find(x => x.conversationIds.includes(c))
+    if (g) { setActiveKey(g.key); deepLinkedRef.current = true }
+  }, [groups])
+
+  useEffect(() => {
+    if (!activeIdsKey) { setMessages([]); setCustomer(null); return }
+    const ids = activeIdsKey.split(',').map(Number)
+    fetchMessages(ids)
+    markRead(ids)
     const timer = setInterval(() => {
-      if (!document.hidden) fetchMessages(activeId)
+      if (!document.hidden) fetchMessages(ids)
     }, POLL_MS)
     return () => clearInterval(timer)
-  }, [activeId])
+  }, [activeIdsKey])
 
   useEffect(() => {
     const el = bodyRef.current
@@ -99,26 +122,31 @@ export default function InboxPage() {
     setConversations(data ?? [])
   }
 
-  async function fetchMessages(id) {
+  // 組內所有對話的訊息合併成單一時間軸。
+  // 刻意由新往舊撈再倒回來：上限砍掉的必須是最舊的那一段，
+  // 由舊往新撈會在對話夠長時把「最近的訊息」整批砍掉。
+  async function fetchMessages(ids) {
+    if (!ids?.length) { setMessages([]); return }
     const { data } = await supabase
       .from('messages')
-      .select('id, sender, sender_user_id, content, created_at')
-      .eq('conversation_id', id)
-      .order('id', { ascending: true })
+      .select('id, conversation_id, sender, sender_user_id, content, created_at')
+      .in('conversation_id', ids)
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
       .limit(500)
-    setMessages(data ?? [])
+    setMessages((data ?? []).slice().reverse())
   }
 
   // 消費者基本資料與近期訂單。
   // consumers 表的 RLS 只讓本人讀，所以這裡改從該店的 consumer_orders 取 ——
   // 那是店家自己的訂單資料，本來就看得到。
-  async function fetchCustomer(conv) {
-    if (!conv?.consumer_id) { setCustomer(null); return }
+  async function fetchCustomer(group) {
+    if (!group?.consumerId) { setCustomer(null); return }
     const { data } = await supabase
       .from('consumer_orders')
       .select('id, store_order_no, customer_name, email, phone, total_amount, payment_status, status, created_at')
       .eq('store_id', storeId)
-      .eq('consumer_id', conv.consumer_id)
+      .eq('consumer_id', group.consumerId)
       .order('created_at', { ascending: false })
       .limit(5)
     const latest = data?.[0]
@@ -149,36 +177,61 @@ export default function InboxPage() {
     setOrderSheet(data)
   }
 
-  const active = useMemo(
-    () => conversations.find(c => c.id === activeId) ?? null,
-    [conversations, activeId],
-  )
+  useEffect(() => { fetchCustomer(active) }, [active?.key, active?.consumerId])
 
-  useEffect(() => { fetchCustomer(active) }, [active?.id, active?.consumer_id])
+  // 回覆要寫進組內最新的那一條對話（客人的下一則也會落在那裡）
+  const targetConvId = useMemo(() => {
+    if (!active) return null
+    const rows = conversations.filter(c => active.conversationIds.includes(c.id))
+    rows.sort((a, b) => new Date(b.last_message_at ?? 0) - new Date(a.last_message_at ?? 0))
+    return rows[0]?.id ?? null
+  }, [conversations, active])
 
-  // 開著哪條對話就訂哪個訪客的頻道，回覆時直接從這條連線送出去
+  // 這一組有幾台裝置就訂幾個頻道 —— 客服回的訊息要推到客人「正在看的那一台」，
+  // 而我們不知道是哪一台。
   useEffect(() => {
-    channelRef.current = null
-    const token = active?.visitor_token
-    if (!token) return
-    const ch = supabase.channel(`chat:${token}`)
-    ch.subscribe(status => { if (status === 'SUBSCRIBED') channelRef.current = ch })
-    return () => { channelRef.current = null; supabase.removeChannel(ch) }
-  }, [active?.visitor_token])
+    channelsRef.current = []
+    if (!activeIdsKey) return
+    const ids = activeIdsKey.split(',').map(Number)
+    let cancelled = false
+    const chans = []
+    ;(async () => {
+      const { data } = await supabase
+        .from('conversation_devices')
+        .select('visitor_token')
+        .in('conversation_id', ids)
+      if (cancelled) return
+      const tokens = [...new Set((data ?? []).map(r => r.visitor_token))]
+      tokens.forEach(t => {
+        const ch = supabase.channel(`chat:${t}`)
+        ch.subscribe(status => {
+          if (status === 'SUBSCRIBED' && !cancelled) channelsRef.current.push(ch)
+        })
+        chans.push(ch)
+      })
+    })()
+    return () => {
+      cancelled = true
+      channelsRef.current = []
+      chans.forEach(ch => supabase.removeChannel(ch))
+    }
+  }, [activeIdsKey])
 
-  async function markRead(id) {
-    if (!canReply) return
-    await supabase.from('conversations').update({ unread_for_store: 0 }).eq('id', id)
-    setConversations(prev => prev.map(c => c.id === id ? { ...c, unread_for_store: 0 } : c))
+  async function markRead(ids) {
+    if (!canReply || !ids?.length) return
+    await supabase.from('conversations').update({ unread_for_store: 0 }).in('id', ids)
+    setConversations(prev => prev.map(c => ids.includes(c.id) ? { ...c, unread_for_store: 0 } : c))
   }
 
   async function setStatus(status, extra = {}) {
     if (!active || !canReply) return
     setBusy(true)
+    // 客服的心智模型是「處理這個人」，不是「處理這條記錄」——
+    // 只改其中一條會讓同一個人在列表上同時是「真人接管中」和「等待真人」
     const { error } = await supabase
       .from('conversations')
       .update({ status, ...extra })
-      .eq('id', active.id)
+      .in('id', active.conversationIds)
     if (error) alert('更新失敗：' + error.message)
     else await fetchConversations()
     setBusy(false)
@@ -190,10 +243,10 @@ export default function InboxPage() {
 
   async function send() {
     const text = draft.trim()
-    if (!text || !active || !canReply || busy) return
+    if (!text || !active || !targetConvId || !canReply || busy) return
     setBusy(true)
     const { error } = await supabase.from('messages').insert({
-      conversation_id: active.id,
+      conversation_id: targetConvId,
       store_id: storeId,
       sender: 'staff',
       sender_user_id: user.id,
@@ -204,27 +257,23 @@ export default function InboxPage() {
     const now = new Date().toISOString()
     await supabase.from('conversations')
       .update({ last_message_at: now, unread_for_store: 0 })
-      .eq('id', active.id)
+      .eq('id', targetConvId)
 
     // 推給訪客的網頁；推不出去也沒關係，訪客端每 6 秒會輪詢兜底
-    if (channelRef.current) {
+    if (channelsRef.current.length) {
       const { data } = await supabase.from('messages')
         .select('id, sender, content, created_at')
-        .eq('conversation_id', active.id)
+        .eq('conversation_id', targetConvId)
         .order('id', { ascending: false }).limit(1).maybeSingle()
-      try {
-        await channelRef.current.send({
-          type: 'broadcast',
-          event: 'message',
-          payload: { conversationId: active.id, message: data, status: active.status },
-        })
-      } catch (e) {
-        console.error('broadcast failed', e)
-      }
+      await Promise.all(channelsRef.current.map(ch => ch.send({
+        type: 'broadcast',
+        event: 'message',
+        payload: { conversationId: targetConvId, message: data, status: active.status },
+      }).catch(e => console.error('broadcast failed', e))))
     }
 
     setDraft('')
-    await fetchMessages(active.id)
+    await fetchMessages(active.conversationIds)
     await fetchConversations()
     setBusy(false)
   }
@@ -250,9 +299,8 @@ export default function InboxPage() {
     </div></div>
   )
 
-  const sorted = sortConversations(conversations)
-  const unreadCount = conversations.filter(c => (c.unread_for_store ?? 0) > 0).length
-  const waitingCount = conversations.filter(c => c.status === 'waiting_human').length
+  const unreadCount = groups.filter(g => g.unread > 0).length
+  const waitingCount = groups.filter(g => g.status === 'waiting_human').length
 
   return (
     <div className="page page-wide">
@@ -260,7 +308,7 @@ export default function InboxPage() {
         <div>
           <div className="ph-title">客服收件匣</div>
           <div className="ph-sub">
-            {waitingCount > 0 ? `${waitingCount} 條等待真人・` : ''}未讀 {unreadCount}・共 {conversations.length} 條對話
+            {waitingCount > 0 ? `${waitingCount} 位等待真人・` : ''}未讀 {unreadCount}・共 {groups.length} 位顧客
           </div>
         </div>
         {canReply && (
@@ -283,37 +331,41 @@ export default function InboxPage() {
       )}
 
       <div className="inbox-split">
-        {/* ── 對話列表：名字＋預覽，一眼看得出誰在問什麼 ── */}
+        {/* ── 顧客列表：名字＋預覽，一眼看得出誰在問什麼 ── */}
         <div className="inbox-list card">
           {loading ? <div className="empty">載入中…</div>
-            : sorted.length === 0 ? <div className="empty">還沒有任何對話</div>
-            : sorted.map(c => {
-              const unread = (c.unread_for_store ?? 0) > 0
+            : groups.length === 0 ? <div className="empty">還沒有任何對話</div>
+            : groups.map(g => {
+              const unread = g.unread > 0
               return (
                 <button
-                  key={c.id}
-                  className={`inbox-row${c.id === activeId ? ' active' : ''}`}
-                  onClick={() => setActiveId(c.id)}
+                  key={g.key}
+                  className={`inbox-row${g.key === activeKey ? ' active' : ''}`}
+                  onClick={() => setActiveKey(g.key)}
                 >
-                  <span className={`inbox-avatar${c.consumer_id ? '' : ' guest'}`} aria-hidden="true">
-                    {avatarText(c)}
+                  <span className={`inbox-avatar${g.consumerId ? '' : ' guest'}`} aria-hidden="true">
+                    {avatarText(g)}
                   </span>
                   <span className="inbox-row-main">
                     <span className="inbox-row-top">
-                      <span className={`inbox-row-name${unread ? ' unread' : ''}`}>{displayName(c)}</span>
-                      <span className="inbox-row-time">{shortTime(c.last_message_at)}</span>
+                      <span className={`inbox-row-name${unread ? ' unread' : ''}`}>{displayName(g)}</span>
+                      <span className="inbox-row-time">{shortTime(g.lastMessageAt)}</span>
                     </span>
                     <span className="inbox-row-preview">
-                      {c.last_message_preview
-                        ? <>{senderPrefix(c.last_message_sender)}{c.last_message_preview}</>
+                      {g.lastMessagePreview
+                        ? <>{senderPrefix(g.lastMessageSender)}{g.lastMessagePreview}</>
                         : <i style={{ color: 'var(--text-3)' }}>尚無訊息</i>}
                     </span>
                     <span className="inbox-row-meta">
-                      {c.status === 'waiting_human' && <span className="badge badge-warn">等待真人</span>}
-                      {c.status === 'human' && <span className="badge badge-blue">真人接管中</span>}
-                      {c.status === 'closed' && <span className="badge">已結束</span>}
+                      {g.status === 'waiting_human' && <span className="badge badge-warn">等待真人</span>}
+                      {g.status === 'human' && <span className="badge badge-blue">真人接管中</span>}
+                      {g.status === 'closed' && <span className="badge">已結束</span>}
                       {unread && <span className="inbox-dot" aria-label="未讀" />}
-                      <span className="inbox-row-channel">{c.channel === 'line' ? 'LINE' : '站內'}</span>
+                      {/* 只有真的散在多條對話時才提 —— 一段的情況說「1 段對話」是雜訊 */}
+                      {g.conversationIds.length > 1 && (
+                        <span className="inbox-row-devices">{g.conversationIds.length} 段對話</span>
+                      )}
+                      <span className="inbox-row-channel">{g.channel === 'line' ? 'LINE' : '站內'}</span>
                     </span>
                   </span>
                 </button>
@@ -323,41 +375,55 @@ export default function InboxPage() {
 
         {/* ── 對話 ── */}
         <div className="inbox-thread card">
-          {!active ? <div className="empty">從左邊選一條對話</div> : (
+          {!active ? <div className="empty">從左邊選一位顧客</div> : (
             <>
               <div className="inbox-thread-head">
                 <div className="inbox-thread-title">
                   <b>{displayName(active)}</b>
                   <span className={STATUS_BADGE[active.status]}>{statusLabel(active.status, aiEnabled)}</span>
-                  {active.assigned_to && (
+                  {active.assignedTo && (
                     <span className="badge badge-blue">
-                      {active.assigned_to === user?.id ? '你在處理' : '同事處理中'}
+                      {active.assignedTo === user?.id ? '你在處理' : '同事處理中'}
                     </span>
                   )}
-                  <span className="inbox-thread-id">#{active.id}</span>
+                  {/* 顯示的是回覆會寫進哪一條 —— 客服要對照資料庫時看的就是這個號碼 */}
+                  <span className="inbox-thread-id">#{targetConvId ?? ''}</span>
                 </div>
                 {/* 窄螢幕看不到右欄，把最關鍵的兩項摘要在這裡 */}
                 <div className="inbox-brief">
-                  {active.consumer_id
+                  {active.consumerId
                     ? `${customer?.phone || '未留電話'}・${customer?.orders?.length ?? 0} 筆訂單`
                     : '尚未識別身分的訪客'}
                 </div>
               </div>
 
               <div ref={bodyRef} className="inbox-msgs">
-                {messages.map(m => (
-                  <div key={m.id} className={`inbox-msg ${m.sender === 'consumer' ? 'them' : 'me'}`}>
-                    <div className="inbox-who">
-                      {m.sender === 'consumer'
-                        ? displayName(active)
-                        : m.sender === 'assistant'
-                          ? '客服助理'
-                          : m.sender_user_id === user?.id ? '你' : '同事'}
-                      ・{shortTime(m.created_at)}
+                {messages.map((m, i) => {
+                  // 換了一條對話就是換了一台裝置。不標的話時間軸會突然跳一大段，
+                  // 客服會以為自己漏看了什麼。
+                  const prev = messages[i - 1]
+                  const seam = prev && prev.conversation_id !== m.conversation_id
+                  return (
+                    <div key={m.id} className="inbox-msg-slot">
+                      {seam && (
+                        <div className="inbox-seam">
+                          另一個裝置・{new Date(m.created_at).toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric' })} 起
+                        </div>
+                      )}
+                      <div className={`inbox-msg ${m.sender === 'consumer' ? 'them' : 'me'}`}>
+                        <div className="inbox-who">
+                          {m.sender === 'consumer'
+                            ? displayName(active)
+                            : m.sender === 'assistant'
+                              ? '客服助理'
+                              : m.sender_user_id === user?.id ? '你' : '同事'}
+                          ・{shortTime(m.created_at)}
+                        </div>
+                        <div className="inbox-bubble">{m.content}</div>
+                      </div>
                     </div>
-                    <div className="inbox-bubble">{m.content}</div>
-                  </div>
-                ))}
+                  )
+                })}
                 {messages.length === 0 && <div className="empty">還沒有訊息</div>}
               </div>
 
@@ -401,13 +467,14 @@ export default function InboxPage() {
           {!active ? <div className="empty">顧客資料</div> : (
             <>
               <div className="inbox-side-id">
-                <span className={`inbox-avatar lg${active.consumer_id ? '' : ' guest'}`} aria-hidden="true">
+                <span className={`inbox-avatar lg${active.consumerId ? '' : ' guest'}`} aria-hidden="true">
                   {avatarText(active)}
                 </span>
                 <div style={{ minWidth: 0 }}>
                   <div className="inbox-side-name">{displayName(active)}</div>
                   <div className="inbox-side-role">
-                    {active.consumer_id ? '會員' : '訪客・尚未識別身分'}
+                    {active.consumerId ? '會員' : '訪客・尚未識別身分'}
+                    {active.conversationIds.length > 1 && `・${active.conversationIds.length} 段對話`}
                   </div>
                 </div>
               </div>
@@ -446,7 +513,7 @@ export default function InboxPage() {
                     </button>
                   ))
                   : <div className="inbox-side-none">
-                      {active.consumer_id ? '這位會員還沒有訂單' : '訪客登入或下單後才看得到'}
+                      {active.consumerId ? '這位會員還沒有訂單' : '訪客登入或下單後才看得到'}
                     </div>}
               </div>
             </>
@@ -513,6 +580,18 @@ export default function InboxPage() {
         .inbox-thread-id { font-size: 11.5px; color: var(--text-3); margin-left: auto; }
         .inbox-brief { display: none; font-size: 12px; color: var(--text-3); margin-top: 5px; }
         .inbox-msgs { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+        /* 每則訊息包一層，接縫分隔線才有地方擺；泡泡的左右對齊改在這一層之內完成 */
+        .inbox-msg-slot { display: flex; flex-direction: column; }
+        .inbox-seam {
+          text-align: center; font-size: 11px; color: var(--text-3);
+          margin: 6px 0; position: relative;
+        }
+        .inbox-seam::before, .inbox-seam::after {
+          content: ''; position: absolute; top: 50%; width: calc(50% - 60px);
+          border-top: 0.5px solid var(--border-light);
+        }
+        .inbox-seam::before { left: 0; }
+        .inbox-seam::after { right: 0; }
         .inbox-msg { max-width: 76%; display: flex; flex-direction: column; }
         .inbox-msg.them { align-self: flex-start; }
         .inbox-msg.me { align-self: flex-end; align-items: flex-end; }
@@ -572,16 +651,17 @@ export default function InboxPage() {
   )
 }
 
-// 訪客沒有名字，用對話編號當代號 —— 總比一整排 #41 好認
-function displayName(c) {
-  if (c?.customer_label) return c.customer_label
-  if (c?.consumer_id) return '會員'
-  return `訪客 #${c?.id ?? ''}`
+// 吃的是 groupConversations 產出的「一位顧客」，不是單一 conversations 列。
+// 訪客沒有名字，用組內第一條對話的編號當代號 —— 總比一整排「訪客」好認
+function displayName(g) {
+  if (g?.label) return g.label
+  if (g?.consumerId) return '會員'
+  return `訪客 #${g?.conversationIds?.[0] ?? ''}`
 }
 
-function avatarText(c) {
-  if (c?.customer_label) return c.customer_label.trim().slice(0, 1)
-  return c?.consumer_id ? '會' : '訪'
+function avatarText(g) {
+  if (g?.label) return g.label.trim().slice(0, 1)
+  return g?.consumerId ? '會' : '訪'
 }
 
 function senderPrefix(sender) {
