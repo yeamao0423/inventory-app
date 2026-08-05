@@ -12,6 +12,8 @@ import {
   memoryWindow,
   isValidVisitorToken,
   sortConversations,
+  groupConversations,
+  sortGroups,
 } from './customerInbox'
 
 describe('狀態機', () => {
@@ -236,5 +238,107 @@ describe('工作台排序', () => {
     ]
     sortConversations(list)
     expect(list.map(c => c.id)).toEqual([1, 2])
+  })
+})
+
+describe('groupConversations — 同一位會員收成一列', () => {
+  const base = {
+    channel: 'web', status: 'bot', unread_for_store: 0,
+    last_message_at: '2026-08-01T10:00:00Z', last_message_preview: '在嗎',
+    last_message_sender: 'consumer', customer_label: null, assigned_to: null,
+  }
+
+  it('同一 consumer_id 的多條併成一組，未識別訪客各自成組', () => {
+    const groups = groupConversations([
+      { ...base, id: 1, consumer_id: 'u1' },
+      { ...base, id: 2, consumer_id: 'u1' },
+      { ...base, id: 3, consumer_id: null, visitor_token: 't3' },
+      { ...base, id: 4, consumer_id: 'u2' },
+    ])
+    expect(groups).toHaveLength(3)
+    const u1 = groups.find(g => g.key === 'c:u1')
+    expect(u1.conversationIds).toEqual([1, 2])
+    expect(groups.find(g => g.key === 'v:3').conversationIds).toEqual([3])
+  })
+
+  it('狀態取組內最急的（waiting_human < human < bot < closed）', () => {
+    const g = groupConversations([
+      { ...base, id: 1, consumer_id: 'u1', status: 'closed' },
+      { ...base, id: 2, consumer_id: 'u1', status: 'waiting_human' },
+      { ...base, id: 3, consumer_id: 'u1', status: 'bot' },
+    ])[0]
+    expect(g.status).toBe('waiting_human')
+  })
+
+  it('未讀加總，最後訊息取最新那條', () => {
+    const g = groupConversations([
+      { ...base, id: 1, consumer_id: 'u1', unread_for_store: 2,
+        last_message_at: '2026-08-01T10:00:00Z', last_message_preview: '舊的' },
+      { ...base, id: 2, consumer_id: 'u1', unread_for_store: 3,
+        last_message_at: '2026-08-03T10:00:00Z', last_message_preview: '新的',
+        last_message_sender: 'staff' },
+    ])[0]
+    expect(g.unread).toBe(5)
+    expect(g.lastMessageAt).toBe('2026-08-03T10:00:00Z')
+    expect(g.lastMessagePreview).toBe('新的')
+    expect(g.lastMessageSender).toBe('staff')
+  })
+
+  it('名字取組內第一個非空的 customer_label', () => {
+    const g = groupConversations([
+      { ...base, id: 1, consumer_id: 'u1', customer_label: null },
+      { ...base, id: 2, consumer_id: 'u1', customer_label: '王小明' },
+    ])[0]
+    expect(g.label).toBe('王小明')
+  })
+
+  it('assignedTo 取最新那條有指派的', () => {
+    const g = groupConversations([
+      { ...base, id: 1, consumer_id: 'u1', assigned_to: 'staff-a',
+        last_message_at: '2026-08-01T10:00:00Z' },
+      { ...base, id: 2, consumer_id: 'u1', assigned_to: null,
+        last_message_at: '2026-08-03T10:00:00Z' },
+    ])[0]
+    expect(g.assignedTo).toBe('staff-a')
+  })
+
+  it('壞資料不丟例外', () => {
+    expect(groupConversations(null)).toEqual([])
+    expect(groupConversations(undefined)).toEqual([])
+    expect(groupConversations([])).toEqual([])
+    expect(() => groupConversations([null, undefined, {}, { id: 9 }])).not.toThrow()
+  })
+})
+
+describe('sortGroups — 等真人優先，其次有未讀，再來最後訊息時間', () => {
+  const g = (over) => ({
+    key: 'k', consumerId: null, conversationIds: [1], label: null, channel: 'web',
+    status: 'bot', unread: 0, assignedTo: null,
+    lastMessageAt: '2026-08-01T10:00:00Z', lastMessagePreview: '', lastMessageSender: 'consumer',
+    ...over,
+  })
+
+  it('等待真人排最前面', () => {
+    const out = sortGroups([g({ key: 'a', status: 'bot' }), g({ key: 'b', status: 'waiting_human' })])
+    expect(out[0].key).toBe('b')
+  })
+
+  it('同狀態時有未讀的在前', () => {
+    const out = sortGroups([g({ key: 'a', unread: 0 }), g({ key: 'b', unread: 1 })])
+    expect(out[0].key).toBe('b')
+  })
+
+  it('同狀態同未讀時比最後訊息時間', () => {
+    const out = sortGroups([
+      g({ key: 'a', lastMessageAt: '2026-08-01T10:00:00Z' }),
+      g({ key: 'b', lastMessageAt: '2026-08-05T10:00:00Z' }),
+    ])
+    expect(out[0].key).toBe('b')
+  })
+
+  it('不就地改動輸入陣列', () => {
+    const input = [g({ key: 'a', status: 'bot' }), g({ key: 'b', status: 'waiting_human' })]
+    sortGroups(input)
+    expect(input[0].key).toBe('a')
   })
 })
