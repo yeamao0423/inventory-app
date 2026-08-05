@@ -6,6 +6,7 @@ import {
   nextStatusOnHandback, nextStatusOnTakeover, sortConversations,
 } from '../lib/customerInbox'
 import { subscribePush, unsubscribePush, pushState } from '../lib/pushNotify'
+import ConsumerOrderDetailSheet from '../components/ConsumerOrderDetailSheet'
 
 // 後台客服工作台：對話列表（waiting_human 置頂、未讀優先）＋ 對話詳情。
 //
@@ -33,7 +34,7 @@ const STATUS_BADGE = {
 }
 
 export default function InboxPage() {
-  const { profile, storeId, user, store } = useAuth()
+  const { profile, storeId, user, store, can } = useAuth()
   // AI 自動回覆預設關閉，逐店開通。關著的時候沒有助理可以「交還」，
   // 也不會有助理插話，所以底下的按鈕與提示都要跟著換。
   const aiEnabled = store?.settings?.ai_reply === true
@@ -45,6 +46,8 @@ export default function InboxPage() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [push, setPush] = useState(pushState())
+  const [orderSheet, setOrderSheet] = useState(null)     // 開著的訂單完整資料
+  const [orderLoading, setOrderLoading] = useState(null) // 正在撈的訂單 id，避免連點開兩個
   const bodyRef = useRef(null)
   // 推給訪客網頁用的 Broadcast 頻道（頻道名＝訪客識別碼，見 ADR-0002）。
   // 必須先 subscribe 再 send —— 沒訂閱就送會退回 REST 路徑而失敗。
@@ -125,6 +128,25 @@ export default function InboxPage() {
       phone: latest?.phone ?? null,
       orders: data ?? [],
     })
+  }
+
+  // 右欄的近期訂單只 select 了七個欄位（fetchCustomer），
+  // ConsumerOrderDetailSheet 要的是完整一列，所以點下去才另外撈。
+  async function openOrder(orderId) {
+    if (orderLoading) return
+    setOrderLoading(orderId)
+    const { data, error } = await supabase
+      .from('consumer_orders')
+      .select('*')
+      // RLS 已經擋住跨店；這個條件是為了讓「拿到別店的 id」這種程式錯誤直接查不到，
+      // 而不是靜靜開一個空 sheet
+      .eq('store_id', storeId)
+      .eq('id', orderId)
+      .maybeSingle()
+    setOrderLoading(null)
+    if (error) { alert('讀取訂單失敗：' + error.message); return }
+    if (!data) { alert('這筆訂單已不存在'); return }
+    setOrderSheet(data)
   }
 
   const active = useMemo(
@@ -404,7 +426,14 @@ export default function InboxPage() {
                 </div>
                 {customer?.orders?.length
                   ? customer.orders.map(o => (
-                    <div key={o.id} className="inbox-order">
+                    <button
+                      key={o.id}
+                      type="button"
+                      className="inbox-order"
+                      onClick={() => openOrder(o.id)}
+                      disabled={orderLoading === o.id}
+                      aria-label={`查看訂單 #${o.store_order_no ?? o.id} 的詳細資料`}
+                    >
                       <div className="inbox-order-top">
                         <span className="inbox-order-no">#{o.store_order_no ?? o.id}</span>
                         <span className="inbox-order-amt">NT${Number(o.total_amount || 0).toLocaleString()}</span>
@@ -412,9 +441,9 @@ export default function InboxPage() {
                       <div className="inbox-order-meta">
                         <span className="badge">{o.status}</span>
                         <span className="badge badge-ok">{o.payment_status}</span>
-                        <span>{shortTime(o.created_at)}</span>
+                        <span>{orderLoading === o.id ? '讀取中…' : shortTime(o.created_at)}</span>
                       </div>
-                    </div>
+                    </button>
                   ))
                   : <div className="inbox-side-none">
                       {active.consumer_id ? '這位會員還沒有訂單' : '訪客登入或下單後才看得到'}
@@ -424,6 +453,19 @@ export default function InboxPage() {
           )}
         </aside>
       </div>
+
+      {orderSheet && (
+        <ConsumerOrderDetailSheet
+          order={orderSheet}
+          canEdit={can('pay')}
+          onClose={() => setOrderSheet(null)}
+          // 只刷新、不關閉：ConsumerOrderDetailSheet 有幾條路徑是「存完繼續編輯」
+          // （折讓失焦、登記收付款、刪除收付款紀錄都只呼叫 onSaved），
+          // 在這裡順手關掉會讓客服登記一筆收款就被踢出 sheet。
+          // 該關的路徑（save()、退還優惠券）元件自己會呼叫 onClose()。
+          onSaved={() => fetchCustomer(active)}
+        />
+      )}
 
       <style>{`
         /* 三欄：列表｜對話｜顧客。整頁不捲，各欄自己捲，輸入框釘在對話欄底部。 */
@@ -500,7 +542,14 @@ export default function InboxPage() {
         .inbox-kv dd { margin: 0; color: var(--text); }
         .inbox-kv i, .inbox-side-none i { color: var(--text-3); font-style: normal; }
         .ellip { overflow: hidden; text-overflow: ellipsis; }
-        .inbox-order { border: 0.5px solid var(--border); border-radius: 10px; padding: 9px 10px; margin-bottom: 8px; }
+        .inbox-order {
+          display: block; width: 100%; text-align: left;
+          border: 0.5px solid var(--border); border-radius: 10px; padding: 9px 10px;
+          margin-bottom: 8px; background: none; cursor: pointer;
+          transition: border-color .15s;
+        }
+        .inbox-order:hover:not(:disabled) { border-color: var(--text-3); }
+        .inbox-order:disabled { opacity: .6; cursor: wait; }
         .inbox-order:last-child { margin-bottom: 0; }
         .inbox-order-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
         .inbox-order-no { font-size: 12.5px; font-weight: 600; }
