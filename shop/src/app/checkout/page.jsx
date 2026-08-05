@@ -626,7 +626,7 @@ export default function CheckoutPage() {
                   <ul className="checkout-stock-list">
                     {stockIssues.map(s => (
                       <li key={s.key}>
-                        {s.name}{s.variantLabel ? `（${s.variantLabel}）` : ''}
+                        {s.name}{s.variantLabel ? `（${s.variantLabel}）` : ''}{'　'}
                         {lang === 'zh'
                           ? `你要 ${s.want} 件，只剩 ${s.left} 件`
                           : `you want ${s.want}, only ${s.left} left`}
