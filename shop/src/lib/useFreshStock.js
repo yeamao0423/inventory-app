@@ -22,8 +22,12 @@ async function fetchStock(productIds) {
 
 export function useFreshStock(productIds) {
   const [state, setState] = useState({ products: null, variants: null, status: 'loading', at: null })
-  // 陣列每次 render 都是新物件，用內容當依賴才不會無限重取
-  const key = (productIds || []).filter(n => Number.isFinite(Number(n))).join(',')
+  // 陣列每次 render 都是新物件，用內容當依賴才不會無限重取。
+  // 先濾掉非正整數（後台預覽的假資料會帶 undefined）—— 送出去只會換來 400。
+  const key = (productIds || [])
+    .map(Number)
+    .filter(n => Number.isInteger(n) && n > 0)
+    .join(',')
   const keyRef = useRef(key)
   keyRef.current = key
 
