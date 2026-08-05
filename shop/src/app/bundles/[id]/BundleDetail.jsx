@@ -105,9 +105,11 @@ export default function BundleDetail({ bundle, items, missingProductIds = [], op
   const payableShown = useCountUp(selection.payable)
 
   function toggle(productId) {
+    setAddError(null)
     setPicks(p => ({ ...p, [productId]: { ...p[productId], included: !p[productId]?.included } }))
   }
   function pickOption(productId, typeId, valueId) {
+    setAddError(null)
     setPicks(p => ({
       ...p,
       [productId]: { ...p[productId], options: { ...p[productId]?.options, [String(typeId)]: valueId } },
@@ -129,9 +131,38 @@ export default function BundleDetail({ bundle, items, missingProductIds = [], op
     el.classList.add('is-flash')
   }
 
-  function handleAdd() {
+  async function handleAdd() {
+    setAddError(null)
     const chosen = rows.filter(r => r.included)
     if (chosen.length === 0) return
+
+    // 頁面可能開很久了。按下去的這一刻再確認一次，不要讓客人填完整張結帳表才知道沒貨。
+    // refetch 失敗（now 為 null）就照常加入 —— place_order 仍會擋，
+    // 把客人卡在「連不到伺服器所以不能買」是更糟的結果。
+    const now = await fresh.refetch()
+    if (now) {
+      const bad = chosen.filter(r => {
+        if (r.skipStock) return false   // 預購／收單品項不看庫存數字
+        const v = r.currentVariant
+        // 這一次的回應查不到就沿用手上的值，不要把「查不到」當成「沒貨」
+        const left = v
+          ? (now.variants[v.id] ?? v.stock)
+          : (now.products[r.sp.products.id] ?? r.sp.products.quantity ?? 0)
+        return left < 1
+      })
+      if (bad.length) {
+        setAddError(zh
+          ? `「${bad.map(r => r.name).join('」、「')}」剛剛被買走了，已從這一套移除。`
+          : `${bad.map(r => r.name).join(', ')} just sold out and ${bad.length > 1 ? 'were' : 'was'} removed from the set.`)
+        setPicks(p => {
+          const next = { ...p }
+          bad.forEach(r => { next[r.productId] = { ...p[r.productId], included: false } })
+          return next
+        })
+        return
+      }
+    }
+
     // 套裝價成立才掛 bundleId：拆著買本來就是原價，掛上去只會在購物車顯示無意義的「缺件」警告
     const tagged = selection.applies
     addItems(chosen.map(r => ({
@@ -271,6 +302,8 @@ export default function BundleDetail({ bundle, items, missingProductIds = [], op
 
           <div ref={anchorRef}>
             <button className="add-btn" onClick={handleAdd} disabled={!anyIncluded}>{ctaLabel}</button>
+            {/* 按下去才發現其中一件剛被買走：訊息就長在按鈕下面，不要跳 alert 打斷人 */}
+            {addError && <div className="pp-add-error">{addError}</div>}
           </div>
 
           {added && (
