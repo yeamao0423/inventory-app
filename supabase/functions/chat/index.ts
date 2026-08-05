@@ -185,8 +185,122 @@ async function lastStaffAt(conversationId: number): Promise<string | null> {
   return data?.created_at ?? null;
 }
 
+// ── 身分與對話歸屬 ──────────────────────────────────────────
+// 對話屬於「人」，裝置只是他從哪裡連進來。找對話的順序因此變成
+// 「登入身分優先、訪客識別碼次之」，而存取權也不能再靠 visitor_token 一個條件擋。
+
+const CONV_COLS = "id, store_id, status, consumer_id, visitor_token, unread_for_store";
+
+// JWT 的 payload 只拿來當「不必問了」的快篩，不當憑據 —— 真正的驗證一律走 getUser()。
+// 商城未登入時送的是 anon key（role=anon），格式也是 JWT；沒有這道快篩的話，
+// 每 6 秒一次的輪詢都會多打一次 auth 伺服器。解不開就回 true，讓 getUser() 去判。
+function looksAuthenticated(jwt: string): boolean {
+  try {
+    const payload = JSON.parse(
+      atob(jwt.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")),
+    );
+    return payload?.role === "authenticated" && !!payload?.sub;
+  } catch {
+    return true;
+  }
+}
+
+// 由消費者自己的 access token 證明身分，不能讓呼叫端直接指定 consumer_id。
+// 沒帶 token、token 過期、不是消費者 → 一律回 null，走訪客那條路。
+// 對話不該因為登入過期就斷掉。
+async function resolveConsumerId(req: Request): Promise<string | null> {
+  const jwt = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
+  if (!jwt || !looksAuthenticated(jwt)) return null;
+  const { data, error } = await admin.auth.getUser(jwt);
+  if (error || !data?.user) return null;
+  const { data: consumer } = await admin
+    .from("consumers").select("id").eq("id", data.user.id).maybeSingle();
+  return consumer?.id ?? null;
+}
+
+// 這位客人又從一台新裝置來了。失敗不影響訊息寫入 —— 少一筆對照只是下次要重新認一次。
+async function rememberDevice(conv: ConversationRow, visitorToken: string) {
+  const { error } = await admin
+    .from("conversation_devices")
+    .upsert(
+      { conversation_id: conv.id, visitor_token: visitorToken, store_id: conv.store_id },
+      { onConflict: "conversation_id,visitor_token", ignoreDuplicates: true },
+    );
+  if (error) console.error("rememberDevice failed", error.message);
+}
+
+/** 這個訪客識別碼登記在哪些對話底下（用來反查與推播）。 */
+async function conversationIdsForToken(storeId: number, visitorToken: string): Promise<number[]> {
+  const { data } = await admin
+    .from("conversation_devices")
+    .select("conversation_id")
+    .eq("store_id", storeId)
+    .eq("visitor_token", visitorToken);
+  return (data ?? []).map((r) => r.conversation_id as number);
+}
+
+/**
+ * 能不能讀寫這條對話。
+ *
+ * 原本靠 .eq("visitor_token", …) 把「猜 conversationId 讀別人對話」擋在查詢裡；
+ * 一條對話能掛多個裝置之後那個條件不再成立，必須換成這裡的兩條規則。
+ * 少了它，任何人都能用自己的識別碼去讀任意對話。
+ */
+async function canAccess(
+  conv: ConversationRow,
+  consumerId: string | null,
+  visitorToken: string,
+): Promise<boolean> {
+  if (consumerId && conv.consumer_id === consumerId) return true;
+  const { data } = await admin
+    .from("conversation_devices").select("conversation_id")
+    .eq("conversation_id", conv.id).eq("visitor_token", visitorToken).maybeSingle();
+  return !!data;
+}
+
+/**
+ * 找出這次該用哪一條對話。
+ *   帶了 conversationId → 撈出來並驗存取權（見 canAccess）
+ *   已登入             → 該店該會員最近一條未關閉的
+ *   其餘               → 該訪客識別碼登記過的最近一條未關閉的
+ * 找不到回 null（呼叫端決定要不要建新的）。
+ */
+async function findConversation(
+  { storeId, consumerId, visitorToken, conversationId }: {
+    storeId: number;
+    consumerId: string | null;
+    visitorToken: string;
+    conversationId?: number;
+  },
+): Promise<ConversationRow | null> {
+  if (conversationId && Number.isInteger(conversationId) && conversationId > 0) {
+    const { data } = await admin
+      .from("conversations").select(CONV_COLS)
+      .eq("id", conversationId).eq("store_id", storeId).maybeSingle();
+    const conv = data as ConversationRow | null;
+    if (!conv) return null;
+    return (await canAccess(conv, consumerId, visitorToken)) ? conv : null;
+  }
+
+  if (consumerId) {
+    const { data } = await admin
+      .from("conversations").select(CONV_COLS)
+      .eq("store_id", storeId).eq("consumer_id", consumerId).neq("status", "closed")
+      .order("last_message_at", { ascending: false }).limit(1).maybeSingle();
+    if (data) return data as ConversationRow;
+  }
+
+  const ids = await conversationIdsForToken(storeId, visitorToken);
+  if (ids.length === 0) return null;
+  const { data } = await admin
+    .from("conversations").select(CONV_COLS)
+    .eq("store_id", storeId).in("id", ids).neq("status", "closed")
+    .order("last_message_at", { ascending: false }).limit(1).maybeSingle();
+  return (data as ConversationRow | null) ?? null;
+}
+
 // ── GET：載入歷史／輪詢新訊息 ───────────────────────────────
-async function handleGet(url: URL) {
+async function handleGet(req: Request, url: URL) {
   const storeId = Number(url.searchParams.get("storeId"));
   const visitorToken = url.searchParams.get("visitorToken");
   const conversationId = Number(url.searchParams.get("conversationId"));
@@ -200,30 +314,20 @@ async function handleGet(url: URL) {
   const store = sinceId > 0 ? null : await loadStore(storeId);
   const aiFields = store ? { aiEnabled: store.aiEnabled } : {};
 
-  // 沒帶對話就以 (店, 訪客識別碼) 找最近一條，讓「重新整理後歷史還在」成立
-  let conv: ConversationRow | null = null;
-  if (Number.isInteger(conversationId) && conversationId > 0) {
-    const { data } = await admin
-      .from("conversations")
-      .select("id, store_id, status, consumer_id, visitor_token, unread_for_store")
-      .eq("id", conversationId)
-      .eq("store_id", storeId)
-      .eq("visitor_token", visitorToken) // 對不上就查不到 → 別人的對話讀不走
-      .maybeSingle();
-    conv = data as ConversationRow | null;
-  } else {
-    const { data } = await admin
-      .from("conversations")
-      .select("id, store_id, status, consumer_id, visitor_token, unread_for_store")
-      .eq("store_id", storeId)
-      .eq("visitor_token", visitorToken)
-      .neq("status", "closed")
-      .order("last_message_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    conv = data as ConversationRow | null;
-  }
+  // 登入身分優先、訪客識別碼次之。沒帶對話時仍會找回最近一條，
+  // 讓「重新整理後歷史還在」以及「換一台裝置登入後接得上」同時成立。
+  const consumerId = await resolveConsumerId(req);
+  const conv = await findConversation({
+    storeId,
+    consumerId,
+    visitorToken: visitorToken as string,
+    conversationId: Number.isInteger(conversationId) && conversationId > 0
+      ? conversationId
+      : undefined,
+  });
 
+  // 存取權不足時 findConversation 回 null，走的是這條「回空」的路 ——
+  // 回 403 等於告訴對方「這條對話存在」。
   if (!conv) return json({ conversationId: null, status: null, messages: [], ...aiFields });
 
   const { data: msgs } = await admin
@@ -246,20 +350,23 @@ async function handleClaim(req: Request, body: Record<string, unknown>) {
   if (!isValidVisitorToken(visitorToken)) return json({ error: "訪客識別碼格式錯誤" }, 400);
 
   // 身分由消費者自己的 access token 證明，不能讓呼叫端直接指定 consumer_id
-  const jwt = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
-  if (!jwt) return json({ error: "需要登入" }, 401);
-  const { data: userRes, error } = await admin.auth.getUser(jwt);
-  if (error || !userRes?.user) return json({ error: "登入狀態無效" }, 401);
+  const consumerId = await resolveConsumerId(req);
+  if (!consumerId) return json({ error: "需要登入" }, 401);
 
   const { data: updated } = await admin
     .from("conversations")
-    .update({ consumer_id: userRes.user.id })
+    .update({ consumer_id: consumerId })
     .eq("store_id", storeId)
     .eq("visitor_token", visitorToken)
     .is("consumer_id", null)
-    .select("id");
+    .select(CONV_COLS);
 
-  return json({ ok: true, claimed: updated?.length ?? 0 });
+  // 被認領的對話也要記上這台裝置 —— 舊版商城只呼叫 claim、不一定會馬上發訊息，
+  // 少了這一筆的話這台裝置就反查不到自己剛認領的對話。
+  const claimed = (updated ?? []) as ConversationRow[];
+  await Promise.all(claimed.map((c) => rememberDevice(c, visitorToken as string)));
+
+  return json({ ok: true, claimed: claimed.length });
 }
 
 // ── POST：送出訊息 / 要求真人 ───────────────────────────────
@@ -304,20 +411,20 @@ async function handlePost(req: Request) {
   const aiEnabled = store.aiEnabled;
 
   // ── 找出或建立對話 ──
+  const consumerId = await resolveConsumerId(req);
   const conversationId = Number(body.conversationId ?? 0);
-  let conv: ConversationRow | null = null;
+  const hasConversationId = Number.isInteger(conversationId) && conversationId > 0;
+  let conv = await findConversation({
+    storeId,
+    consumerId,
+    visitorToken: visitorToken as string,
+    conversationId: hasConversationId ? conversationId : undefined,
+  });
 
-  if (Number.isInteger(conversationId) && conversationId > 0) {
-    const { data } = await admin
-      .from("conversations")
-      .select("id, store_id, status, consumer_id, visitor_token, unread_for_store")
-      .eq("id", conversationId)
-      .eq("store_id", storeId)
-      .eq("visitor_token", visitorToken)
-      .maybeSingle();
-    conv = data as ConversationRow | null;
-    if (!conv) return json({ error: "找不到這條對話" }, 404);
-  } else {
+  // 帶了 conversationId 卻找不到 = 不存在或不是你的，兩種都回 404（不區分，避免探測）
+  if (!conv && hasConversationId) return json({ error: "找不到這條對話" }, 404);
+
+  if (!conv) {
     // 建立新對話才驗 Turnstile（每則訊息都驗會擋掉正常對話節奏）
     const ok = await verifyTurnstile(body.turnstileToken, ip);
     if (!ok) return json({ error: "人機驗證失敗，請重新整理再試" }, 403);
@@ -329,14 +436,18 @@ async function handlePost(req: Request) {
       .insert({
         store_id: storeId,
         channel: "web",
-        visitor_token: visitorToken,
+        visitor_token: visitorToken, // 建立這條對話的第一個裝置
+        consumer_id: consumerId, // 一開始就知道是誰的話直接填上
         status: initialStatus({ aiEnabled }),
       })
-      .select("id, store_id, status, consumer_id, visitor_token, unread_for_store")
+      .select(CONV_COLS)
       .single();
     if (error) return json({ error: "建立對話失敗" }, 500);
     conv = data as ConversationRow;
   }
+
+  // 每次都登記：這就是「同一個人又換了一台裝置」的紀錄點
+  await rememberDevice(conv, visitorToken as string);
 
   // ── 消費者要求真人 ──
   if (action === "request_human") {
@@ -454,7 +565,7 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   try {
     const url = new URL(req.url);
-    if (req.method === "GET") return await handleGet(url);
+    if (req.method === "GET") return await handleGet(req, url);
     if (req.method === "POST") return await handlePost(req);
     return json({ error: "Method not allowed" }, 405);
   } catch (e) {
