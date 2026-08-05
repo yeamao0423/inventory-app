@@ -259,6 +259,20 @@ async function canAccess(
 }
 
 /**
+ * 推給這條對話的每一台裝置。
+ * 頻道名＝訪客識別碼（猜不到就聽不到，ADR-0002），所以一條對話有幾台裝置就推幾次。
+ * 推不出去不影響訊息寫入 —— 前端每 6 秒輪詢兜底。
+ */
+async function broadcastToConversation(conv: ConversationRow, event: string, payload: unknown) {
+  const { data } = await admin
+    .from("conversation_devices").select("visitor_token").eq("conversation_id", conv.id);
+  const tokens = (data ?? []).map((r) => r.visitor_token as string);
+  // 保險：對照表意外是空的就退回這條對話自己的建立裝置
+  if (tokens.length === 0 && conv.visitor_token) tokens.push(conv.visitor_token);
+  await Promise.all(tokens.map((t) => broadcast(visitorTopic(t), event, payload)));
+}
+
+/**
  * 找出這次該用哪一條對話。
  *   帶了 conversationId → 撈出來並驗存取權（見 canAccess）
  *   已登入             → 該店該會員最近一條未關閉的
@@ -461,7 +475,7 @@ async function handlePost(req: Request) {
       body: "有顧客在商城聊天視窗要求真人客服",
       conversationId: conv.id,
     });
-    await broadcast(visitorTopic(visitorToken), "status", { conversationId: conv.id, status });
+    await broadcastToConversation(conv, "status", { conversationId: conv.id, status });
     return json({ conversationId: conv.id, status, messages: [], aiEnabled });
   }
 
@@ -534,7 +548,7 @@ async function handlePost(req: Request) {
       .eq("id", conv.id);
     out.push(assistantMsg);
 
-    await broadcast(visitorTopic(visitorToken), "message", {
+    await broadcastToConversation(conv, "message", {
       conversationId: conv.id,
       message: assistantMsg,
       status: raisedHand ? "waiting_human" : status,
