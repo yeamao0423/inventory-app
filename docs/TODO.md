@@ -13,16 +13,20 @@
 四項使用者回饋拆成五份 spec，三條 track 平行開發，各自 git worktree。
 設計在 `docs/superpowers/specs/`，檔名前綴對應下表：
 
-| | 內容 | 分支 | 相依 |
+| | 內容 | 分支 | 狀態 |
 |---|---|---|---|
-| S1 | 客服收件匣的訂單詳情 popup | `feat/inbox-order-detail` | — |
-| S2 | 客服對話依會員彙整（多裝置併成一列） | `feat/inbox-conversation-merge` | 等 S1 合併 |
-| S3 | 組合商品：規格連動照片＋缺貨呈現 | `feat/bundle-variant-images` | — |
-| S4 | 賣完的不能再被選（庫存新鮮度＋結帳前檢查） | `feat/stock-freshness` | 等 S3 合併 |
-| S5 | 商品頁編排改用欄容器版面模型 | `feat/product-page-columns` | — |
+| S1 | 客服收件匣的訂單詳情 popup | `feat/inbox-order-detail` | 已合併 main，**待瀏覽器驗收** |
+| S2 | 客服對話依會員彙整（多裝置併成一列） | `feat/inbox-conversation-merge` | 開發中 |
+| S3 | 組合商品：規格連動照片＋缺貨呈現 | `feat/bundle-variant-images` | 已合併 main，**待瀏覽器驗收** |
+| S4 | 賣完的不能再被選（庫存新鮮度＋結帳前檢查） | `feat/stock-freshness` | 開發中 |
+| S5 | 商品頁編排改用欄容器版面模型 | `feat/product-page-columns` | 已合併 main，**待瀏覽器驗收** |
 
-S5 第一階段不做預覽 iframe 內的直接拖放，那留成後續。
-五支全部驗收通過並合併回 `main` 之後，這一節整個刪掉。
+已合併的三支只驗過純函式（329 個測試）與兩個專案的正式 build（商城預先產生 227 頁），
+**UI 行為還沒有人眼看過** —— 訂單詳情的金流、編排器的拖拉、版面的實際長相都還沒驗。
+main 沒有 push，所以還沒有部署出去。
+
+S5 第一階段不做預覽 iframe 內的直接拖放，那留成後續，是這一節刪掉後唯一要留下的項目。
+五支全部驗收通過之後，把這一節換成那一行後續。
 
 ---
 
