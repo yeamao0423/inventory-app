@@ -42,6 +42,8 @@
 - **不做**「下單成功後回打 `/api/revalidate`」。目標 1 已經讓顯示是新鮮的，
   再拉一條從結帳回到 Next.js 的線只是多一個會壞的東西。
 - 不做即時庫存推播（Realtime 訂閱庫存變動）。輪詢一次就夠，這不是拍賣網站。
+- 不新增測試 runner —— 也不需要：根目錄的 vitest 已經涵蓋 `shop/src/lib/*.test.js`，
+  `mergeStock` / `mergeQuantity` / `isValueSoldOut` / `initialOptions` 都要寫測試。
 - 不改 SSR/ISR 的快取策略。SEO 需要 server 端就吐出完整內容，這點不動。
 
 ---

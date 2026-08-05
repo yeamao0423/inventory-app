@@ -19,7 +19,11 @@
 - **絕不 `select('*')` 查 `product_variants`。** 明列 `id, product_id, stock`。成本欄位不可出現在消費者拿得到的回應裡。
 - 輔助 API 失敗時**一律放行**，不可把消費者鎖成不能購買。極少數的競態交給 `place_order` 擋。
 - 預購／收單商品（`skip_stock_check` 或有 `collection_end`）不受庫存數字影響，既有的 `skipStock` 判斷優先。
-- `shop/` 沒有測試 runner，這次不引入。驗收全部是瀏覽器步驟。
+- **`shop/src/lib/` 的純函式測得到**：根目錄的 vitest 本來就涵蓋 `shop/src/lib/*.test.js`
+  （既有的 `bundleCart` / `blockProducts` / `previewBridge` / `productPageBlocks` 都在那裡跑）。
+  `mergeStock`、`mergeQuantity`、`variantStock.js` 的 `isValueSoldOut` 與 `initialOptions`
+  **都要寫測試並走 TDD**。跑的指令是 `npx vitest run`（`npm run test` 是 watch 模式會卡住）。
+  React 元件與 API route 沒有 runner，那些走瀏覽器驗收。
 - 不新增任何依賴。
 - **商城 dev server 在跑時不要跑 `npm run build`**。
 - commit message 用繁體中文、簡潔，不要加 Co-Authored-By。
@@ -234,14 +238,70 @@ export function mergeQuantity(quantity, productId, fresh) {
 }
 ```
 
-- [ ] **Step 2: Commit**
+- [ ] **Step 2: 寫 `mergeStock` / `mergeQuantity` 的測試**
+
+新增 `shop/src/lib/useFreshStock.test.js`（照 `shop/src/lib/bundleCart.test.js` 的風格，中文描述）。
+只測兩支純函式，hook 本身不測（沒有 React 測試環境）：
+
+```js
+import { describe, it, expect } from 'vitest'
+import { mergeStock, mergeQuantity } from './useFreshStock'
+
+describe('mergeStock — 用新鮮庫存覆蓋 SSR 快照', () => {
+  const variants = [{ id: 1, stock: 5 }, { id: 2, stock: 0 }]
+
+  it('有新值就換掉，沒有的維持原值', () => {
+    const out = mergeStock(variants, { variants: { 1: 0 } })
+    expect(out).toEqual([{ id: 1, stock: 0 }, { id: 2, stock: 0 }])
+  })
+
+  it('新值是 0 也要覆蓋（不能被當成沒有值）', () => {
+    expect(mergeStock([{ id: 1, stock: 9 }], { variants: { 1: 0 } })[0].stock).toBe(0)
+  })
+
+  it('fresh 是 null / 沒有 variants 時原樣回傳', () => {
+    expect(mergeStock(variants, null)).toBe(variants)
+    expect(mergeStock(variants, {})).toBe(variants)
+  })
+
+  it('不就地改動輸入', () => {
+    const src = [{ id: 1, stock: 5 }]
+    mergeStock(src, { variants: { 1: 0 } })
+    expect(src[0].stock).toBe(5)
+  })
+
+  it('variants 是 null 時回空陣列，不丟例外', () => {
+    expect(mergeStock(null, { variants: { 1: 0 } })).toEqual([])
+  })
+})
+
+describe('mergeQuantity — 沒有規格的商品用 products.quantity', () => {
+  it('有新值就用新的，包含 0', () => {
+    expect(mergeQuantity(7, 3, { products: { 3: 0 } })).toBe(0)
+  })
+
+  it('查不到該商品就沿用原值', () => {
+    expect(mergeQuantity(7, 3, { products: { 9: 1 } })).toBe(7)
+    expect(mergeQuantity(7, 3, null)).toBe(7)
+  })
+})
+```
+
+- [ ] **Step 3: 跑測試**
+
+Run: `npx vitest run shop/src/lib/useFreshStock.test.js`
+（`npm run test` 是 watch 模式會卡住，一律用 `npx vitest run`。）
+Expected: 全綠。「新值是 0 也要覆蓋」那條是關鍵——用 `if (map[v.id])` 之類的寫法會漏掉 0，
+而 0 正是「賣完了」，漏掉它整個功能就是白做的。
+
+- [ ] **Step 4: Commit**
 
 ```bash
-git add shop/src/lib/useFreshStock.js
+git add shop/src/lib/useFreshStock.js shop/src/lib/useFreshStock.test.js
 git commit -m "feat: 庫存補正 hook"
 ```
 
-（這一支沒有呼叫端，還看不出效果。下一個 Task 會接上。）
+（hook 本身還沒有呼叫端，下一個 Task 會接上。）
 
 ---
 
@@ -332,6 +392,13 @@ export function initialOptions(variants, activeTypes, skipStock, valuesFor) {
 ```
 
 `BundleDetail.jsx` 刪掉自己那兩支，改成 import。
+
+**這兩支要走 TDD**：先寫 `shop/src/lib/variantStock.test.js` 再實作。至少涵蓋——
+`isValueSoldOut`：`skipStock` 為真時一律不缺貨（預購／收單商品）；該值在目前其他維度的選擇下
+沒有任何 variant 對得上時算缺貨；對得上但全部 `stock <= 0` 算缺貨；有一個有貨就不算；
+其他維度尚未選時不設限（`v.options?.[tid] === undefined` 那條分支）。
+`initialOptions`：挑第一個有貨的值；全部缺貨時退回第一個；`skipStock` 為真時直接取第一個；
+空的 `activeTypes` 回空物件。跑 `npx vitest run shop/src/lib/variantStock.test.js` 確認全綠。
 
 - [ ] **Step 3: 補正後若當前選擇缺貨，換掉並說明**
 

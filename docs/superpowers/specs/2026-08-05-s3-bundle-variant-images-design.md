@@ -80,8 +80,11 @@ export function visibleImages(sortedImages, selectedOptions)
 `ProductStateProvider.jsx` 與 `ProductDetail.jsx` 改成 import 這支，刪掉本地副本。
 `ProductStateProvider` 原本 export 這兩支，檢查有沒有別的檔案在 import 它們，一併改掉。
 
-> `shop/` 目前沒有測試 runner（`shop/package.json` 只有 next/react），這次**不引入**。
-> 這三支的正確性靠下方驗收清單在瀏覽器逐項確認。
+> `shop/src/lib/` 的純函式**測得到**：根目錄的 vitest 已經涵蓋 `shop/src/lib/*.test.js`
+> （`bundleCart`、`blockProducts`、`previewBridge`、`productPageBlocks` 都在那裡跑）。
+> 這三支要寫 `shop/src/lib/variantImages.test.js`，特別是 `visibleImages` 的
+> 「過濾後為空退回全部」——那條 fallback 一旦弄丟，某些商品的圖庫會整個消失。
+> React 元件的部分沒有 runner，走下方的瀏覽器驗收清單。
 
 ### 二、bundle 卡片的圖跟著規格切換
 
