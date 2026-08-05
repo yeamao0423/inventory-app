@@ -48,8 +48,14 @@ export default function ChatWidget() {
   // 給輪詢／Broadcast 用的最新值（避免 effect 反覆重掛）
   const lastIdRef = useRef(0)
   const convIdRef = useRef(null)
+  // Broadcast 訂閱只掛在 visitorToken 上，不能為了讀這兩個值就把 store／token 加進依賴 ——
+  // 那會在每次 session 更新時重新訂閱，重訂的空窗期正好會漏掉訊息。
+  const storeRef = useRef(null)
+  const accessTokenRef = useRef(null)
 
   useEffect(() => { convIdRef.current = conversationId }, [conversationId])
+  useEffect(() => { storeRef.current = store }, [store])
+  useEffect(() => { accessTokenRef.current = accessToken }, [accessToken])
 
   useEffect(() => {
     setVisitorToken(getVisitorToken())
@@ -123,12 +129,64 @@ export default function ChatWidget() {
     return () => subscription.unsubscribe()
   }, [store, visitorToken, claim])
 
+  // ── 改認對話 ────────────────────────────────────────────────
+  // 這台裝置正在看的對話，跟客服實際回覆的那一條，有可能不是同一條：
+  // 後台以「人」為單位顯示，回覆一律寫進該顧客最新的那一條；而這台裝置可能還釘在
+  // 改版前留下的另一條。舊做法是把對不上的 broadcast 直接丟掉，結果是
+  // 「對話進行中，客人看不到客服的回覆，而且沒有任何跡象告訴他要重新整理」——
+  // 對話進行中收不到回覆，是最不能失敗的時刻。
+  //
+  // 頻道名等於訪客識別碼（能力型鑰匙，ADR-0002），推得進這個頻道的只有 service role
+  // 與該店後台，所以送進來的東西本來就是給這台裝置的，沒有理由丟掉。改認它。
+  // 同一輪推播進來好幾則時，只驗一次。
+  const adoptingRef = useRef(null)
+
+  const adoptConversation = useCallback(async (nextId) => {
+    if (adoptingRef.current === nextId) return
+    adoptingRef.current = nextId
+    const s = storeRef.current
+    if (!s || !visitorToken) { adoptingRef.current = null; return }
+    try {
+      // 先跟 server 確認這條真的是這台裝置的（canAccess：本人名下的，或這台裝置登記過的），
+      // 確認過才改認。光憑推播就換 id 的話，握有訪客識別碼的人可以把 widget 指到一條
+      // 讀不到也寫不進的對話，讓這個人從此送不出訊息 —— 而這則訊息本身也會跟著這次
+      // 重撈一起回來，所以不必、也不該直接採信推播的內容。
+      const res = await loadHistory({
+        storeId: s.id, visitorToken, conversationId: nextId,
+        sinceId: 0, accessToken: accessTokenRef.current,
+      })
+      if (res?.conversationId !== nextId) return   // 沒通過存取權：當作沒這回事
+      // ref 與 state 都要同步，否則下一則又會被判定為對不上。
+      convIdRef.current = nextId
+      setConversationId(nextId)
+      // lastIdRef 是 sinceId 用的，而 messages.id 是全表遞增 —— 換了對話還沿用它，
+      // 新對話裡比它舊的訊息會被整段跳過。所以歸零、由這次的完整歷史重新決定。
+      lastIdRef.current = 0
+      if (res.status) setStatus(res.status)
+      // 刻意用 merge 而不是取代：客人眼前的訊息不該憑空消失。
+      // id 全表遞增，兩條對話併起來排出來就是正確的時間順序 —— 跟後台看到的同一條時間軸。
+      mergeMessages(res.messages)
+    } catch { /* 這次沒驗成就算了，下一則推播或下一輪輪詢還有機會 */ }
+    finally { adoptingRef.current = null }
+  }, [visitorToken])
+
   // ── 即時：Realtime Broadcast（頻道名＝訪客識別碼）──
   useEffect(() => {
     if (!visitorToken || !supabase) return
     const ch = supabase.channel(visitorTopic(visitorToken))
     ch.on('broadcast', { event: 'message' }, ({ payload }) => {
-      if (convIdRef.current && payload?.conversationId !== convIdRef.current) return
+      const incoming = Number(payload?.conversationId)
+      const known = Number.isInteger(incoming) && incoming > 0
+      // 還沒有對話時維持原樣：照收，但不改認 —— 對話 id 由 loadHistory 決定。
+      if (convIdRef.current) {
+        if (!known) return                              // 認不出是哪條的，照舊丟掉
+        if (incoming !== convIdRef.current) {
+          // 對不上：交給 adoptConversation 去跟 server 驗，通過才改認並補完整歷史。
+          // 這則訊息會跟著那次重撈一起進來，所以這裡不直接收推播的內容。
+          adoptConversation(incoming)
+          return
+        }
+      }
       if (payload?.status) setStatus(payload.status)
       if (payload?.message) mergeMessages([payload.message])
     })
@@ -137,7 +195,7 @@ export default function ChatWidget() {
     })
     ch.subscribe()
     return () => { supabase.removeChannel(ch) }
-  }, [visitorToken])
+  }, [visitorToken, adoptConversation])
 
   // ── 輪詢兜底：視窗開著時每 6 秒補撈一次 ──
   useEffect(() => {
