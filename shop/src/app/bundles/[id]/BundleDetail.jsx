@@ -10,6 +10,7 @@ import { trackPixel } from '../../../lib/metaPixel'
 import { useCountUp } from '../../../lib/useCountUp'
 import { useBuyBar } from '../../../lib/useBuyBar'
 import { repImageFor, visibleImages } from '../../../lib/variantImages'
+import { isValueSoldOut, initialOptions, valuesForType } from '../../../lib/variantStock'
 
 // 組合商品落地頁。資料由 server component 以 props 帶入，這裡只負責互動。
 //
@@ -334,7 +335,7 @@ export default function BundleDetail({ bundle, items, missingProductIds = [], op
 
                   {/* 選規格是這頁的主要動作，所以放在卡片主體、不縮排、按鈕加大 */}
                   {!r.unavailable && r.activeTypes.map(type => {
-                    const values = valuesFor(type, r.variants)
+                    const values = valuesForType(type, r.variants)
                     return (
                       <div key={type.id}>
                         <div className="bundle-spec-label">{type.name}</div>
@@ -439,39 +440,9 @@ function activeTypesFor(variants, optTypes) {
   return (optTypes || []).filter(ty => used.has(ty.id))
 }
 
-function valuesFor(type, variants) {
-  const ids = [...new Set((variants || []).map(v => v.options?.[String(type.id)]).filter(Boolean))]
-  return ids
-    .map(vid => type.variant_option_values?.find(v => v.id === vid))
-    .filter(Boolean)
-    .sort((a, b) => a.sort_order - b.sort_order)
-}
-
-// 在其他維度維持目前選擇的前提下，這個值還有沒有貨
-function isValueSoldOut(variants, selectedOptions, typeId, valueId, skipStock) {
-  if (skipStock) return false
-  const matching = (variants || []).filter(v => {
-    if (v.options?.[String(typeId)] !== valueId) return false
-    return Object.entries(selectedOptions).every(([tid, vid]) => {
-      if (Number(tid) === typeId) return true
-      return v.options?.[tid] === undefined || v.options?.[tid] === vid
-    })
-  })
-  if (matching.length === 0) return true
-  return matching.every(v => v.stock <= 0)
-}
-
-// 初始選擇：每個維度挑第一個還有貨的值，全缺貨才退回第一個
-function initialOptions(variants, activeTypes, skipStock) {
-  const initial = {}
-  activeTypes.forEach(type => {
-    const values = valuesFor(type, variants)
-    const avail = values.find(v => !isValueSoldOut(variants, initial, type.id, v.id, skipStock))
-    const pick = avail || values[0]
-    if (pick) initial[String(type.id)] = pick.id
-  })
-  return initial
-}
+// valuesForType / isValueSoldOut / initialOptions 已搬到 lib/variantStock，
+// 與商品詳情頁、編排版商品頁共用 —— 三份副本必然漂移，同一件商品會在不同頁面
+// 顯示不同的缺貨規格。
 
 function resolveItem(item, optTypes, options, lang) {
   const sp = item.sp

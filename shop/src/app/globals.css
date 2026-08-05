@@ -404,6 +404,11 @@ input, textarea, select { font-family: inherit; }
 .add-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--sh-lift); }
 .add-btn:active:not(:disabled) { transform: translateY(0) scale(.985); }
 .add-btn:disabled { opacity: .38; cursor: not-allowed; box-shadow: none; }
+/* 庫存補正的兩則訊息。內建版型（ProductDetail）與組合商品頁吃這裡，
+   編排版商品頁另有一份同名規則在 product-blocks.css —— 那支 CSS 只有編排版會載入。
+   一行小字就夠，不加底色也不加圖示：它們是對客人的交代，不是警報。 */
+.pp-auto-switch { font-size: 12.5px; line-height: 1.6; color: var(--text-2); margin-top: 8px; }
+.pp-add-error { font-size: 13px; color: var(--red); margin-top: 8px; line-height: 1.6; }
 .back-link { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--text-3); margin-bottom: 24px; transition: color .15s; }
 .back-link:hover { color: var(--text); }
 .detail-subnav {

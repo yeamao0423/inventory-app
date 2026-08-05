@@ -14,6 +14,8 @@ import { useI18n, useCart } from '../../layout'
 import { getActivePrice } from '../../../lib/salePrice'
 import { trackPixel } from '../../../lib/metaPixel'
 import { visibleImages } from '../../../lib/variantImages'
+import { useFreshStock, mergeStock, mergeQuantity } from '../../../lib/useFreshStock'
+import { isValueSoldOut as valueSoldOut, initialOptions, valuesForType } from '../../../lib/variantStock'
 
 const ProductStateContext = createContext(null)
 
@@ -23,30 +25,43 @@ export function useProductState() {
 }
 
 export default function ProductStateProvider({
-  sp, variants, customOptions, optTypes, productTags, children,
+  sp, variants: rawVariants, customOptions, optTypes, productTags, children,
 }) {
   const { t, lang } = useI18n()
   const { addItem } = useCart()
   const [customNote, setCustomNote] = useState('')
   const [qty, setQty] = useState(1)
   const [added, setAdded] = useState(false)
+  const [addError, setAddError] = useState(null)
+  const [autoSwitched, setAutoSwitched] = useState(null)   // { from, to } 或 null
+
+  const p = sp.products
+
+  // 收單／預購狀態要在初始選擇之前算好 —— 挑「第一個還有貨的值」需要 skipStock，
+  // 晚一步算會拿到 undefined，預購商品的初始選擇會被誤判成缺貨。
+  const isCollection = !!sp.collection_end
+  const collectionExpired = isCollection && new Date(sp.collection_end) < new Date()
+  const markedSoldOut = sp.sold_out
+  const skipStock = sp.skip_stock_check || isCollection
+
+  // SSR 的庫存最舊可能是一小時前的快照，補正之後底下所有可選性判斷才是真的。
+  // 補正還沒回來（或失敗）時 mergeStock 原樣回傳，頁面就是原本的行為。
+  const fresh = useFreshStock([p.id])
+  const variants = mergeStock(rawVariants, fresh)
+  const quantity = mergeQuantity(p.quantity, p.id, fresh)
 
   // 哪些規格類型被這個商品的 variants 使用（由 props 推導，server/client 結果一致）
   const usedTypeIds = new Set()
   variants.forEach(v => Object.keys(v.options || {}).forEach(tid => usedTypeIds.add(Number(tid))))
   const activeTypes = optTypes.filter(ty => usedTypeIds.has(ty.id))
 
-  // 初始選擇：每個類型的第一個可用值
-  const [selectedOptions, setSelectedOptions] = useState(() => {
-    const initial = {}
-    activeTypes.forEach(type => {
-      const valueIds = [...new Set(variants.map(v => v.options?.[String(type.id)]).filter(Boolean))]
-      if (valueIds.length) initial[String(type.id)] = valueIds[0]
-    })
-    return initial
-  })
+  // 初始選擇：每個維度挑第一個還有貨的值，全缺貨才退回第一個。
+  // 與組合商品頁同一支函式 —— 同一件商品在兩條路徑上不該有不同的預設選擇。
+  // 這裡用 rawVariants：首次 render 時補正還沒回來，SSR 與 client 首渲染必須一致。
+  const [selectedOptions, setSelectedOptions] = useState(
+    () => initialOptions(rawVariants, activeTypes, skipStock),
+  )
 
-  const p = sp.products
   const name = lang === 'en' && sp.name_en ? sp.name_en : p.name
   const desc = lang === 'en' ? sp.desc_en : sp.desc_zh
   const sortedImages = [...(p.product_images || [])].sort((a, b) => a.sort_order - b.sort_order)
@@ -66,17 +81,29 @@ export default function ProductStateProvider({
     })
   }, [p.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Collection / sold_out status
-  const isCollection = !!sp.collection_end
-  const collectionExpired = isCollection && new Date(sp.collection_end) < new Date()
-  const markedSoldOut = sp.sold_out
-  const skipStock = sp.skip_stock_check || isCollection
+  // 庫存補正回來時，如果客人正選著的規格已經賣完，幫他換到同維度第一個有貨的。
+  // 但一定要講 —— 默默改掉客人的選擇比不改更糟。
+  useEffect(() => {
+    if (fresh.status !== 'ready') return
+    for (const type of activeTypes) {
+      const tid = String(type.id)
+      const cur = selectedOptions[tid]
+      if (!cur || !valueSoldOut(variants, selectedOptions, type.id, cur, skipStock)) continue
+      const values = valuesForType(type, variants)
+      const next = values.find(v => !valueSoldOut(variants, selectedOptions, type.id, v.id, skipStock))
+      if (!next) continue
+      const label = id => type.variant_option_values?.find(v => v.id === id)?.value ?? ''
+      setAutoSwitched({ from: label(cur), to: label(next.id) })
+      setSelectedOptions(o => ({ ...o, [tid]: next.id }))
+      break
+    }
+  }, [fresh.at, fresh.status]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Find current variant based on selected options
   const currentVariant = variants.find(v =>
     Object.entries(selectedOptions).every(([tid, vid]) => v.options?.[tid] === vid)
   )
-  const stock = currentVariant?.stock ?? (variants.length === 0 ? p.quantity : 0)
+  const stock = currentVariant?.stock ?? (variants.length === 0 ? quantity : 0)
   const stockSoldOut = stock <= 0 && !skipStock
   const isSoldOut = markedSoldOut || stockSoldOut
   const isUnavailable = isSoldOut || collectionExpired
@@ -103,31 +130,43 @@ export default function ProductStateProvider({
           ? t('product.sold_out')
           : t('product.add_to_cart')
 
-  // Check if a value is sold out given current selections for other types
+  // 規格可選性：與組合商品頁共用 lib/variantStock，區塊只吃 (typeId, valueId) 這個簡短簽名
   function isValueSoldOut(typeId, valueId) {
-    if (skipStock) return false
-    const matching = variants.filter(v => {
-      if (v.options?.[String(typeId)] !== valueId) return false
-      return Object.entries(selectedOptions).every(([tid, vid]) => {
-        if (Number(tid) === typeId) return true
-        return v.options?.[tid] === undefined || v.options?.[tid] === vid
-      })
-    })
-    if (matching.length === 0) return true
-    return matching.every(v => v.stock <= 0)
+    return valueSoldOut(variants, selectedOptions, typeId, valueId, skipStock)
   }
 
   function setOption(typeId, valueId) {
+    // 客人自己動手挑之後，「已幫你改成…」那句就過期了
+    setAutoSwitched(null)
+    setAddError(null)
     setSelectedOptions(s => ({ ...s, [String(typeId)]: valueId }))
   }
 
-  function addToCart() {
+  async function addToCart() {
     // 即時再檢查一次收單是否已截止
     if (sp.collection_end && new Date(sp.collection_end) < new Date()) {
       alert(lang === 'zh' ? '收單已截止，無法加入購物車' : 'Collection period has ended')
       return
     }
     if (isUnavailable) return
+    setAddError(null)
+
+    // 頁面可能開很久了。按下去的這一刻再確認一次，不要讓客人填完整張結帳表才知道沒貨。
+    // refetch 失敗（now 為 null）就照常加入 —— place_order 仍會擋，
+    // 把客人卡在「連不到伺服器所以不能買」是更糟的結果。
+    const now = await fresh.refetch()
+    if (now && !skipStock) {
+      const merged = mergeStock(rawVariants, now)
+      const cur = merged.find(v => v.id === currentVariant?.id)
+      const left = cur ? cur.stock : mergeQuantity(p.quantity, p.id, now)
+      if (left < qty) {
+        setAddError(zh
+          ? (left > 0 ? `這個規格只剩 ${left} 件了` : '這件剛剛被買走了')
+          : (left > 0 ? `Only ${left} left` : 'Just sold out'))
+        return
+      }
+    }
+
     addItem({
       id: p.id,
       sku: p.sku,
@@ -153,6 +192,8 @@ export default function ProductStateProvider({
     t, lang, zh, name, desc,
     // 狀態
     selectedOptions, qty, customNote, added,
+    // 庫存補正的兩則對客人的交代（見 ProductOptionsBlock / ProductCtaBlock）
+    autoSwitched, addError,
     // 衍生
     activeTypes, currentVariant, stock, skipStock, isCollection, collectionExpired,
     markedSoldOut, stockSoldOut, isSoldOut, isUnavailable,

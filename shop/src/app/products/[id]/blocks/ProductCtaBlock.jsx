@@ -7,12 +7,14 @@
 import { useProductState } from '../ProductStateProvider'
 
 export default function ProductCtaBlock({ block, anchorRef }) {
-  const { ctaLabel, isUnavailable, addToCart } = useProductState()
+  const { ctaLabel, isUnavailable, addToCart, addError } = useProductState()
   return (
     <div ref={anchorRef} className={`pp-cta${block.fullWidth ? '' : ' pp-cta-auto'}`}>
       <button type="button" className="add-btn" onClick={addToCart} disabled={isUnavailable}>
         {ctaLabel}
       </button>
+      {/* 按下去才發現剛被買走：訊息就長在按鈕下面，不要跳 alert 打斷人 */}
+      {addError && <div className="pp-add-error">{addError}</div>}
     </div>
   )
 }

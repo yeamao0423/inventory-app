@@ -7,6 +7,7 @@ import { repImageFor } from '../../../../lib/variantImages'
 export default function ProductOptionsBlock({ block }) {
   const {
     activeTypes, variants, selectedOptions, sortedImages, setOption, isValueSoldOut,
+    autoSwitched, zh,
   } = useProductState()
 
   // 這件商品根本沒有規格 → 整塊不出現。範本是全店共用的，一定會遇到沒規格的商品，
@@ -60,6 +61,15 @@ export default function ProductOptionsBlock({ block }) {
           </div>
         )
       })}
+
+      {/* 庫存補正把客人的選擇換掉時一定要講。默默改掉比不改更糟 ——
+          他以為自己買的是 M，結帳單上卻是 L。 */}
+      {autoSwitched && (
+        <div className="pp-auto-switch">
+          {zh ? `你剛才選的「${autoSwitched.from}」已售完，已改成「${autoSwitched.to}」。`
+              : `“${autoSwitched.from}” just sold out, switched to “${autoSwitched.to}”.`}
+        </div>
+      )}
     </div>
   )
 }
