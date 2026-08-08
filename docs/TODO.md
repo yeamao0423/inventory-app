@@ -210,6 +210,17 @@ API routes（`shop/src/app/api/ecpay/` 八支：付款 notify/result、超商電
 - **商家 onboarding 缺口**：邀請自動寄 email 與權限異動稽核（G5）、
   把 consumer 從 `user_store_roles` 退場讓該表回歸純後台角色（G7）、店主轉讓／救援機制（G8）。
   G1-G4、G6 都已完成
+- **行程拆帳三層瀑布＋補測試**。現況盤點、公式對照與實作計畫見
+  `docs/archive/trip-settlement-calc-plan.md`。要做的是把 `computeTripFinance` 擴成
+  實收營收／直接毛利／淨利三層（關稅、包材、金流手續費等新科目預設 0，數字不變）、
+  把 `TripsPage.jsx` 內嵌的拆帳算法抽成可測的 `src/lib/tripSettlement.js`，
+  並補一支端到端測試（訂單 → 淨利 → 每人分潤 → 每人實拿）。
+  注意兩個坑：`trip_expenses.category` 目前是全部 sum，新科目塞進 `other` 會讓瀑布分層錯；
+  「實際物流費」要用 `shippingFee − shippingNet` 反推，直接讀 `shippingCost` 會在
+  成本不明時把運費當純收入灌進盈餘
+- **行程訂單範圍 migration 上 remote**（程式碼已在 main）：
+  `20260808120000_consumer_orders_trip_scope.sql` 只套過 local。用 MCP `apply_migration`，
+  **不可以跑 `supabase db push`**。沒套之前前端會走降級路徑（報表照出，勾選鎖住）
 
 ---
 
