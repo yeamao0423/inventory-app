@@ -47,7 +47,7 @@ export function isActiveItem(item) {
   return (item?.status || 'active') !== 'cancelled'
 }
 
-function round2(n) {
+export function round2(n) {
   return Math.round(n * 100) / 100
 }
 
