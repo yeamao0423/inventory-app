@@ -7,6 +7,7 @@ import {
   taipeiDayStart, taipeiDayEnd, summarizeOrders, computeTripFinance, buildCostSnapshotMap,
 } from '../lib/orderFinance'
 import { splitOrdersByTrip } from '../lib/tripScope'
+import { buildCustomerSummaries, sortCustomers } from '../lib/tripCustomers'
 
 // 三張 slide 共用：手機一次滿版一張、可左右滑；桌機由 .trip-carousel 攤平成三欄
 const SLIDE_STYLE = {
@@ -194,8 +195,10 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
   const [data, setData] = useState(null)
   const [costEdits, setCostEdits] = useState({}) // { productId: { cost, currency } }
   const [savingCost, setSavingCost] = useState(null)
-  const [detailSheet, setDetailSheet] = useState(null) // null | 'products' | 'customers'
+  const [detailSheet, setDetailSheet] = useState(null) // null | 'products' | 'customers' | 'orders'
   const [selectedProduct, setSelectedProduct] = useState(null) // product obj for detail popup
+  const [customerSort, setCustomerSort] = useState('amount') // 'amount' | 'profit' | 'recent'
+  const [selectedCustomer, setSelectedCustomer] = useState(null)
   const [showSettleSheet, setShowSettleSheet] = useState(false)
   const [activeSlide, setActiveSlide] = useState(0)
   const carouselRef = useRef(null)
@@ -362,28 +365,12 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
       }
     })
 
-    // Customer insights
-    const customerMap = {}
-    tripOrders.forEach(order => {
-      const key = (order.email || order.customer_name || '').toLowerCase()
-      if (!key) return
-      if (!customerMap[key]) {
-        customerMap[key] = { name: order.customer_name, email: order.email, total: 0, orderCount: 0, isNew: false }
-      }
-      customerMap[key].total += Number(order.total_amount || 0)
-      customerMap[key].orderCount += 1
+    // Customer insights：財務走 computeOrderFinance，這裡只換聚合鍵
+    const customers = buildCustomerSummaries(tripOrders, {
+      productMap, variantMap, rateMap, costSnapshots, historicalEmails,
     })
-
-    const customers = Object.values(customerMap).sort((a, b) => b.total - a.total)
-    let newCount = 0, returnCount = 0
-    customers.forEach(c => {
-      if (c.email && historicalEmails.has(c.email.toLowerCase())) {
-        returnCount++
-      } else {
-        newCount++
-        c.isNew = true
-      }
-    })
+    const newCount = customers.filter(c => c.isNew).length
+    const returnCount = customers.length - newCount
 
     // 客單價是客群指標，看的是客戶實際付了多少（含運費），跟財務口徑分開
     const customerPaidTotal = tripOrders.reduce((s, o) => s + Number(o.total_amount || 0), 0)
@@ -670,9 +657,10 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
                   </button>
                 )}
               </div>
+              <CustomerSortTabs value={customerSort} onChange={setCustomerSort} />
               <div>
-                {data.customers.slice(0, 5).map((c, i) => (
-                  <CustomerRow key={i} c={c} i={i} />
+                {sortCustomers(data.customers, customerSort).slice(0, 5).map((c, i) => (
+                  <CustomerRow key={c.key} c={c} i={i} onSelect={setSelectedCustomer} />
                 ))}
               </div>
             </>
@@ -736,10 +724,11 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
               <div className="sheet-title" style={{ margin: 0 }}>全部客戶 ({data.customers.length})</div>
               <button onClick={() => setDetailSheet(null)} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: 'var(--text-3)' }}>×</button>
             </div>
+            <CustomerSortTabs value={customerSort} onChange={setCustomerSort} />
             <div style={{ overflowY: 'auto', flex: 1 }}>
               <div>
-                {data.customers.map((c, i) => (
-                  <CustomerRow key={i} c={c} i={i} />
+                {sortCustomers(data.customers, customerSort).map((c, i) => (
+                  <CustomerRow key={c.key} c={c} i={i} onSelect={setSelectedCustomer} />
                 ))}
               </div>
             </div>
@@ -796,6 +785,10 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
             </div>
           </div>
         </div>
+      )}
+
+      {selectedCustomer && (
+        <CustomerDetailSheet c={selectedCustomer} onClose={() => setSelectedCustomer(null)} />
       )}
 
       {/* ── Product Detail Sheet ── */}
@@ -1496,9 +1489,46 @@ function OrderScopeRow({ order, included, otherTripName, disabled, onToggle }) {
   )
 }
 
-function CustomerRow({ c, i }) {
+// ─── 客戶排序切換 ────────────────────────────────────────────────
+const CUSTOMER_SORTS = [
+  { key: 'amount', label: '金額' },
+  { key: 'profit', label: '利潤' },
+  { key: 'recent', label: '最近下單' },
+]
+
+function CustomerSortTabs({ value, onChange }) {
   return (
-    <div className="lrow row-sb">
+    <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+      {CUSTOMER_SORTS.map(s => (
+        <button
+          key={s.key}
+          className="chip-btn"
+          onClick={() => onChange(s.key)}
+          style={{
+            fontSize: 12,
+            background: value === s.key ? 'var(--text)' : 'var(--card)',
+            color: value === s.key ? 'var(--bg)' : 'var(--text-3)',
+          }}
+        >{s.label}</button>
+      ))}
+    </div>
+  )
+}
+
+// ─── 客戶列 ──────────────────────────────────────────────────────
+function formatMonthDay(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return `${d.getMonth() + 1}/${d.getDate()}`
+}
+
+function CustomerRow({ c, i, onSelect }) {
+  return (
+    <div
+      className="lrow row-sb"
+      onClick={() => onSelect?.(c)}
+      style={{ cursor: onSelect ? 'pointer' : 'default' }}
+    >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
         <span className="lrow-rank fs13" style={{ minWidth: 16, margin: 0 }}>{i + 1}</span>
         <span className="fs13" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1507,8 +1537,87 @@ function CustomerRow({ c, i }) {
         {c.isNew && <span className="badge badge-blue" style={{ flexShrink: 0 }}>新客</span>}
       </div>
       <div style={{ textAlign: 'right', flexShrink: 0 }}>
-        <span className="fw600 fs13 num">${c.total.toLocaleString()}</span>
-        <span className="muted num" style={{ fontSize: 11, marginLeft: 6 }}>{c.orderCount} 單</span>
+        <div>
+          <span className="fw600 fs13 num">${c.paidTotal.toLocaleString()}</span>
+          <span className="muted num" style={{ fontSize: 11, marginLeft: 6 }}>{c.orderCount} 單</span>
+        </div>
+        <div className="muted num" style={{ fontSize: 11 }}>
+          利潤 ${Math.round(c.profit).toLocaleString()} · {formatMonthDay(c.lastOrderAt)}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── 客戶詳情 ────────────────────────────────────────────────────
+function CustomerDetailSheet({ c, onClose }) {
+  return (
+    <div className="sheet-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="sheet" style={{ maxHeight: '85dvh' }}>
+        <div className="sheet-handle" />
+        <div className="row-sb" style={{ marginBottom: 16 }}>
+          <div className="sheet-title" style={{ margin: 0 }}>{c.name}</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: 'var(--text-3)' }}>×</button>
+        </div>
+
+        <div style={{ overflowY: 'auto', flex: 1 }}>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div className="card-row row-sb">
+              <span className="fs13">實付</span>
+              <span className="fs13 num">${c.paidTotal.toLocaleString()}</span>
+            </div>
+            <div className="card-row row-sb">
+              <span className="fs13">利潤</span>
+              <span className="fw600 fs15 num">${Math.round(c.profit).toLocaleString()}</span>
+            </div>
+            <div className="card-row row-sb">
+              <span className="fs13">訂單數</span>
+              <span className="fs13 num">{c.orderCount}</span>
+            </div>
+          </div>
+
+          {c.unknownShippingCount > 0 && (
+            <div className="notice notice-warn">
+              {c.unknownShippingCount} 張訂單沒有物流成本資料，運費損益以 0 計算，這裡的利潤偏高。
+            </div>
+          )}
+
+          <div className="sec">買了什麼</div>
+          <div className="card" style={{ marginBottom: 16 }}>
+            {c.products.map(p => (
+              <div key={p.key} className="card-row row-sb">
+                <span className="fs13" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {p.name}{p.variantLabel && ` · ${p.variantLabel}`}
+                  <span className="muted num" style={{ marginLeft: 6 }}>×{p.qty}</span>
+                </span>
+                <span className="fs13 num" style={{ flexShrink: 0 }}>
+                  ${Math.round(p.netRevenue).toLocaleString()}
+                  <span className="muted" style={{ marginLeft: 6 }}>毛利 ${Math.round(p.grossProfit).toLocaleString()}</span>
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <div className="sec">訂單紀錄</div>
+          <div className="card" style={{ marginBottom: 24 }}>
+            {c.orders.map(o => (
+              <div key={o.id} className="card-row">
+                <div className="row-sb">
+                  <span className="fs13 num">
+                    {o.createdAt ? new Date(o.createdAt).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
+                  </span>
+                  <span className="fs13 num">
+                    ${Number(o.paidTotal).toLocaleString()}
+                    <span className="muted" style={{ marginLeft: 6 }}>利潤 ${Math.round(o.profit).toLocaleString()}</span>
+                  </span>
+                </div>
+                <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                  {o.lines.map(l => `${l.name}${l.variantLabel ? ` · ${l.variantLabel}` : ''} ×${l.qty}`).join('、')}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   )
