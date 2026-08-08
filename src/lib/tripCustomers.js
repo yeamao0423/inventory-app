@@ -14,6 +14,9 @@ import { computeOrderFinance, round2 } from './orderFinance'
  *
  * shipping_cost 為 null 時 shippingNet 是 0（既有安全語意：成本不明就當收支相抵），
  * 這會讓利潤偏高，所以要把張數記在 unknownShippingCount 讓 UI 標出來。
+ *
+ * orderTotal 是訂單應收總額（Σ f.totalAmount），不是實際收到的錢；
+ * 實收看 paidAmount，還沒收的差額看 unpaidAmount。
  */
 export function buildCustomerSummaries(orders = [], ctx = {}) {
   const historicalEmails = ctx.historicalEmails || new Set()
@@ -32,7 +35,9 @@ export function buildCustomerSummaries(orders = [], ctx = {}) {
         name: order.customer_name || order.email || '',
         email: order.email || null,
         isNew: true,
-        paidTotal: 0,
+        orderTotal: 0,
+        paidAmount: 0,
+        unpaidAmount: 0,
         profit: 0,
         orderCount: 0,
         firstOrderAt: null,
@@ -45,7 +50,9 @@ export function buildCustomerSummaries(orders = [], ctx = {}) {
     const c = map[key]
     const profit = round2(f.grossProfit + f.shippingNet)
 
-    c.paidTotal += f.totalAmount
+    c.orderTotal += f.totalAmount
+    c.paidAmount += f.paid
+    c.unpaidAmount += f.unpaid
     c.profit += profit
     c.orderCount += 1
     if (!f.shippingCostKnown) c.unknownShippingCount += 1
@@ -57,7 +64,7 @@ export function buildCustomerSummaries(orders = [], ctx = {}) {
     c.orders.push({
       id: order.id,
       createdAt: at,
-      paidTotal: f.totalAmount,
+      orderTotal: f.totalAmount,
       profit,
       lines: f.lines,
     })
@@ -85,7 +92,9 @@ export function buildCustomerSummaries(orders = [], ctx = {}) {
   return Object.values(map)
     .map(({ productAgg, ...c }) => ({
       ...c,
-      paidTotal: round2(c.paidTotal),
+      orderTotal: round2(c.orderTotal),
+      paidAmount: round2(c.paidAmount),
+      unpaidAmount: round2(c.unpaidAmount),
       profit: round2(c.profit),
       isNew: !(c.email && historicalEmails.has(c.email.toLowerCase())),
       orders: c.orders.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')),
@@ -97,7 +106,7 @@ export function buildCustomerSummaries(orders = [], ctx = {}) {
         }))
         .sort((a, b) => b.netRevenue - a.netRevenue),
     }))
-    .sort((a, b) => b.paidTotal - a.paidTotal)
+    .sort((a, b) => b.orderTotal - a.orderTotal)
 }
 
 /** 回新陣列，不動原本的（React state 直接餵進來也安全） */
@@ -105,5 +114,5 @@ export function sortCustomers(customers = [], sortBy = 'amount') {
   const list = [...(customers || [])]
   if (sortBy === 'profit') return list.sort((a, b) => b.profit - a.profit)
   if (sortBy === 'recent') return list.sort((a, b) => (b.lastOrderAt || '').localeCompare(a.lastOrderAt || ''))
-  return list.sort((a, b) => b.paidTotal - a.paidTotal)
+  return list.sort((a, b) => b.orderTotal - a.orderTotal)
 }

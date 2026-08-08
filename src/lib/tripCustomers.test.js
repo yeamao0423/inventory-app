@@ -33,7 +33,7 @@ describe('buildCustomerSummaries 基本聚合', () => {
     // 淨營收 500、成本 200 → 毛利 300；運費 60 收 60 付 → 淨額 0
     const [c] = buildCustomerSummaries([order()], ctx)
     expect(c.profit).toBe(300)
-    expect(c.paidTotal).toBe(560)
+    expect(c.orderTotal).toBe(560)
     expect(c.orderCount).toBe(1)
   })
 
@@ -59,6 +59,23 @@ describe('buildCustomerSummaries 基本聚合', () => {
   })
 })
 
+describe('buildCustomerSummaries 收款狀態', () => {
+  it('有應收未收時，orderTotal／paidAmount／unpaidAmount 各自正確', () => {
+    // 訂單總額 560，只收了 200 → 未收 360
+    const [c] = buildCustomerSummaries([order({ paid_amount: 200 })], ctx)
+    expect(c.orderTotal).toBe(560)
+    expect(c.paidAmount).toBe(200)
+    expect(c.unpaidAmount).toBe(360)
+  })
+
+  it('全部收齊時 unpaidAmount 是 0', () => {
+    const [c] = buildCustomerSummaries([order({ paid_amount: 560 })], ctx)
+    expect(c.orderTotal).toBe(560)
+    expect(c.paidAmount).toBe(560)
+    expect(c.unpaidAmount).toBe(0)
+  })
+})
+
 describe('buildCustomerSummaries 分組與時間', () => {
   it('同一 email 的多張單合併，記錄首末下單時間', () => {
     const orders = [
@@ -78,6 +95,16 @@ describe('buildCustomerSummaries 分組與時間', () => {
     ]
     const [c] = buildCustomerSummaries(orders, ctx)
     expect(c.orders.map(o => o.id)).toEqual(['new', 'old'])
+  })
+
+  it('同一客戶的 email 大小寫不同要合併成一列', () => {
+    const orders = [
+      order({ id: 'a', email: 'New@Example.test' }),
+      order({ id: 'b', email: 'new@example.test' }),
+    ]
+    const list = buildCustomerSummaries(orders, ctx)
+    expect(list).toHaveLength(1)
+    expect(list[0].orderCount).toBe(2)
   })
 
   it('沒有 email 就用姓名當 key，兩者都沒有就跳過', () => {
@@ -134,9 +161,9 @@ describe('buildCustomerSummaries 買了什麼', () => {
 
 describe('sortCustomers', () => {
   const list = [
-    { key: 'a', paidTotal: 100, profit: 90, lastOrderAt: '2026-07-01T00:00:00+08:00' },
-    { key: 'b', paidTotal: 300, profit: 10, lastOrderAt: '2026-07-05T00:00:00+08:00' },
-    { key: 'c', paidTotal: 200, profit: 50, lastOrderAt: '2026-07-03T00:00:00+08:00' },
+    { key: 'a', orderTotal: 100, profit: 90, lastOrderAt: '2026-07-01T00:00:00+08:00' },
+    { key: 'b', orderTotal: 300, profit: 10, lastOrderAt: '2026-07-05T00:00:00+08:00' },
+    { key: 'c', orderTotal: 200, profit: 50, lastOrderAt: '2026-07-03T00:00:00+08:00' },
   ]
 
   it('金額由大到小', () => {

@@ -1538,7 +1538,7 @@ function CustomerRow({ c, i, onSelect }) {
       </div>
       <div style={{ textAlign: 'right', flexShrink: 0 }}>
         <div>
-          <span className="fw600 fs13 num">${c.paidTotal.toLocaleString()}</span>
+          <span className="fw600 fs13 num">${c.orderTotal.toLocaleString()}</span>
           <span className="muted num" style={{ fontSize: 11, marginLeft: 6 }}>{c.orderCount} 單</span>
         </div>
         <div className="muted num" style={{ fontSize: 11 }}>
@@ -1563,9 +1563,19 @@ function CustomerDetailSheet({ c, onClose }) {
         <div style={{ overflowY: 'auto', flex: 1 }}>
           <div className="card" style={{ marginBottom: 16 }}>
             <div className="card-row row-sb">
-              <span className="fs13">實付</span>
-              <span className="fs13 num">${c.paidTotal.toLocaleString()}</span>
+              <span className="fs13">訂單總額</span>
+              <span className="fs13 num">${c.orderTotal.toLocaleString()}</span>
             </div>
+            <div className="card-row row-sb">
+              <span className="fs13">已收</span>
+              <span className="fs13 num">${c.paidAmount.toLocaleString()}</span>
+            </div>
+            {c.unpaidAmount > 0 && (
+              <div className="card-row row-sb">
+                <span className="fs13">未收</span>
+                <span className="fs13 num" style={{ color: 'var(--red)' }}>${c.unpaidAmount.toLocaleString()}</span>
+              </div>
+            )}
             <div className="card-row row-sb">
               <span className="fs13">利潤</span>
               <span className="fw600 fs15 num">${Math.round(c.profit).toLocaleString()}</span>
@@ -1607,7 +1617,7 @@ function CustomerDetailSheet({ c, onClose }) {
                     {o.createdAt ? new Date(o.createdAt).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
                   </span>
                   <span className="fs13 num">
-                    ${Number(o.paidTotal).toLocaleString()}
+                    ${Number(o.orderTotal).toLocaleString()}
                     <span className="muted" style={{ marginLeft: 6 }}>利潤 ${Math.round(o.profit).toLocaleString()}</span>
                   </span>
                 </div>
