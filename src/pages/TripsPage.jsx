@@ -6,6 +6,7 @@ import { fetchStoreMembers } from '../components/ProcurementBatchTab'
 import {
   taipeiDayStart, taipeiDayEnd, summarizeOrders, computeTripFinance, buildCostSnapshotMap,
 } from '../lib/orderFinance'
+import { splitOrdersByTrip } from '../lib/tripScope'
 
 // 三張 slide 共用：手機一次滿版一張、可左右滑；桌機由 .trip-carousel 攤平成三欄
 const SLIDE_STYLE = {
@@ -220,7 +221,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
     const rangeStart = taipeiDayStart(trip.depart_date)
     const rangeEnd = taipeiDayEnd(trip.return_date)
 
-    const [{ data: orders }, { data: products }, { data: variants }, { data: spProducts }, { data: rates }, { data: allOrders }, { data: images }, { data: procurementBatches }, { data: settlement }, { data: participants }, members] = await Promise.all([
+    const [{ data: orders }, { data: products }, { data: variants }, { data: spProducts }, { data: rates }, { data: allOrders }, { data: images }, { data: procurementBatches }, { data: settlement }, { data: participants }, members, { data: pinnedOrders, error: pinnedErr }, { data: allTrips }] = await Promise.all([
       supabase.from('consumer_orders').select('*')
         .eq('store_id', storeId)
         .gte('created_at', rangeStart)
@@ -242,6 +243,15 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
         .eq('trip_id', trip.id).eq('status', 'active').maybeSingle(),
       supabase.from('trip_participants').select('user_id, share_pct').eq('trip_id', trip.id),
       fetchStoreMembers(storeId),
+      // 釘在本趟、但可能落在區間外的訂單。
+      // 分兩支查詢而不是用 .or()：時間字串含 + 與 :，塞進 PostgREST 的 or 運算式
+      // 要額外跳脫，分開查比較不會出事，反正本來就在 Promise.all 裡平行跑。
+      supabase.from('consumer_orders').select('*')
+        .eq('store_id', storeId)
+        .eq('trip_id', trip.id)
+        .neq('status', '已取消'),
+      // 顯示「已歸 ⟨destination⟩」用的行程名對照
+      supabase.from('trips').select('id, destination').eq('store_id', storeId),
     ])
 
     const imageMap = {}
@@ -250,7 +260,22 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
       imageMap[img.product_id].push(img.url)
     })
 
-    const tripOrders = orders || []
+    // trip_id 欄位還沒套 migration 時這支查詢會 400。此時安靜退回純區間模式，
+    // 報表照常出得來，只是不能編輯訂單範圍（跟成本快照的降級策略一致）。
+    const tripScopeReady = !pinnedErr
+
+    const byId = new Map()
+    ;[...(orders || []), ...(pinnedOrders || [])].forEach(o => byId.set(o.id, o))
+    const candidateOrders = [...byId.values()]
+      .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+
+    // 一次判定、兩邊共用：財務只吃 included，勾選清單兩組都要畫
+    const { included: tripOrders, excluded: excludedOrders } = splitOrdersByTrip(candidateOrders, trip)
+    // 勾選清單一列一列查歸屬，用 Set 才不會變成 O(n²)
+    const excludedOrderIds = new Set(excludedOrders.map(o => o.id))
+
+    const tripNameById = {}
+    ;(allTrips || []).forEach(t => { tripNameById[t.id] = t.destination })
     const historicalEmails = new Set((allOrders || []).map(o => o.email?.toLowerCase()).filter(Boolean))
 
     const productMap = {}
@@ -382,6 +407,11 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
       members: [...memberList, ...extraMembers],
       participants: participants || [],
       settlement: settlement || null,
+      candidateOrders,
+      excludedOrders,
+      excludedOrderIds,
+      tripScopeReady,
+      tripNameById,
     })
     setLoading(false)
   }
@@ -401,6 +431,25 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
       setCostEdits(prev => { const n = { ...prev }; delete n[productId]; return n })
       fetchReportData()
     }
+  }
+
+  // 已結算的行程不能改範圍：settle_trip 存的是當下算好的快照，
+  // 改了訂單會讓報表跟結算對不起來。要改先作廢結算。
+  const scopeLocked = !!data?.settlement
+
+  async function setOrderScope(orderId, include) {
+    if (scopeLocked) return
+    // 勾回一律釘上 trip_id 而不是還原成 null：使用者親手勾回來的單就該固定住，
+    // 之後改行程日期也不會又掉出去。
+    const patch = include
+      ? { trip_id: trip.id, trip_excluded: false }
+      : { trip_id: null, trip_excluded: true }
+    const { error } = await supabase.from('consumer_orders').update(patch).eq('id', orderId)
+    if (error) {
+      alert('更新失敗：' + error.message)
+      return
+    }
+    fetchReportData()
   }
 
   function formatDate(d) {
@@ -601,6 +650,15 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
             </div>
           )}
 
+          {/* ── Section 2.5: 本趟訂單範圍 ── */}
+          <div className="sec row-sb">
+            <span>本趟訂單</span>
+            <button className="link-btn" onClick={() => setDetailSheet('orders')}>
+              納入 {data.orderCount} 張
+              {data.excludedOrders.length > 0 && ` / 排除 ${data.excludedOrders.length} 張`} →
+            </button>
+          </div>
+
           {/* ── Section 3: Customer Insights (top 5) ── */}
           {data.customers.length > 0 && (
             <>
@@ -684,6 +742,57 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
                   <CustomerRow key={i} c={c} i={i} />
                 ))}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {detailSheet === 'orders' && (
+        <div className="sheet-overlay" onClick={e => e.target === e.currentTarget && setDetailSheet(null)}>
+          <div className="sheet" style={{ maxHeight: '85dvh' }}>
+            <div className="sheet-handle" />
+            <div className="row-sb" style={{ marginBottom: 8 }}>
+              <div className="sheet-title" style={{ margin: 0 }}>
+                本趟訂單（納入 {data.orderCount} / 排除 {data.excludedOrders.length}）
+              </div>
+              <button onClick={() => setDetailSheet(null)} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: 'var(--text-3)' }}>×</button>
+            </div>
+
+            {!data.tripScopeReady && (
+              <div className="notice notice-warn">
+                資料庫還沒套 20260808120000，訂單範圍暫時只能靠日期區間，無法手動勾選。
+              </div>
+            )}
+            {scopeLocked && (
+              <div className="notice notice-warn">
+                本趟已完成拆賬，訂單範圍鎖定。要調整請先作廢拆賬結果。
+              </div>
+            )}
+            {data.tripScopeReady && !scopeLocked && (
+              <div className="muted fs13" style={{ marginBottom: 8 }}>
+                取消勾選＝這張是常規訂單，不屬於任何行程。若它其實屬於別趟，到那趟的清單勾回來即可。
+              </div>
+            )}
+
+            <div style={{ overflowY: 'auto', flex: 1 }}>
+              {data.candidateOrders.length === 0 ? (
+                <div className="muted fs13">此區間無訂單</div>
+              ) : (
+                data.candidateOrders.map(o => (
+                  <OrderScopeRow
+                    key={o.id}
+                    order={o}
+                    included={!data.excludedOrderIds.has(o.id)}
+                    otherTripName={
+                      o.trip_id != null && String(o.trip_id) !== String(trip.id)
+                        ? (data.tripNameById[o.trip_id] || '其他行程')
+                        : null
+                    }
+                    disabled={!data.tripScopeReady || scopeLocked}
+                    onToggle={setOrderScope}
+                  />
+                ))
+              )}
             </div>
           </div>
         </div>
@@ -1347,6 +1456,42 @@ function ProductRow({ p, i, costEdits, setCostEdits, saveCost, savingCost, onSel
           </button>
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── 訂單範圍勾選列 ──────────────────────────────────────────────
+function OrderScopeRow({ order, included, otherTripName, disabled, onToggle }) {
+  const at = order.created_at ? new Date(order.created_at) : null
+  const stamp = at
+    ? `${at.getMonth() + 1}/${at.getDate()} ${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
+    : ''
+  // 釘在別趟的單只能到那趟操作，這裡不給改，免得兩邊互搶
+  const lockedByOther = !!otherTripName
+
+  return (
+    <div className="lrow row-sb" style={{ opacity: included ? 1 : 0.5 }}>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, cursor: disabled || lockedByOther ? 'default' : 'pointer' }}>
+        <input
+          type="checkbox"
+          checked={included}
+          disabled={disabled || lockedByOther}
+          onChange={e => onToggle(order.id, e.target.checked)}
+          style={{ flexShrink: 0 }}
+        />
+        <div style={{ minWidth: 0 }}>
+          <div className="fs13" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {order.customer_name || order.email || '（無名）'}
+          </div>
+          <div className="muted num" style={{ fontSize: 11 }}>
+            {stamp}
+            {lockedByOther && <span style={{ marginLeft: 6 }}>已歸 {otherTripName}</span>}
+          </div>
+        </div>
+      </label>
+      <span className="fw600 fs13 num" style={{ flexShrink: 0 }}>
+        ${Number(order.total_amount || 0).toLocaleString()}
+      </span>
     </div>
   )
 }
