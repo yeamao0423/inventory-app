@@ -4,7 +4,7 @@ import { SUPPORTED_CURRENCIES } from '../constants/currency'
 import { useAuth } from '../hooks/useAuth'
 import { fetchStoreMembers } from '../components/ProcurementBatchTab'
 import {
-  taipeiDayStart, taipeiDayEnd, summarizeOrders, computeTripFinance, buildCostSnapshotMap,
+  taipeiDayStart, taipeiDayEnd, summarizeOrders, computeTripFinance, buildCostSnapshotMap, isActiveItem,
 } from '../lib/orderFinance'
 import { splitOrdersByTrip } from '../lib/tripScope'
 import { buildCustomerSummaries, sortCustomers } from '../lib/tripCustomers'
@@ -203,6 +203,10 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
   const [activeSlide, setActiveSlide] = useState(0)
   const carouselRef = useRef(null)
   const SLIDE_COUNT = 3
+  // fetchReportData 是 13 支查詢＋一支成本快照，跑完要好幾秒。連點兩個勾選會發兩輪，
+  // 後發的先回、先發的後回時畫面就會退回舊狀態（勾勾自己彈回去）。
+  // 每次取號、寫回前確認自己還是最新那一輪，不是就整輪丟掉。
+  const fetchSeqRef = useRef(0)
 
   const handleScroll = useCallback(() => {
     const el = carouselRef.current
@@ -217,6 +221,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
   }, [trip.id, storeId])
 
   async function fetchReportData() {
+    const seq = ++fetchSeqRef.current
     setLoading(true)
 
     // 日界線用台北時區，不能讓 PostgREST 把純日期當成 UTC 午夜
@@ -235,7 +240,8 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
       supabase.from('product_variants').select('id, variant_cost').eq('store_id', storeId),
       supabase.from('storefront_products').select('product_id, shop_price').eq('store_id', storeId),
       supabase.from('exchange_rates').select('*'),
-      supabase.from('consumer_orders').select('email, created_at')
+      // 判新客的歷史訂單。要帶 id 才能把「被釘進本趟」的那幾張剔掉（見下方 historicalEmails）
+      supabase.from('consumer_orders').select('id, email, created_at')
         .eq('store_id', storeId)
         .lt('created_at', rangeStart)
         .neq('status', '已取消'),
@@ -265,7 +271,13 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
 
     // trip_id 欄位還沒套 migration 時這支查詢會 400。此時安靜退回純區間模式，
     // 報表照常出得來，只是不能編輯訂單範圍（跟成本快照的降級策略一致）。
+    //
+    // 只認「欄位不存在」這一種錯。斷網、逾時、RLS 這些都是暫時性的，
+    // 拿它們去判定「還沒套 migration」會叫使用者去改資料庫，方向完全錯了 ——
+    // 這時維持 tripScopeReady = true，勾選功能留著，下次重整就好了。
+    // PostgREST 對 undefined_column 回 42703；保險起見也接受訊息裡點名 trip_id 的情況。
     const tripScopeReady = !pinnedErr
+      || !(pinnedErr.code === '42703' || (pinnedErr.message || '').includes('trip_id'))
 
     const byId = new Map()
     ;[...(orders || []), ...(pinnedOrders || [])].forEach(o => byId.set(o.id, o))
@@ -279,7 +291,16 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
 
     const tripNameById = {}
     ;(allTrips || []).forEach(t => { tripNameById[t.id] = t.destination })
-    const historicalEmails = new Set((allOrders || []).map(o => o.email?.toLowerCase()).filter(Boolean))
+    // 判新客用的歷史訂單：allOrders 撈的是出發日之前的全部訂單，其中可能含有
+    // 被人工釘進本趟的單。那張單同時出現在兩邊，客人就會被自己這一單判成回頭客，
+    // 所以先把本趟納入的 order id 剔掉。
+    const tripOrderIds = new Set(tripOrders.map(o => o.id))
+    const historicalEmails = new Set(
+      (allOrders || [])
+        .filter(o => !tripOrderIds.has(o.id))
+        .map(o => o.email?.toLowerCase())
+        .filter(Boolean),
+    )
 
     const productMap = {}
     ;(products || []).forEach(p => { productMap[p.id] = p })
@@ -372,17 +393,23 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
     const newCount = customers.filter(c => c.isNew).length
     const returnCount = customers.length - newCount
 
-    // 客單價是客群指標，看的是客戶實際付了多少（含運費），跟財務口徑分開
-    const customerPaidTotal = tripOrders.reduce((s, o) => s + Number(o.total_amount || 0), 0)
+    // 客單價是客群指標，看的是客戶實際付了多少（含運費），跟財務口徑分開。
+    // 分母 finance.orderCount 已經排除了品項全取消的單，分子也得排掉同一批，
+    // 否則被取消的金額會攤到剩下那幾張上，客單價憑空變高。
+    const customerPaidTotal = tripOrders
+      .filter(o => (o.items_json || []).some(isActiveItem))
+      .reduce((s, o) => s + Number(o.total_amount || 0), 0)
     const avgOrderValue = finance.orderCount > 0 ? customerPaidTotal / finance.orderCount : 0
 
     // finance.products 已經在上面接好展示欄位成為 productList，不再重複帶出去
     const { products: _rawProducts, ...financeTotals } = finance
 
+    // 這輪已經被更新的一輪追過去了就整個丟掉，別把舊快照蓋回畫面上
+    if (seq !== fetchSeqRef.current) return
+
     setData({
       ...financeTotals,
       snapshotReady,
-      orders: tripOrders,
       productList,
       productTypeCount: productList.length,
       customers,
@@ -425,24 +452,24 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
   const scopeLocked = !!data?.settlement
 
   async function setOrderScope(orderId, include) {
-    if (scopeLocked) return
+    // 欄位還沒套 migration 時勾了也只會 400，跟已結算一樣直接擋掉。
+    // checkbox 那邊已經 disabled，這裡是同一組條件的第二道，兩邊要對稱。
+    if (scopeLocked || !data?.tripScopeReady) return
     // 勾回一律釘上 trip_id 而不是還原成 null：使用者親手勾回來的單就該固定住，
     // 之後改行程日期也不會又掉出去。
+    //
+    // 勾掉時只寫 trip_excluded，「不動 trip_id」：候撈範圍是「區間內 ∪ trip_id = 本趟」，
+    // 一張區間外、只靠 trip_id 被撈進來的單如果連 trip_id 也清掉，就同時離開兩個集合、
+    // 從清單上永遠消失，再也沒有入口勾回來。留著 trip_id 它才還在清單上（顯示為未勾選）。
     const patch = include
       ? { trip_id: trip.id, trip_excluded: false }
-      : { trip_id: null, trip_excluded: true }
+      : { trip_excluded: true }
     const { error } = await supabase.from('consumer_orders').update(patch).eq('id', orderId)
     if (error) {
       alert('更新失敗：' + error.message)
       return
     }
     fetchReportData()
-  }
-
-  function formatDate(d) {
-    if (!d) return ''
-    const date = new Date(d)
-    return `${date.getMonth() + 1}/${date.getDate()}`
   }
 
   return (
@@ -463,7 +490,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
           >←</button>
           <div style={{ minWidth: 0 }}>
             <div className="ph-title">{trip.destination}</div>
-            <div className="ph-sub num">{formatDate(trip.depart_date)} – {formatDate(trip.return_date)}</div>
+            <div className="ph-sub num">{formatMonthDay(trip.depart_date)} – {formatMonthDay(trip.return_date)}</div>
           </div>
         </div>
         <button className="chip-btn" onClick={onEdit} style={{ marginTop: 4 }}>編輯</button>
@@ -640,8 +667,11 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
           {/* ── Section 2.5: 本趟訂單範圍 ── */}
           <div className="sec row-sb">
             <span>本趟訂單</span>
+            {/* 這裡講的是「清單上有幾列」，兩個數字都得用原始張數。
+                data.orderCount 是財務口徑（扣掉品項全取消的單），拿來當納入數
+                會跟底下畫出來的列數對不起來。財務卡片那邊維持用 orderCount。 */}
             <button className="link-btn" onClick={() => setDetailSheet('orders')}>
-              納入 {data.orderCount} 張
+              納入 {data.candidateOrders.length - data.excludedOrders.length} 張
               {data.excludedOrders.length > 0 && ` / 排除 ${data.excludedOrders.length} 張`} →
             </button>
           </div>
@@ -742,7 +772,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
             <div className="sheet-handle" />
             <div className="row-sb" style={{ marginBottom: 8 }}>
               <div className="sheet-title" style={{ margin: 0 }}>
-                本趟訂單（納入 {data.orderCount} / 排除 {data.excludedOrders.length}）
+                本趟訂單（納入 {data.candidateOrders.length - data.excludedOrders.length} / 排除 {data.excludedOrders.length}）
               </div>
               <button onClick={() => setDetailSheet(null)} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: 'var(--text-3)' }}>×</button>
             </div>

@@ -50,6 +50,20 @@ describe('isOrderInTrip 歸屬矩陣', () => {
     expect(isOrderInTrip({ trip_id: 2, trip_excluded: false, created_at: IN }, tripA)).toBe(false)
   })
 
+  // 勾掉時只寫 trip_excluded、不清 trip_id：兩個集合同時離開會讓區間外的單
+  // 從候撈範圍消失、再也勾不回來，所以 trip_excluded 必須優先於 trip_id。
+  it('釘在本趟 + 人工勾掉 + 區間外 → 不納入', () => {
+    expect(isOrderInTrip({ trip_id: 1, trip_excluded: true, created_at: OUT }, tripA)).toBe(false)
+  })
+  it('釘在本趟 + 人工勾掉 + 區間內 → 不納入', () => {
+    expect(isOrderInTrip({ trip_id: 1, trip_excluded: true, created_at: IN }, tripA)).toBe(false)
+  })
+  it('勾掉後再勾回來（trip_excluded 改回 false）→ 重新納入', () => {
+    const off = { trip_id: 1, trip_excluded: true, created_at: OUT }
+    expect(isOrderInTrip(off, tripA)).toBe(false)
+    expect(isOrderInTrip({ ...off, trip_excluded: false }, tripA)).toBe(true)
+  })
+
   it('trip_id 型別不一致也要判對（PostgREST 可能回字串）', () => {
     expect(isOrderInTrip({ trip_id: '1', created_at: OUT }, tripA)).toBe(true)
   })
@@ -91,6 +105,16 @@ describe('splitOrdersByTrip', () => {
     const { included, excluded } = splitOrdersByTrip(orders, tripA)
     expect(included.map(o => o.id)).toEqual([1, 4])
     expect(excluded.map(o => o.id)).toEqual([2, 3])
+  })
+
+  it('釘在本趟但被勾掉的單要留在 excluded 那組，清單上才勾得回來', () => {
+    const orders = [
+      { id: 5, trip_id: 1, trip_excluded: true, created_at: OUT },
+      { id: 6, trip_id: 1, trip_excluded: true, created_at: IN },
+    ]
+    const { included, excluded } = splitOrdersByTrip(orders, tripA)
+    expect(included).toEqual([])
+    expect(excluded.map(o => o.id)).toEqual([5, 6])
   })
 
   it('空陣列不炸', () => {

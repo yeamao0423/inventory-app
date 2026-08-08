@@ -6,9 +6,10 @@ import { taipeiDayStart, taipeiDayEnd } from './orderFinance'
  * 訂單原本完全靠日期區間歸屬行程，但區間內可能混進別趟的單或常規訂單。
  * consumer_orders.trip_id / trip_excluded 讓使用者人工覆寫（見 20260808120000）：
  *
+ *   trip_excluded = true               → 人工勾掉，優先於一切，不進任何行程
  *   trip_id === trip.id                → 人工釘住，區間不符也算
- *   trip_id 為 null 且未標常規          → 沒人管過，落在區間就算
- *   其餘                                → 不算（釘給別趟，或標成常規訂單）
+ *   trip_id 為 null                     → 沒人管過，落在區間就算
+ *   其餘                                → 不算（釘給別趟）
  */
 
 /** 訂單建立時間落在行程區間內嗎（台北日界線，跟報表查詢同一套） */
@@ -23,9 +24,11 @@ export function isWithinTripRange(createdAt, trip) {
 
 export function isOrderInTrip(order, trip) {
   if (!order || !trip) return false
+  // 人工勾掉優先於一切。trip_id 保留不清，這樣「曾經釘進哪一趟」的痕跡還在，
+  // 區間外被勾掉的單才撈得回清單、隨時可以勾回來。
+  if (order.trip_excluded) return false
   // PostgREST 的 bigint 有可能回字串，兩邊都轉字串比
   if (order.trip_id != null) return String(order.trip_id) === String(trip.id)
-  if (order.trip_excluded) return false
   return isWithinTripRange(order.created_at, trip)
 }
 

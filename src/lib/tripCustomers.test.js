@@ -160,9 +160,11 @@ describe('buildCustomerSummaries 買了什麼', () => {
 })
 
 describe('sortCustomers', () => {
+  // lastOrderAt 刻意跟金額排序錯開（金額 b,c,a／時間 a,c,b），
+  // 否則 'recent' 分支被誤刪、掉進金額 fallback 這條測試也照樣綠
   const list = [
-    { key: 'a', orderTotal: 100, profit: 90, lastOrderAt: '2026-07-01T00:00:00+08:00' },
-    { key: 'b', orderTotal: 300, profit: 10, lastOrderAt: '2026-07-05T00:00:00+08:00' },
+    { key: 'a', orderTotal: 100, profit: 90, lastOrderAt: '2026-07-05T00:00:00+08:00' },
+    { key: 'b', orderTotal: 300, profit: 10, lastOrderAt: '2026-07-01T00:00:00+08:00' },
     { key: 'c', orderTotal: 200, profit: 50, lastOrderAt: '2026-07-03T00:00:00+08:00' },
   ]
 
@@ -173,7 +175,7 @@ describe('sortCustomers', () => {
     expect(sortCustomers(list, 'profit').map(c => c.key)).toEqual(['a', 'c', 'b'])
   })
   it('最近下單由新到舊', () => {
-    expect(sortCustomers(list, 'recent').map(c => c.key)).toEqual(['b', 'c', 'a'])
+    expect(sortCustomers(list, 'recent').map(c => c.key)).toEqual(['a', 'c', 'b'])
   })
   it('不認得的排序鍵退回金額，且不改動原陣列', () => {
     const before = list.map(c => c.key)
