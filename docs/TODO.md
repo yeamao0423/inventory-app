@@ -218,9 +218,6 @@ API routes（`shop/src/app/api/ecpay/` 八支：付款 notify/result、超商電
   注意兩個坑：`trip_expenses.category` 目前是全部 sum，新科目塞進 `other` 會讓瀑布分層錯；
   「實際物流費」要用 `shippingFee − shippingNet` 反推，直接讀 `shippingCost` 會在
   成本不明時把運費當純收入灌進盈餘
-- **行程訂單範圍 migration 上 remote**（程式碼已在 main）：
-  `20260808120000_consumer_orders_trip_scope.sql` 只套過 local。用 MCP `apply_migration`，
-  **不可以跑 `supabase db push`**。沒套之前前端會走降級路徑（報表照出，勾選鎖住）
 
 ---
 
