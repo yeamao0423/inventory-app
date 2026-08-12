@@ -13,7 +13,8 @@
 - 回覆與註解一律**繁體中文**。
 - **不新增 runtime 依賴**（`pg_net` 也不裝）。綠界串接只用 Node 內建 `crypto` 與既有的 `@supabase/supabase-js`。
 - **絕不執行 `supabase db push`**。remote 一律走 MCP `apply_migration`；local 用 `psql "postgresql://postgres:postgres@127.0.0.1:54332/postgres" -v ON_ERROR_STOP=1 -f <檔>`。
-- Migration 檔名用時間戳格式 `20260812HHMMSS_<name>.sql`（跟 main 近期慣例一致）。**不可**用 `20250028`～`20250030`，那三個編號在 main 已被佔用。
+- Migration 檔名用時間戳格式 `20260812HHMMSS_<name>.sql`（跟 main 近期慣例一致）。**不可**用 `20250028`～`20250030`（main 已佔用），也不可用 `20260812100000`／`20260812110000`（另一條工作線的庫存 trigger 與批次入庫 RPC 已佔用）。
+- **庫存變動有單一寫入點，不可繞過。** `20260812100000_stock_committed_trigger.sql` 讓每張訂單用 `consumer_orders.stock_committed`（jsonb）記自己佔走多少，trigger `reconcile_stock` 掛在 `AFTER INSERT OR DELETE OR UPDATE OF items_json, status`，任何變動都重算目標佔用量並套用差額；狀態為 `'已取消'` 時目標為 0。**任何任務都不得手寫 `UPDATE products SET quantity = ...` 或 `UPDATE product_variants SET stock = ...`** —— 要釋放庫存就把 `status` 設成 `'已取消'`，要重新佔用就把狀態改回來，現貨不足時 trigger 會自己 raise。`place_order` 現在只檢查不扣。
 - 機密（HashKey／HashIV）**只能**存 `store_ecpay_secrets`，**絕不可**進 `stores.settings`——`settings` 會整包送到商城前端給匿名訪客。
 - 測試慣例：JS 只測純函式（vitest，無 jsdom／testing-library）；SQL 測試寫成 `supabase/tests/*.sql`，全程包在 `BEGIN; … ROLLBACK;` 內並用 `pg_temp.assert_eq`。
 - 付款狀態**不可**直接 `UPDATE payment_status`——main 的 `sync_payment_status` trigger 會用 `derive_payment_status(paid_amount, total_amount)` 覆寫。一律改寫 `paid_amount`。
@@ -36,10 +37,10 @@
 
 | 檔案 | 責任 |
 |---|---|
-| `supabase/migrations/20260812100000_store_ecpay_secrets.sql` | 每店金鑰表＋寫入 RPC |
+| `supabase/migrations/20260812120000_store_ecpay_secrets.sql` | 每店金鑰表＋平台管理員寫入 RPC |
 | `supabase/migrations/20260812100100_ecpay_order_schema.sql` | `consumer_orders` 補欄位、`ecpay_transactions`、`ecpay_payment_logs` |
-| `supabase/migrations/20260812100200_release_order.sql` | `release_order`／`cancel_abandoned_credit_orders`／pg_cron 排程 |
-| `supabase/migrations/20260812100300_apply_ecpay_payment.sql` | 收款套用 RPC（冪等、累加、遲到補救） |
+| `supabase/migrations/20260812130000_cancel_abandoned_orders.sql` | 棄單自動清理＋pg_cron 排程 |
+| `supabase/migrations/20260812140000_apply_ecpay_payment.sql` | 收款套用 RPC（冪等、累加、遲到補救） |
 | `supabase/tests/ecpay_payment.sql` | 上述 RPC 的 SQL 測試 |
 | `shop/src/lib/ecpay.js` | 綠界純函式：檢查碼、單號、里程碑、回應解析、自動送出表單、`makeEcpayConfig` |
 | `shop/src/lib/ecpay.test.js` | 純函式單元測試 |
@@ -445,7 +446,7 @@ git commit -m "feat: 綠界純函式移植，設定改成每店工廠而非單�
 與 LINE 那支的差別：**寫入權限只給平台管理員**（`is_platform_admin()`），不給店主——綠界金鑰填錯的代價是錢收不到或進錯帳戶。
 
 **Files:**
-- Create: `supabase/migrations/20260812100000_store_ecpay_secrets.sql`
+- Create: `supabase/migrations/20260812120000_store_ecpay_secrets.sql`
 
 **Interfaces:**
 - Produces:
@@ -466,7 +467,7 @@ grep -rn "is_platform_admin\|has_store_role" supabase/migrations/*.sql | head -5
 
 - [ ] **Step 2: 寫 migration**
 
-建立 `supabase/migrations/20260812100000_store_ecpay_secrets.sql`：
+建立 `supabase/migrations/20260812120000_store_ecpay_secrets.sql`：
 
 ```sql
 -- 每店綠界金鑰（機密）：獨立表、零 client policy
@@ -578,7 +579,7 @@ grant execute on function public.set_store_ecpay_credentials(bigint, text, text,
 
 ```bash
 psql "postgresql://postgres:postgres@127.0.0.1:54332/postgres" -v ON_ERROR_STOP=1 \
-  -f supabase/migrations/20260812100000_store_ecpay_secrets.sql
+  -f supabase/migrations/20260812120000_store_ecpay_secrets.sql
 ```
 
 驗證 RLS 真的擋住一般角色（這是這支 migration 的核心價值，必須實測）：
@@ -598,7 +599,7 @@ Expected: `should_be_zero` 為 `0`（RLS 無 policy → authenticated 讀不到�
 - [ ] **Step 4: Commit**
 
 ```bash
-git add supabase/migrations/20260812100000_store_ecpay_secrets.sql
+git add supabase/migrations/20260812120000_store_ecpay_secrets.sql
 git commit -m "feat: 每店綠界金鑰表與平台管理員寫入 RPC"
 ```
 
@@ -713,56 +714,50 @@ git commit -m "feat: 綠界訂單端 schema——交易表、通知留底、物�
 
 ## Phase B
 
-### Task B1: `release_order` 與棄單自動清理
+### Task B1: 棄單自動清理（順著 stock_committed trigger）
 
-分支已有可用實作，兩處要改：清理閾值從**小時**改成**分鐘**（30 分鐘），以及排除已被物流流程佔用的狀態。另外加 pg_cron 排程（`pg_cron` 在 remote 已裝，版本 1.6.4）。
+**動手前必讀 —— 庫存機制已經換掉了。** `supabase/migrations/20260812100000_stock_committed_trigger.sql`
+把庫存變動收斂成單一寫入點：每張訂單用 `consumer_orders.stock_committed`（jsonb，鍵為 `"productId:variantId"`）
+記自己佔走多少，trigger `reconcile_stock` 掛在 `AFTER INSERT OR DELETE OR UPDATE OF items_json, status`，
+任何變動都重算目標佔用量並套用差額。**狀態為 `'已取消'` 時目標一律 0**，庫存自動回補；
+差額為 0 時什麼都不做，所以冪等是結構性的，不需要任何旗標。
+
+因此：
+
+- **絕對不要手寫 `UPDATE products SET quantity = quantity + ...` 或 `UPDATE product_variants SET stock = ...`。**
+  trigger 已經做了，再加一次就是重複回補。
+- 釋放庫存的正確做法就是把 `status` 設成 `'已取消'`，其餘交給 trigger。
+- 不需要 `release_order` 這支函式，也不需要 `stock_released_at` 旗標。
+- `place_order` 現在只檢查庫存、不扣庫存（扣的動作歸 trigger）。
+
+後台取消訂單的路徑（`src/components/ConsumerOrderDetailSheet.jsx:436`）已經會呼叫 `refund_coupon`，
+不必重做；這支排程要自己補呼叫，因為它繞過了後台 UI。
 
 **Files:**
-- Create: `supabase/migrations/20260812100200_release_order.sql`
-- Reference: `git show feature/ecpay-integration:supabase/migrations/20250029_payment_rollback.sql`
+- Create: `supabase/migrations/20260812130000_cancel_abandoned_orders.sql`
+- Create: `supabase/tests/ecpay_payment.sql`
 
 **Interfaces:**
-- Consumes: A3 的 `consumer_orders.stock_released_at`
+- Consumes: 既有的 `public.refund_coupon(p_order_id bigint)`；`reconcile_stock` trigger
 - Produces:
-  - `public.release_order(p_order_id bigint) RETURNS jsonb` —— `{ok: true}` / `{ok: true, already_released: true}` / `{ok: false, error: text}`。冪等：重複呼叫不會重複加庫存
   - `public.cancel_abandoned_credit_orders(p_minutes int DEFAULT 30) RETURNS int` —— 回傳被清掉的筆數
   - pg_cron job `ecpay-abandon-sweep`，每 5 分鐘跑一次
 
-- [ ] **Step 1: 取出分支原檔當基底**
+- [ ] **Step 1: 先把 trigger 讀懂**
 
 ```bash
-git show feature/ecpay-integration:supabase/migrations/20250029_payment_rollback.sql \
-  > supabase/migrations/20260812100200_release_order.sql
+sed -n '1,60p' supabase/migrations/20260812100000_stock_committed_trigger.sql
+grep -n "CREATE OR REPLACE FUNCTION public.refund_coupon" supabase/migrations/*.sql
 ```
 
-- [ ] **Step 2: 改成分鐘制並加排程**
+確認 `refund_coupon` 的實際簽名（預期 `refund_coupon(p_order_id bigint)`）。若不同，以實際為準。
 
-在新檔中做這四項改動：
+- [ ] **Step 2: 寫失敗測試**
 
-1. **刪掉檔頭的 `ALTER TABLE ... ADD COLUMN stock_released_at`**——已由 A3 建立，重複宣告會讓兩支 migration 的責任糊掉。
-2. `cancel_abandoned_credit_orders` 的參數從 `p_hours int DEFAULT 24` 改成 `p_minutes int DEFAULT 30`，`make_interval(hours => p_hours)` 改成 `make_interval(mins => p_minutes)`。
-3. 篩選條件裡的 `status NOT IN ('已取消', '完成', '退貨/未取')` 改成 `status NOT IN ('已取消', '完成', '已出貨')`——本專案不採用「退貨/未取」這個狀態值（見計畫的狀態機決策），而已出貨的訂單不該被當棄單清掉。同時加上 `AND allpay_logistics_id IS NULL`（已建物流單就不是棄單）。
-4. 檔尾加排程：
+建立 `supabase/tests/ecpay_payment.sql`：
 
 ```sql
--- 每 5 分鐘掃一次逾時未付的信用卡棄單（pg_cron 已裝）
--- 30 分鐘足以涵蓋「開了付款頁去找卡片」，又不會讓熱門商品被殭屍訂單壓住。
-select cron.unschedule('ecpay-abandon-sweep')
-where exists (select 1 from cron.job where jobname = 'ecpay-abandon-sweep');
-
-select cron.schedule(
-  'ecpay-abandon-sweep',
-  '*/5 * * * *',
-  $$select public.cancel_abandoned_credit_orders(30)$$
-);
-```
-
-- [ ] **Step 3: 寫 SQL 測試**
-
-建立 `supabase/tests/ecpay_payment.sql`（B2 會再往同一檔補測試）：
-
-```sql
--- 綠界收款/釋放的 RPC 測試。可重複執行：全程在一個交易內，最後 ROLLBACK。
+-- 綠界收款/棄單清理的 RPC 測試。可重複執行：全程在一個交易內，最後 ROLLBACK。
 -- 跑法：psql "postgresql://postgres:postgres@127.0.0.1:54332/postgres" -v ON_ERROR_STOP=1 -f supabase/tests/ecpay_payment.sql
 \set ON_ERROR_STOP on
 BEGIN;
@@ -776,7 +771,7 @@ BEGIN
   RAISE NOTICE 'PASS  %', label;
 END $$;
 
--- 建一個測試商品與訂單
+-- 建測試商品與訂單。注意：不手動扣庫存——reconcile_stock trigger 會在 INSERT 時扣。
 CREATE OR REPLACE FUNCTION pg_temp.setup_order(p_qty int, p_stock int, p_total numeric)
 RETURNS bigint LANGUAGE plpgsql AS $$
 DECLARE v_pid bigint; v_oid bigint;
@@ -793,88 +788,162 @@ BEGIN
     p_total, 0, 'credit', '處理中'
   ) RETURNING id INTO v_oid;
 
-  UPDATE public.products SET quantity = quantity - p_qty WHERE id = v_pid;
   RETURN v_oid;
 END $$;
 
--- ── release_order ──
+CREATE OR REPLACE FUNCTION pg_temp.pid_of(p_oid bigint)
+RETURNS bigint LANGUAGE sql AS $$
+  SELECT (items_json->0->>'id')::bigint FROM public.consumer_orders WHERE id = p_oid;
+$$;
+
+CREATE OR REPLACE FUNCTION pg_temp.stock_of(p_oid bigint)
+RETURNS int LANGUAGE sql AS $$
+  SELECT quantity FROM public.products WHERE id = pg_temp.pid_of(p_oid);
+$$;
+
+-- ── trigger 前提：建單即佔用庫存 ──
 DO $$
-DECLARE v_oid bigint; v_pid bigint; v_stock int;
+DECLARE v_oid bigint;
 BEGIN
   v_oid := pg_temp.setup_order(2, 10, 500);
-  SELECT (items_json->0->>'id')::bigint INTO v_pid FROM public.consumer_orders WHERE id = v_oid;
-
-  SELECT quantity INTO v_stock FROM public.products WHERE id = v_pid;
-  PERFORM pg_temp.assert_eq(v_stock, 8, 'release 前庫存已被下單扣掉');
-
-  PERFORM public.release_order(v_oid);
-  SELECT quantity INTO v_stock FROM public.products WHERE id = v_pid;
-  PERFORM pg_temp.assert_eq(v_stock, 10, 'release_order 還原庫存');
-
-  -- 冪等：再呼叫一次不可以再加
-  PERFORM public.release_order(v_oid);
-  SELECT quantity INTO v_stock FROM public.products WHERE id = v_pid;
-  PERFORM pg_temp.assert_eq(v_stock, 10, 'release_order 重複呼叫不重複加庫存');
+  PERFORM pg_temp.assert_eq(pg_temp.stock_of(v_oid), 8, '建單時 trigger 已扣庫存');
 END $$;
 
 -- ── cancel_abandoned_credit_orders ──
 DO $$
-DECLARE v_oid bigint; v_n int; v_status text;
+DECLARE v_oid bigint; v_status text;
 BEGIN
   v_oid := pg_temp.setup_order(1, 5, 300);
 
   -- 才剛建立 → 不該被掃
-  v_n := public.cancel_abandoned_credit_orders(30);
+  PERFORM public.cancel_abandoned_credit_orders(30);
   SELECT status INTO v_status FROM public.consumer_orders WHERE id = v_oid;
   PERFORM pg_temp.assert_eq(v_status, '處理中', '30 分鐘內的未付訂單不被清理');
+  PERFORM pg_temp.assert_eq(pg_temp.stock_of(v_oid), 4, '未被清理時庫存維持佔用');
 
-  -- 假裝是 31 分鐘前建立的 → 該被掃
+  -- 假裝是 31 分鐘前建立的 → 該被掃，且 trigger 要把庫存還回去
   UPDATE public.consumer_orders SET created_at = now() - interval '31 minutes' WHERE id = v_oid;
-  v_n := public.cancel_abandoned_credit_orders(30);
+  PERFORM public.cancel_abandoned_credit_orders(30);
   SELECT status INTO v_status FROM public.consumer_orders WHERE id = v_oid;
   PERFORM pg_temp.assert_eq(v_status, '已取消', '逾時未付的信用卡訂單被取消');
+  PERFORM pg_temp.assert_eq(pg_temp.stock_of(v_oid), 5, '取消後 trigger 把庫存還回，且只還一次');
 
-  -- 匯款訂單不該被這支清掉
+  -- 重複執行不可以再還一次
+  PERFORM public.cancel_abandoned_credit_orders(30);
+  PERFORM pg_temp.assert_eq(pg_temp.stock_of(v_oid), 5, '重複清理不重複回補庫存');
+END $$;
+
+-- ── 不該被波及的訂單 ──
+DO $$
+DECLARE v_oid bigint; v_status text;
+BEGIN
+  -- 匯款訂單
   v_oid := pg_temp.setup_order(1, 5, 300);
   UPDATE public.consumer_orders
-    SET payment_method = 'remittance', created_at = now() - interval '10 hours'
-    WHERE id = v_oid;
+    SET payment_method = 'remittance', created_at = now() - interval '10 hours' WHERE id = v_oid;
   PERFORM public.cancel_abandoned_credit_orders(30);
   SELECT status INTO v_status FROM public.consumer_orders WHERE id = v_oid;
   PERFORM pg_temp.assert_eq(v_status, '處理中', '匯款訂單不被信用卡棄單清理波及');
+
+  -- 已收到錢的訂單（例如 notify 已經進來過）
+  v_oid := pg_temp.setup_order(1, 5, 300);
+  UPDATE public.consumer_orders
+    SET paid_amount = 300, created_at = now() - interval '10 hours' WHERE id = v_oid;
+  PERFORM public.cancel_abandoned_credit_orders(30);
+  SELECT status INTO v_status FROM public.consumer_orders WHERE id = v_oid;
+  PERFORM pg_temp.assert_eq(v_status, '處理中', '已收款的訂單不被當棄單清掉');
+
+  -- 已建物流單的訂單
+  v_oid := pg_temp.setup_order(1, 5, 300);
+  UPDATE public.consumer_orders
+    SET allpay_logistics_id = 'L123', created_at = now() - interval '10 hours' WHERE id = v_oid;
+  PERFORM public.cancel_abandoned_credit_orders(30);
+  SELECT status INTO v_status FROM public.consumer_orders WHERE id = v_oid;
+  PERFORM pg_temp.assert_eq(v_status, '處理中', '已建物流單的訂單不被當棄單清掉');
 END $$;
 
 ROLLBACK;
 ```
 
-> 若 `products` 或 `consumer_orders` 有本測試沒帶到的 NOT NULL 欄位，補進 `pg_temp.setup_order` 的 INSERT。先跑 `\d public.consumer_orders` 確認。
+> 若 `products` 或 `consumer_orders` 有本測試沒帶到的 NOT NULL 欄位，補進 `pg_temp.setup_order` 的 INSERT。
+> 先跑 `psql ... -c "\d public.consumer_orders"` 確認。
 
-- [ ] **Step 4: 跑測試確認失敗**
+- [ ] **Step 3: 跑測試確認失敗**
 
 ```bash
 psql "postgresql://postgres:postgres@127.0.0.1:54332/postgres" -v ON_ERROR_STOP=1 -f supabase/tests/ecpay_payment.sql
 ```
-Expected: FAIL —— `function public.release_order(bigint) does not exist`
+Expected: FAIL —— `function public.cancel_abandoned_credit_orders(integer) does not exist`
 
-- [ ] **Step 5: 套用 migration**
+- [ ] **Step 4: 寫 migration**
+
+建立 `supabase/migrations/20260812130000_cancel_abandoned_orders.sql`：
+
+```sql
+-- 信用卡棄單自動清理
+--
+-- 導轉綠界後沒付款的訂單會一直壓著庫存。匯款是填完後五碼才送出（等於已成交意圖），
+-- 信用卡是跳走後可能直接關掉，棄單率完全不同量級，所以只掃信用卡。
+--
+-- 庫存回補交給 reconcile_stock trigger（20260812100000）：狀態設成「已取消」，
+-- 目標佔用量即為 0，trigger 自己算差額還庫存。此處不可手動改 products.quantity。
+create or replace function public.cancel_abandoned_credit_orders(p_minutes int default 30)
+returns int
+language plpgsql
+security definer
+set search_path to 'public'
+as $$
+declare
+  v_id bigint;
+  v_n  int := 0;
+begin
+  for v_id in
+    select id from public.consumer_orders
+    where payment_method = 'credit'
+      and coalesce(paid_amount, 0) <= 0           -- 收到任何錢就不是棄單
+      and status not in ('已取消', '完成', '已出貨')
+      and allpay_logistics_id is null             -- 已建物流單就不是棄單
+      and created_at < now() - make_interval(mins => p_minutes)
+  loop
+    -- 狀態改成已取消 → reconcile_stock trigger 把佔用量歸零，庫存自動回補
+    update public.consumer_orders set status = '已取消' where id = v_id;
+    -- 排程繞過了後台 UI，優惠券要自己退（refund_coupon 對無券/已退自身安全）
+    perform public.refund_coupon(v_id);
+    v_n := v_n + 1;
+  end loop;
+  return v_n;
+end $$;
+
+revoke all on function public.cancel_abandoned_credit_orders(int) from public, anon;
+grant execute on function public.cancel_abandoned_credit_orders(int) to authenticated;
+
+-- 每 5 分鐘掃一次（pg_cron 已裝，版本 1.6.4）
+-- 30 分鐘足以涵蓋「開了付款頁去找卡片」，又不會讓熱門商品被殭屍訂單壓住。
+select cron.unschedule('ecpay-abandon-sweep')
+where exists (select 1 from cron.job where jobname = 'ecpay-abandon-sweep');
+
+select cron.schedule(
+  'ecpay-abandon-sweep',
+  '*/5 * * * *',
+  $$select public.cancel_abandoned_credit_orders(30)$$
+);
+```
+
+- [ ] **Step 5: 套用並跑測試確認通過**
 
 ```bash
 psql "postgresql://postgres:postgres@127.0.0.1:54332/postgres" -v ON_ERROR_STOP=1 \
-  -f supabase/migrations/20260812100200_release_order.sql
-```
-
-- [ ] **Step 6: 跑測試確認通過**
-
-```bash
-psql "postgresql://postgres:postgres@127.0.0.1:54332/postgres" -v ON_ERROR_STOP=1 -f supabase/tests/ecpay_payment.sql
+  -f supabase/migrations/20260812130000_cancel_abandoned_orders.sql
+psql "postgresql://postgres:postgres@127.0.0.1:54332/postgres" -v ON_ERROR_STOP=1 \
+  -f supabase/tests/ecpay_payment.sql
 ```
 Expected: 全部 `PASS`，最後 `ROLLBACK`
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: 確認排程真的建起來**
 
 ```bash
-git add supabase/migrations/20260812100200_release_order.sql supabase/tests/ecpay_payment.sql
-git commit -m "feat: 棄單釋放庫存與 30 分鐘自動清理排程"
+psql "postgresql://postgres:postgres@127.0.0.1:54332/postgres" -c \
+  "select jobname, schedule, command from cron.job where jobname='ecpay-abandon-sweep';"
 ```
 
 ---
@@ -883,34 +952,42 @@ git commit -m "feat: 棄單釋放庫存與 30 分鐘自動清理排程"
 
 這是整個串接最關鍵的一支。三件事必須同時成立：
 
-1. **不直接寫 `payment_status`**——寫 `paid_amount`，讓 `sync_payment_status` trigger 推導。分支的 route 直接寫 `payment_status='已付清'`，搬到 main 會被 trigger 靜靜蓋回「未付」。
-2. **冪等**——綠界的 `notify` 會重試，`result` 也會做同一件事，同一筆 `trade_no` 重複進來只能算一次錢。
-3. **遲到補救**——若通知遲到、訂單已被 30 分鐘排程當棄單釋放，要把庫存重新扣回並復活訂單；庫存不足就標 `payment_alert` 讓店家人工處理，**絕不能默默把錢吃掉**。
+1. **不直接寫 `payment_status`** —— 寫 `paid_amount`，讓 `sync_payment_status` trigger 推導。
+   直接 `UPDATE payment_status='已付清'` 會被 trigger 用 `derive_payment_status(paid_amount, total_amount)` 靜靜蓋回「未付」。
+2. **冪等** —— 綠界的 `notify` 會重試，`result` 也做同一件事，同一筆 `trade_no` 重複進來只能算一次錢。
+3. **遲到補救** —— 通知晚於棄單清理時，訂單已被取消、庫存已回補。要把訂單復活；
+   庫存不足就標 `payment_alert` 讓店家人工處理，**絕不能默默把錢吃掉**。
+
+**動手前必讀 —— 庫存機制：** 見 Task B1 開頭那段。重點是**不要手寫任何庫存 UPDATE**。
+遲到補救「重新佔用庫存」的正確做法是把 `status` 從 `'已取消'` 改回 `'處理中'`——
+`reconcile_stock` trigger 會重新計算佔用量並套用，**現貨不足時它自己會 raise exception**，
+你只要用 `BEGIN … EXCEPTION` 接住並改標警示即可。這比手寫「先檢查再扣」少了一整段迴圈，
+而且擋單規則（預購可負、現貨不可負）自動與商城一致。
 
 **Files:**
-- Create: `supabase/migrations/20260812100300_apply_ecpay_payment.sql`
+- Create: `supabase/migrations/20260812140000_apply_ecpay_payment.sql`
 - Modify: `supabase/tests/ecpay_payment.sql`（追加測試，接在 B1 的測試之後、`ROLLBACK;` 之前）
 
 **Interfaces:**
-- Consumes: A3 的 `ecpay_transactions`／`payment_alert`／`stock_released_at`；B1 的 `release_order`
+- Consumes: A3 的 `ecpay_transactions`／`payment_alert`；B1 的 `cancel_abandoned_credit_orders`；`reconcile_stock` trigger
 - Produces:
-  - `public.create_ecpay_transaction(p_order_id bigint, p_trade_no text, p_amount numeric) RETURNS jsonb` —— 建立 pending 交易，回 `{ok, trade_no}`
-  - `public.apply_ecpay_payment(p_trade_no text, p_rtn_code text, p_payment_type text) RETURNS jsonb` —— 回 `{ok: bool, already: bool, order_id: bigint, alert: text|null, error: text|null}`
-  - `public.apply_cod_payment(p_order_id bigint) RETURNS jsonb` —— 貨到付款取件完成時把 `paid_amount` 補到 `total_amount`
+  - `public.create_ecpay_transaction(p_order_id bigint, p_trade_no text, p_amount numeric) RETURNS jsonb`
+  - `public.apply_ecpay_payment(p_trade_no text, p_rtn_code text, p_payment_type text DEFAULT NULL) RETURNS jsonb`
+    —— 回 `{ok, already, paid, order_id, alert, error}`
+  - `public.apply_cod_payment(p_order_id bigint) RETURNS jsonb`
 
 - [ ] **Step 1: 寫失敗測試**
 
 在 `supabase/tests/ecpay_payment.sql` 的 `ROLLBACK;` 之前插入：
 
 ```sql
--- ── apply_ecpay_payment ──
+-- ── apply_ecpay_payment：正常收款 ──
 DO $$
 DECLARE v_oid bigint; v_paid numeric; v_pstatus text; v_r jsonb;
 BEGIN
   v_oid := pg_temp.setup_order(1, 5, 1000);
   PERFORM public.create_ecpay_transaction(v_oid, 'TESTTRADE001', 1000);
 
-  -- 付款成功 → paid_amount 累加，payment_status 由 trigger 推導
   v_r := public.apply_ecpay_payment('TESTTRADE001', '1', 'Credit_CreditCard');
   PERFORM pg_temp.assert_eq((v_r->>'ok')::boolean, true, 'apply 回報成功');
 
@@ -924,6 +1001,26 @@ BEGIN
   PERFORM pg_temp.assert_eq((v_r->>'already')::boolean, true, '重複通知被識別為已處理');
   SELECT paid_amount INTO v_paid FROM public.consumer_orders WHERE id = v_oid;
   PERFORM pg_temp.assert_eq(v_paid, 1000::numeric, '重複通知不重複累加金額');
+END $$;
+
+-- ── 部分付款：加購後補差額 ──
+DO $$
+DECLARE v_oid bigint; v_paid numeric; v_pstatus text;
+BEGIN
+  v_oid := pg_temp.setup_order(1, 5, 1000);
+  PERFORM public.create_ecpay_transaction(v_oid, 'TESTTRADE00A', 600);
+  PERFORM public.apply_ecpay_payment('TESTTRADE00A', '1', 'Credit');
+  SELECT paid_amount, payment_status INTO v_paid, v_pstatus
+    FROM public.consumer_orders WHERE id = v_oid;
+  PERFORM pg_temp.assert_eq(v_paid, 600::numeric, '第一筆收 600');
+  PERFORM pg_temp.assert_eq(v_pstatus, '部分付款', '未收滿時狀態為部分付款');
+
+  PERFORM public.create_ecpay_transaction(v_oid, 'TESTTRADE00B', 400);
+  PERFORM public.apply_ecpay_payment('TESTTRADE00B', '1', 'Credit');
+  SELECT paid_amount, payment_status INTO v_paid, v_pstatus
+    FROM public.consumer_orders WHERE id = v_oid;
+  PERFORM pg_temp.assert_eq(v_paid, 1000::numeric, '第二筆累加到 1000');
+  PERFORM pg_temp.assert_eq(v_pstatus, '已付清', '收滿後狀態為已付清');
 END $$;
 
 -- ── 付款失敗不動錢 ──
@@ -948,40 +1045,45 @@ BEGIN
   PERFORM pg_temp.assert_eq((v_r->>'ok')::boolean, false, '未知交易編號回報失敗而非默默吞掉');
 END $$;
 
--- ── 遲到補救：訂單已被當棄單釋放，庫存夠 → 補回並復活 ──
+-- ── 遲到補救：訂單已被當棄單取消，庫存夠 → 復活並重新佔用 ──
 DO $$
-DECLARE v_oid bigint; v_pid bigint; v_stock int; v_status text; v_paid numeric; v_r jsonb;
+DECLARE v_oid bigint; v_status text; v_paid numeric; v_alert text; v_r jsonb;
 BEGIN
   v_oid := pg_temp.setup_order(2, 10, 800);
-  SELECT (items_json->0->>'id')::bigint INTO v_pid FROM public.consumer_orders WHERE id = v_oid;
   PERFORM public.create_ecpay_transaction(v_oid, 'TESTTRADE003', 800);
+  PERFORM pg_temp.assert_eq(pg_temp.stock_of(v_oid), 8, '建單已佔用 2 件');
 
   -- 模擬棄單清理跑過了
   UPDATE public.consumer_orders SET created_at = now() - interval '31 minutes' WHERE id = v_oid;
   PERFORM public.cancel_abandoned_credit_orders(30);
-  SELECT quantity, (SELECT status FROM public.consumer_orders WHERE id = v_oid)
-    INTO v_stock, v_status FROM public.products WHERE id = v_pid;
-  PERFORM pg_temp.assert_eq(v_stock, 10, '棄單清理已把庫存還回');
+  PERFORM pg_temp.assert_eq(pg_temp.stock_of(v_oid), 10, '棄單清理已把庫存還回');
+  SELECT status INTO v_status FROM public.consumer_orders WHERE id = v_oid;
   PERFORM pg_temp.assert_eq(v_status, '已取消', '棄單已被取消');
 
   -- 綠界通知遲到才進來
   v_r := public.apply_ecpay_payment('TESTTRADE003', '1', 'Credit_CreditCard');
   PERFORM pg_temp.assert_eq((v_r->>'ok')::boolean, true, '遲到通知仍被接受');
 
-  SELECT quantity INTO v_stock FROM public.products WHERE id = v_pid;
-  PERFORM pg_temp.assert_eq(v_stock, 8, '遲到補救重新扣回庫存');
-  SELECT status, paid_amount INTO v_status, v_paid FROM public.consumer_orders WHERE id = v_oid;
+  PERFORM pg_temp.assert_eq(pg_temp.stock_of(v_oid), 8, '遲到補救讓 trigger 重新佔用庫存');
+  SELECT status, paid_amount, payment_alert INTO v_status, v_paid, v_alert
+    FROM public.consumer_orders WHERE id = v_oid;
   PERFORM pg_temp.assert_eq(v_status, '處理中', '訂單從已取消復活');
   PERFORM pg_temp.assert_eq(v_paid, 800::numeric, '遲到補救仍記錄收款');
+  PERFORM pg_temp.assert_eq(v_alert, NULL::text, '庫存夠時不該標警示');
 END $$;
 
 -- ── 遲到補救：庫存不足 → 收錢但標警示，絕不默默吞掉 ──
 DO $$
-DECLARE v_oid bigint; v_pid bigint; v_alert text; v_paid numeric;
+DECLARE v_oid bigint; v_pid bigint; v_alert text; v_paid numeric; v_status text;
 BEGIN
-  v_oid := pg_temp.setup_order(2, 2, 800);   -- 下單後庫存歸零
-  SELECT (items_json->0->>'id')::bigint INTO v_pid FROM public.consumer_orders WHERE id = v_oid;
+  v_oid := pg_temp.setup_order(2, 2, 800);   -- 建單後庫存歸零
+  v_pid := pg_temp.pid_of(v_oid);
   PERFORM public.create_ecpay_transaction(v_oid, 'TESTTRADE004', 800);
+
+  -- 這件商品要是「現貨」才會擋單：確保它在商城上架且不跳過庫存檢查
+  INSERT INTO public.storefront_products (store_id, product_id, shop_price, skip_stock_check)
+  VALUES (1, v_pid, 400, false)
+  ON CONFLICT (store_id, product_id) DO UPDATE SET skip_stock_check = false, collection_end = NULL;
 
   UPDATE public.consumer_orders SET created_at = now() - interval '31 minutes' WHERE id = v_oid;
   PERFORM public.cancel_abandoned_credit_orders(30);
@@ -990,10 +1092,11 @@ BEGIN
 
   PERFORM public.apply_ecpay_payment('TESTTRADE004', '1', 'Credit_CreditCard');
 
-  SELECT payment_alert, paid_amount INTO v_alert, v_paid
+  SELECT payment_alert, paid_amount, status INTO v_alert, v_paid, v_status
     FROM public.consumer_orders WHERE id = v_oid;
   PERFORM pg_temp.assert_eq(v_paid, 800::numeric, '庫存不足仍要記錄已收款');
   PERFORM pg_temp.assert_eq(v_alert IS NOT NULL, true, '庫存不足時標記 payment_alert 讓店家處理');
+  PERFORM pg_temp.assert_eq(v_status, '已取消', '復活失敗時狀態維持已取消，不可假裝成功');
 END $$;
 
 -- ── apply_cod_payment ──
@@ -1016,6 +1119,9 @@ BEGIN
 END $$;
 ```
 
+> `storefront_products` 的欄位名稱與唯一鍵請先用 `\d public.storefront_products` 確認再寫；
+> 若唯一鍵不是 `(store_id, product_id)`，把 `ON CONFLICT` 改成實際的。
+
 - [ ] **Step 2: 跑測試確認失敗**
 
 ```bash
@@ -1025,13 +1131,16 @@ Expected: FAIL —— `function public.create_ecpay_transaction(...) does not ex
 
 - [ ] **Step 3: 寫 migration**
 
-建立 `supabase/migrations/20260812100300_apply_ecpay_payment.sql`：
+建立 `supabase/migrations/20260812140000_apply_ecpay_payment.sql`：
 
 ```sql
 -- 綠界收款套用。三個不變量：
 -- 1) 不直接寫 payment_status——寫 paid_amount，由 sync_payment_status trigger 推導
 -- 2) 冪等——綠界 notify 會重試，result 也做同一件事，同一 trade_no 只能算一次錢
--- 3) 遲到補救——通知晚於棄單清理時要把庫存扣回並復活訂單；庫存不足就標警示，不默默吃錢
+-- 3) 遲到補救——通知晚於棄單清理時要把訂單復活；庫存不足就標警示，不默默吃錢
+--
+-- 庫存一律交給 reconcile_stock trigger（20260812100000）：這裡只改 status，
+-- 佔用量的增減由 trigger 依 stock_committed 差額處理。切勿手寫庫存 UPDATE。
 
 -- ========== 建立 pending 交易 ==========
 create or replace function public.create_ecpay_transaction(
@@ -1060,12 +1169,9 @@ create or replace function public.apply_ecpay_payment(
 language plpgsql security definer set search_path to 'public'
 as $$
 declare
-  v_txn    record;
-  v_order  record;
-  v_item   jsonb;
-  v_alert  text := null;
-  v_short  boolean := false;
-  v_avail  int;
+  v_txn   record;
+  v_order record;
+  v_alert text := null;
 begin
   select * into v_txn from public.ecpay_transactions
     where trade_no = p_trade_no for update;
@@ -1081,7 +1187,8 @@ begin
   -- 付款失敗：標記後結束，不動訂單金額
   if p_rtn_code is distinct from '1' then
     update public.ecpay_transactions set status = 'failed' where id = v_txn.id;
-    return jsonb_build_object('ok', true, 'already', false, 'order_id', v_txn.order_id, 'paid', false);
+    return jsonb_build_object('ok', true, 'already', false, 'paid', false,
+                              'order_id', v_txn.order_id);
   end if;
 
   select * into v_order from public.consumer_orders where id = v_txn.order_id for update;
@@ -1089,56 +1196,20 @@ begin
     return jsonb_build_object('ok', false, 'error', '訂單不存在');
   end if;
 
-  -- 遲到補救：訂單已被當棄單釋放 → 嘗試把庫存扣回來
-  if v_order.stock_released_at is not null then
-    -- 先檢查每個品項庫存都夠，避免扣一半
-    for v_item in select * from jsonb_array_elements(coalesce(v_order.items_json, '[]'::jsonb))
-    loop
-      if (v_item->>'isCollection')::boolean is true then continue; end if;
-      if v_item->>'status' = 'cancelled' then continue; end if;
-
-      if coalesce(v_item->>'variantId', '') <> '' then
-        select stock into v_avail from public.product_variants
-          where id = (v_item->>'variantId')::bigint;
-      else
-        select quantity into v_avail from public.products
-          where id = (v_item->>'id')::bigint;
-      end if;
-
-      if coalesce(v_avail, 0) < (v_item->>'qty')::int then
-        v_short := true;
-        exit;
-      end if;
-    end loop;
-
-    if v_short then
-      v_alert := '已收款但庫存不足，訂單先前已被當棄單取消，請人工確認出貨或退款';
-    else
-      for v_item in select * from jsonb_array_elements(coalesce(v_order.items_json, '[]'::jsonb))
-      loop
-        if (v_item->>'isCollection')::boolean is true then continue; end if;
-        if v_item->>'status' = 'cancelled' then continue; end if;
-
-        if coalesce(v_item->>'variantId', '') <> '' then
-          update public.product_variants
-            set stock = stock - (v_item->>'qty')::int
-            where id = (v_item->>'variantId')::bigint;
-        else
-          update public.products
-            set quantity = quantity - (v_item->>'qty')::int
-            where id = (v_item->>'id')::bigint;
-        end if;
-      end loop;
-
-      -- 復活訂單：清掉釋放旗標，被取消的拉回處理中
-      update public.consumer_orders
-        set stock_released_at = null,
-            status = case when status = '已取消' then '處理中' else status end
-        where id = v_order.id;
-    end if;
+  -- 遲到補救：通知晚於棄單清理，訂單已被取消、庫存也已回補。
+  -- 把狀態改回處理中即可——reconcile_stock trigger 會重新佔用庫存，
+  -- 現貨不足時它自己會 raise，這裡接住並改標警示，絕不默默把錢吃掉。
+  if v_order.status = '已取消' then
+    begin
+      update public.consumer_orders set status = '處理中' where id = v_order.id;
+    exception when others then
+      v_alert := '已收款但庫存不足，訂單先前已被當棄單取消，請人工確認出貨或退款（'
+                 || sqlerrm || '）';
+    end;
   end if;
 
-  -- 記帳：累加 paid_amount，payment_status 交給 trigger 推導
+  -- 記帳：只動 paid_amount 與 payment_alert，不碰 status/items_json，
+  -- 因此不會再次觸發 reconcile_stock（它只監看那兩欄）。
   update public.consumer_orders
     set paid_amount   = coalesce(paid_amount, 0) + v_txn.amount,
         payment_alert = coalesce(v_alert, payment_alert)
@@ -1148,10 +1219,8 @@ begin
     set status = 'paid', paid_at = now(), payment_type = p_payment_type
     where id = v_txn.id;
 
-  return jsonb_build_object(
-    'ok', true, 'already', false, 'paid', true,
-    'order_id', v_order.id, 'alert', v_alert
-  );
+  return jsonb_build_object('ok', true, 'already', false, 'paid', true,
+                            'order_id', v_order.id, 'alert', v_alert);
 end $$;
 
 -- ========== 貨到付款：取件完成＝綠界代收完成 ==========
@@ -1188,20 +1257,21 @@ revoke all on function public.apply_cod_payment(bigint) from public, anon, authe
 
 ```bash
 psql "postgresql://postgres:postgres@127.0.0.1:54332/postgres" -v ON_ERROR_STOP=1 \
-  -f supabase/migrations/20260812100300_apply_ecpay_payment.sql
+  -f supabase/migrations/20260812140000_apply_ecpay_payment.sql
 psql "postgresql://postgres:postgres@127.0.0.1:54332/postgres" -v ON_ERROR_STOP=1 \
   -f supabase/tests/ecpay_payment.sql
 ```
 Expected: 全部 `PASS`
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: 確認既有的庫存測試沒被打壞**
 
 ```bash
-git add supabase/migrations/20260812100300_apply_ecpay_payment.sql supabase/tests/ecpay_payment.sql
-git commit -m "feat: 綠界收款套用 RPC——冪等累加與棄單遲到補救"
+npm run test:sql
 ```
+Expected: 既有的 `stock_reconcile.sql` 仍全過
 
 ---
+
 
 ### Task B3: server 端金鑰取用（`supabase-admin.js` ＋ `ecpayStore.js`）
 
