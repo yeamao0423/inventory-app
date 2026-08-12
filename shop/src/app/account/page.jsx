@@ -304,9 +304,17 @@ function paymentLabel(o, zh) {
   return { text: zh ? '待付款' : 'Pending payment', color: undefined }
 }
 
+// 信用卡棄單想再付、或加購後補差額，兩者共用同一個入口——route 自己算未付餘額
+function canRepay(o) {
+  return o.payment_method === 'credit'
+    && Number(o.paid_amount || 0) < Number(o.total_amount || 0)
+    && o.status !== '已取消'
+}
+
 function OrderCard({ order: o, zh, lang, onClick, onAppend }) {
   const pay = paymentLabel(o, zh)
   const appendable = canAppendToOrder(o)
+  const repayable = canRepay(o)
 
   return (
     <div className="account-order-card">
@@ -328,6 +336,17 @@ function OrderCard({ order: o, zh, lang, onClick, onAppend }) {
           <span>{zh ? '點擊查看明細 →' : 'View details →'}</span>
         </div>
       </div>
+
+      {repayable && (
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid var(--border)' }}>
+          <a href={`/api/ecpay/credit/${o.id}`} className="btn-primary" style={{
+            display: 'block', textAlign: 'center', width: '100%', padding: '9px 0', borderRadius: 10,
+            fontSize: 13, fontWeight: 600,
+          }}>
+            {zh ? '重新付款' : 'Pay Now'}
+          </a>
+        </div>
+      )}
 
       {appendable && (
         <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid var(--border)' }}>
