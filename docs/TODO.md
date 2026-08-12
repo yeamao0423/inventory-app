@@ -113,7 +113,7 @@ vitest 429 個、後台 build。含跨兩支 migration 的整合點（預購扣�
 
 **接下來的三步需要你的環境與真實金鑰，程式碼這邊已經沒有待辦：**
 
-1. **套 migration 到 remote** —— 12 支，走 MCP `apply_migration` 逐支套，**絕不可 `db push`**。
+1. **套 migration 到 remote** —— 16 支，走 MCP `apply_migration` 逐支套，**絕不可 `db push`**。
    套完必須驗 pg_cron：`cancel_abandoned_credit_orders` 已 `revoke from authenticated`，
    若 migration 不是由函式 owner 套的，排程會 `permission denied` 靜默失效 → 棄單永不清理、
    庫存被永久壓住。查 `cron.job.username`、`pg_proc.proacl`、`cron.job_run_details`。
