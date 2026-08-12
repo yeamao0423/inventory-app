@@ -163,8 +163,8 @@ export default function CheckoutPage() {
   // 沒設綠界金鑰的店家（ecpayReady=false）完全不出現信用卡／貨到付款選項。
   //
   // 金流與物流是分開申請的：只設了金流、還沒設物流的店家（logisticsReady=false）
-  // 不能出現「貨到付款」（COD 需要物流建單），也不能走電子地圖選店（見下面的
-  // cvsPickupAvailable）——但信用卡本身不依賴物流，仍然開放，取貨改回手填店名/店號。
+  // 不能出現「貨到付款」（那需要綠界代收貨款），取貨也只能走手填店名/店號。
+  // 但信用卡與匯款本身都不依賴物流，仍然照常提供。
   //
   // 匯款一律提供，不看 settings.remit_account。這是接綠界之前唯一的付款方式，
   // 而且三家店的 remit_account 從來沒人設定過（都是 null）——拿它當開關會直接
@@ -201,7 +201,11 @@ export default function CheckoutPage() {
 
   // 電子地圖選店只有在物流就緒、且目前選的付款方式是 credit／cod 時才可用。
   // 物流沒就緒時即使選了信用卡，也視同沒有電子地圖，取貨走下面的手填 fallback。
-  const cvsPickupAvailable = logisticsReady && (form.payment_method === 'credit' || form.payment_method === 'cod')
+  // 只看物流有沒有就緒，不看付款方式。綠界的金流與物流是分開申請、分開運作的兩套，
+  // 建單時只有 IsCollection 這個參數跟付款方式有關（貨到付款＝Y 代收貨款，其餘＝N）。
+  // 匯款一樣可以走綠界超商取貨，而且比手填店名可靠得多——手打的店名店號送不出貨，
+  // 電子地圖回來的是綠界認得的門市代碼，後台可以直接建物流單。
+  const cvsPickupAvailable = logisticsReady
 
   // store 設定載入後才知道有哪些付款選項，套一次預設值。只在 store 這個
   // 參照第一次從 null 變成物件時跑一次，不會蓋掉使用者之後自己選的付款方式。
@@ -353,10 +357,9 @@ export default function CheckoutPage() {
     if (!form.email.trim()) e.email = t('checkout.required')
     if (!form.line_id.trim()) e.line_id = t('checkout.required')
 
-    // 走綠界電子地圖選店（cvsPickupAvailable，需物流就緒＋payment_method 為 credit／cod）：
-    // 門市必填，手填店名/店號不必填。
-    // 沒走電子地圖（remittance，或物流未就緒時的 credit）：維持現行手填店名/店號必填 ——
-    // 這是沒設綠界物流金鑰的店家唯一的取貨路徑，不可拿掉
+    // 物流就緒的店家一律走綠界電子地圖選店（不分付款方式）：門市必填，手填店名/店號不必填。
+    // 物流未就緒：維持現行手填店名/店號必填 —— 那是沒設綠界物流金鑰的店家
+    // 唯一的取貨路徑，不可拿掉
     if (!cvsPickupAvailable && !form.cvs_store_id) {
       if (!form.store_name.trim()) e.store_name = t('checkout.required')
       if (!form.store_number.trim()) e.store_number = t('checkout.required')
