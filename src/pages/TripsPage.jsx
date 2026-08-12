@@ -5,6 +5,7 @@ import { useAuth } from '../hooks/useAuth'
 import { fetchStoreMembers } from '../components/ProcurementBatchTab'
 import {
   taipeiDayStart, taipeiDayEnd, summarizeOrders, computeTripFinance, buildCostSnapshotMap, isActiveItem,
+  effectiveRate,
 } from '../lib/orderFinance'
 import { splitOrdersByTrip } from '../lib/tripScope'
 import { buildCustomerSummaries, sortCustomers } from '../lib/tripCustomers'
@@ -57,15 +58,18 @@ export default function TripsPage() {
       ])
       const rateMap = {}
       ;(rates || []).forEach(r => { rateMap[r.currency] = Number(r.rate) })
+      // 批次掛在哪趟就用那趟自己設的匯率，卡片上的進貨成本才會跟行程報告一致
+      const tripRateById = {}
+      ;(data || []).forEach(t => { tripRateById[t.id] = t.exchange_rates || {} })
       const costMap = {}
       ;(batches || []).forEach(batch => {
         const items = batch.procurement_items || []
+        const tripRateMap = tripRateById[batch.trip_id] || {}
         const batchCost = items.reduce((s, item) => {
           if (item.status === 'missed') return s
           const qty = item.actual_qty ?? item.quantity
           const cost = (Number(item.unit_cost) || 0) * qty
-          const cur = item.currency || 'TWD'
-          return s + (cur === 'TWD' ? cost : cost * (rateMap[cur] || 0))
+          return s + cost * effectiveRate(item.currency, { rateMap, tripRateMap })
         }, 0)
         costMap[batch.trip_id] = (costMap[batch.trip_id] || 0) + batchCost
       })
@@ -314,6 +318,11 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
     const rateMap = {}
     ;(rates || []).forEach(r => { rateMap[r.currency] = Number(r.rate) })
 
+    // 本趟自己設的匯率，蓋過全域匯率與下單當下的成本快照。
+    // 沒設就是空物件，一切照舊。
+    const tripRateMap = trip.exchange_rates || {}
+    const rateCtx = { rateMap, tripRateMap }
+
     const tripExpenseTotal = (trip.trip_expenses || []).reduce((s, e) => s + Number(e.amount || 0), 0)
 
     // 本趟進貨成本：純呈現用，不併入淨利計算
@@ -323,8 +332,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
         if (item.status === 'missed') return s
         const qty = item.actual_qty ?? item.quantity
         const cost = (Number(item.unit_cost) || 0) * qty
-        const cur = item.currency || 'TWD'
-        return s + (cur === 'TWD' ? cost : cost * (rateMap[cur] || 0))
+        return s + cost * effectiveRate(item.currency, rateCtx)
       }, 0)
       return sum + batchCost
     }, 0)
@@ -340,8 +348,8 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
         if (!payerId) return
         const qty = item.actual_qty ?? item.quantity
         const cost = (Number(item.unit_cost) || 0) * qty
-        const cur = item.currency || 'TWD'
-        advanceByPayer[payerId] = (advanceByPayer[payerId] || 0) + (cur === 'TWD' ? cost : cost * (rateMap[cur] || 0))
+        // 代墊是真的換匯付出去的錢，最該用本趟的匯率算
+        advanceByPayer[payerId] = (advanceByPayer[payerId] || 0) + cost * effectiveRate(item.currency, rateCtx)
       })
     })
 
@@ -368,7 +376,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
     // 財務一律走 orderFinance：淨營收不含運費、折扣分攤到品項，
     // 所以下面商品列表的毛利加總必然等於總毛利
     const finance = computeTripFinance(
-      summarizeOrders(tripOrders, { productMap, variantMap, rateMap, costSnapshots }),
+      summarizeOrders(tripOrders, { productMap, variantMap, rateMap, tripRateMap, costSnapshots }),
       { tripExpense: tripExpenseTotal, procurementCost },
     )
 
@@ -388,7 +396,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
 
     // Customer insights：財務走 computeOrderFinance，這裡只換聚合鍵
     const customers = buildCustomerSummaries(tripOrders, {
-      productMap, variantMap, rateMap, costSnapshots, historicalEmails,
+      productMap, variantMap, rateMap, tripRateMap, costSnapshots, historicalEmails,
     })
     const newCount = customers.filter(c => c.isNew).length
     const returnCount = customers.length - newCount
@@ -410,6 +418,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
     setData({
       ...financeTotals,
       snapshotReady,
+      tripRateMap,
       productList,
       productTypeCount: productList.length,
       customers,
@@ -524,6 +533,14 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
                   運費損益暫時以 0 計算。實際上免運單的物流費是店家自付，補上後盈餘會下降。
                 </div>
               )}
+            </div>
+          )}
+
+          {/* 有設行程匯率就講明白，否則報告數字跟系統匯率算出來的對不上會查不出原因 */}
+          {Object.keys(data.tripRateMap || {}).length > 0 && (
+            <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 12, lineHeight: 1.5 }}>
+              本趟匯率 <strong>{Object.entries(data.tripRateMap).map(([c, r]) => `${c} ${r}`).join('・')}</strong>
+              ，這些幣別的商品成本與代墊金額都用它重算，不隨系統匯率變動。
             </div>
           )}
 
@@ -1691,6 +1708,41 @@ function TripSheet({ trip, onClose, onSaved, onDelete }) {
     : []
   const [otherExpenses, setOtherExpenses] = useState(initOther)
 
+  // 本趟匯率：只列有覆寫的幣別，空的就是沿用全域匯率
+  const [rateRows, setRateRows] = useState(
+    () => Object.entries(trip?.exchange_rates || {}).map(([currency, rate]) => ({ currency, rate: String(rate) })),
+  )
+
+  // TWD 是基準幣，換算恆為 1，列出來只會讓人以為可以改
+  const rateCurrencies = SUPPORTED_CURRENCIES.filter(c => c !== 'TWD')
+
+  function addRate() {
+    const used = new Set(rateRows.map(r => r.currency))
+    const next = rateCurrencies.find(c => !used.has(c))
+    if (!next) return
+    setRateRows([...rateRows, { currency: next, rate: '' }])
+  }
+
+  function updateRate(idx, field, value) {
+    const arr = [...rateRows]
+    arr[idx] = { ...arr[idx], [field]: value }
+    setRateRows(arr)
+  }
+
+  function removeRate(idx) {
+    setRateRows(rateRows.filter((_, i) => i !== idx))
+  }
+
+  // 同一幣別填兩次的話後面蓋前面，跟 DB 存 jsonb 的結果一致
+  function buildExchangeRates() {
+    const out = {}
+    rateRows.forEach(r => {
+      const v = Number(r.rate)
+      if (r.currency && r.currency !== 'TWD' && Number.isFinite(v) && v > 0) out[r.currency] = v
+    })
+    return out
+  }
+
   function addOther() {
     setOtherExpenses([...otherExpenses, { label: '', amount: '', note: '' }])
   }
@@ -1730,12 +1782,15 @@ function TripSheet({ trip, onClose, onSaved, onDelete }) {
       }
     })
 
+    const exchangeRates = buildExchangeRates()
+
     if (isEdit) {
       await supabase.from('trips').update({
         destination: destination.trim(),
         depart_date: departDate,
         return_date: returnDate,
         note: note.trim() || null,
+        exchange_rates: exchangeRates,
       }).eq('id', trip.id)
 
       await supabase.from('trip_expenses').delete().eq('trip_id', trip.id)
@@ -1751,6 +1806,7 @@ function TripSheet({ trip, onClose, onSaved, onDelete }) {
         depart_date: departDate,
         return_date: returnDate,
         note: note.trim() || null,
+        exchange_rates: exchangeRates,
       }).select().single()
 
       if (error) {
@@ -1819,6 +1875,74 @@ function TripSheet({ trip, onClose, onSaved, onDelete }) {
         <div style={{ marginBottom: 20 }}>
           <div style={labelStyle}>備註</div>
           <input style={inputStyle} placeholder="選填" value={note} onChange={e => setNote(e.target.value)} />
+        </div>
+
+        <div style={{ borderTop: '1px solid var(--border)', marginBottom: 16 }} />
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>本趟匯率</div>
+          <button
+            onClick={addRate}
+            disabled={rateRows.length >= rateCurrencies.length}
+            style={{
+              background: 'none',
+              border: '1px dashed var(--border)',
+              borderRadius: 6,
+              padding: '4px 12px',
+              fontSize: 13,
+              cursor: rateRows.length >= rateCurrencies.length ? 'default' : 'pointer',
+              color: rateRows.length >= rateCurrencies.length ? 'var(--text-3)' : 'var(--text)',
+            }}
+          >
+            + 新增
+          </button>
+        </div>
+
+        <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 12, lineHeight: 1.5 }}>
+          填 <strong>1 外幣兌台幣</strong>，例：日圓 0.215。填了的幣別，本趟的商品成本與代墊金額
+          一律用這個匯率重算；沒填的沿用系統匯率。
+          {isEdit && <>改匯率會連帶更新本趟已有的報表數字，已拆過的帳要作廢重算。</>}
+        </div>
+
+        {rateRows.length === 0 && (
+          <div style={{ fontSize: 13, color: 'var(--text-3)', marginBottom: 16 }}>沿用系統匯率</div>
+        )}
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
+          {rateRows.map((r, idx) => (
+            <div key={idx} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <select
+                value={r.currency}
+                onChange={e => updateRate(idx, 'currency', e.target.value)}
+                style={{
+                  padding: '11px 8px', borderRadius: 10, border: '0.5px solid var(--border)',
+                  fontSize: 14, background: 'var(--bg)', color: 'var(--text)', flexShrink: 0,
+                }}
+              >
+                {rateCurrencies.map(c => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+              <input
+                style={{ ...inputStyle, width: undefined, flex: 1 }}
+                type="number"
+                inputMode="decimal"
+                step="0.0001"
+                placeholder="例 0.215"
+                value={r.rate}
+                onChange={e => updateRate(idx, 'rate', e.target.value)}
+              />
+              <button
+                onClick={() => removeRate(idx)}
+                style={{
+                  background: 'none', border: 'none', fontSize: 18, cursor: 'pointer',
+                  color: 'var(--text-3)', padding: '8px 4px', flexShrink: 0,
+                }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
         </div>
 
         <div style={{ borderTop: '1px solid var(--border)', marginBottom: 16 }} />

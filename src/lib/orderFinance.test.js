@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   taipeiDayStart, taipeiDayEnd, isActiveItem, itemUnitCost, buildCostSnapshotMap,
-  computeOrderFinance, summarizeOrders, computeTripFinance,
+  computeOrderFinance, summarizeOrders, computeTripFinance, effectiveRate,
 } from './orderFinance'
 
 const ctx = {
@@ -73,6 +73,89 @@ describe('itemUnitCost 成本軸', () => {
   })
   it('缺匯率不當成 0 元進貨，標示為未知', () => {
     expect(itemUnitCost({ id: 4 }, ctx)).toEqual({ twd: 0, source: null })
+  })
+})
+
+describe('effectiveRate', () => {
+  const maps = { rateMap: { JPY: 0.22, KRW: 0.024 }, tripRateMap: { JPY: 0.25 } }
+
+  it('TWD 恆為 1，不看任何匯率表', () => {
+    expect(effectiveRate('TWD', maps)).toBe(1)
+    expect(effectiveRate(null, maps)).toBe(1)
+    expect(effectiveRate(undefined)).toBe(1)
+  })
+  it('行程匯率優先於全域', () => {
+    expect(effectiveRate('JPY', maps)).toBe(0.25)
+  })
+  it('行程沒設該幣別就用全域', () => {
+    expect(effectiveRate('KRW', maps)).toBe(0.024)
+  })
+  it('行程匯率為 0 或非數字視為沒設', () => {
+    expect(effectiveRate('JPY', { ...maps, tripRateMap: { JPY: 0 } })).toBe(0.22)
+    expect(effectiveRate('JPY', { ...maps, tripRateMap: { JPY: 'abc' } })).toBe(0.22)
+  })
+  it('兩邊都沒有回 0，代表換不出來', () => {
+    expect(effectiveRate('VND', maps)).toBe(0)
+    expect(effectiveRate('JPY', {})).toBe(0)
+  })
+})
+
+describe('itemUnitCost 行程匯率', () => {
+  const tripCtx = { ...ctx, tripRateMap: { JPY: 0.25 } }
+
+  it('行程有設該幣別的匯率時蓋過快照', () => {
+    // 這趟實際換匯是 0.25，1000 JPY 的貨就是 250 元，不是快照當初凍的 88
+    expect(itemUnitCost({ id: 2 }, tripCtx, 88)).toEqual({ twd: 250, source: 'trip' })
+  })
+
+  it('行程沒設該幣別就完全走原本的優先序', () => {
+    // VND 沒在行程匯率裡 → 快照照舊優先
+    expect(itemUnitCost({ id: 4 }, tripCtx, 88)).toEqual({ twd: 88, source: 'snapshot' })
+    // 連快照都沒有 → 全域匯率也沒 VND → 標示未知
+    expect(itemUnitCost({ id: 4 }, tripCtx)).toEqual({ twd: 0, source: null })
+  })
+
+  it('TWD 商品不受行程匯率影響', () => {
+    expect(itemUnitCost({ id: 1 }, tripCtx, 88)).toEqual({ twd: 88, source: 'snapshot' })
+    expect(itemUnitCost({ id: 1 }, tripCtx)).toEqual({ twd: 100, source: 'product' })
+  })
+
+  it('行程匯率換算的是規格成本優先', () => {
+    expect(itemUnitCost({ id: 2, variantId: 'v1' }, tripCtx, 88)).toEqual({ twd: 45, source: 'trip' })
+  })
+
+  it('商品沒設成本時，有行程匯率也算不出成本', () => {
+    expect(itemUnitCost({ id: 3 }, { ...ctx, tripRateMap: { TWD: 1 } })).toEqual({ twd: 0, source: null })
+  })
+
+  it('行程匯率填 0 或非數字視為沒填，不會讓成本變 0 元', () => {
+    expect(itemUnitCost({ id: 2 }, { ...ctx, tripRateMap: { JPY: 0 } }, 88)).toEqual({ twd: 88, source: 'snapshot' })
+    expect(itemUnitCost({ id: 2 }, { ...ctx, tripRateMap: { JPY: '' } })).toEqual({ twd: 220, source: 'product' })
+  })
+
+  it('沒傳 tripRateMap 時行為與改版前完全相同', () => {
+    expect(itemUnitCost({ id: 2 }, ctx, 88)).toEqual({ twd: 88, source: 'snapshot' })
+    expect(itemUnitCost({ id: 2 }, ctx)).toEqual({ twd: 220, source: 'product' })
+  })
+})
+
+describe('行程匯率貫穿到彙總', () => {
+  const orders = [{
+    id: 5, total_amount: 600, shipping_fee: 0, discount_amount: 0, paid_amount: 600,
+    items_json: [{ id: 2, qty: 1, price: 600 }],   // 1000 JPY 的貨
+  }]
+
+  it('summarizeOrders 用行程匯率重算成本，蓋過快照', () => {
+    const snap = { costSnapshots: { 5: { 0: 210 } } }
+    expect(summarizeOrders(orders, { ...ctx, ...snap }).cogs).toBe(210)
+    expect(summarizeOrders(orders, { ...ctx, ...snap, tripRateMap: { JPY: 0.25 } }).cogs).toBe(250)
+  })
+
+  it('行程匯率變動會連帶改寫該趟毛利', () => {
+    const low = summarizeOrders(orders, { ...ctx, tripRateMap: { JPY: 0.20 } })
+    const high = summarizeOrders(orders, { ...ctx, tripRateMap: { JPY: 0.30 } })
+    expect(low.grossProfit).toBe(400)   // 600 − 200
+    expect(high.grossProfit).toBe(300)  // 600 − 300
   })
 })
 

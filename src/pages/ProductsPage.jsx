@@ -15,11 +15,12 @@ const TABS = [
 
 export default function ProductsPage() {
   const { can, storeId, store } = useAuth()
-  // tab 放 URL query，重整或分享連結都會回到同一個分頁
+  // tab 放 URL query，重整或分享連結都會回到同一個分頁。
+  // 預設＝商城：進商品頁最常做的是看/改前台上架，不是盤庫存。
   const [params, setParams] = useSearchParams()
   const raw = params.get('tab')
-  const tab = TABS.some(t => t.key === raw) ? raw : 'inventory'
-  const setTab = key => setParams(key === 'inventory' ? {} : { tab: key }, { replace: true })
+  const tab = TABS.some(t => t.key === raw) ? raw : 'listings'
+  const setTab = key => setParams(key === 'listings' ? {} : { tab: key }, { replace: true })
 
   const syncShop = () => revalidateShop({ storeId, slug: store?.slug })
   const current = TABS.find(t => t.key === tab)

@@ -416,6 +416,9 @@ function EditableSelectField({ productId, field, initialValue, canEdit, onSaved,
 // ── 規格庫存/成本編輯器（庫存頁是 stock 的唯一編輯入口；成本＝進貨資料亦在此設）─────────
 function VariantStockEditor({ variants, optionTypes, canEdit, onSaved, productCost = null, costCurrency = 'TWD' }) {
   const [rows, setRows] = useState(variants || [])
+  // 批次套用輸入框為暫態 UI，比照 VariantEditor 留在元件內部
+  const [batchCost, setBatchCost] = useState('')
+  const [batchStock, setBatchStock] = useState('')
   const total = rows.reduce((s, v) => s + (v.stock || 0), 0)
 
   async function saveStock(id, value) {
@@ -432,6 +435,18 @@ function VariantStockEditor({ variants, optionTypes, canEdit, onSaved, productCo
     if (onSaved) onSaved()
   }
 
+  // 批次套用：上架時是改本地草稿，這裡是既有商品——一次寫回全部規格
+  async function applyBatch(field, raw, setRaw) {
+    if (raw === '' || !Number.isFinite(Number(raw))) return
+    const ids = rows.map(r => r.id)
+    if (ids.length === 0) return
+    const val = field === 'stock' ? Math.max(0, Math.round(Number(raw))) : Number(raw)
+    await supabase.from('product_variants').update({ [field]: val }).in('id', ids)
+    setRows(prev => prev.map(r => ({ ...r, [field]: val })))
+    setRaw('')
+    if (onSaved) onSaved()
+  }
+
   const sorted = [...rows].sort((a, b) =>
     resolveVariantLabel(a.options, optionTypes).localeCompare(resolveVariantLabel(b.options, optionTypes)))
 
@@ -440,6 +455,38 @@ function VariantStockEditor({ variants, optionTypes, canEdit, onSaved, productCo
       <div className="muted fs12" style={{ marginBottom: 8 }}>
         合計 {total} 件 · {rows.length} 規格（總量由各規格自動加總）
       </div>
+
+      {canEdit && rows.length > 1 && (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+            <span className="muted fs12">批次成本:</span>
+            <input
+              type="number"
+              value={batchCost}
+              onChange={e => setBatchCost(e.target.value)}
+              onKeyDown={e => !isComposing(e) && e.key === 'Enter' && applyBatch('variant_cost', batchCost, setBatchCost)}
+              placeholder={productCost != null ? String(productCost) : costCurrency}
+              style={{ width: 76, padding: '4px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center', background: 'var(--bg)', color: 'var(--text)' }}
+            />
+            <button onClick={() => applyBatch('variant_cost', batchCost, setBatchCost)}
+              style={{ padding: '4px 10px', borderRadius: 6, border: '0.5px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 11, cursor: 'pointer' }}>套用</button>
+          </div>
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+            <span className="muted fs12">批次庫存:</span>
+            <input
+              type="number"
+              value={batchStock}
+              onChange={e => setBatchStock(e.target.value)}
+              onKeyDown={e => !isComposing(e) && e.key === 'Enter' && applyBatch('stock', batchStock, setBatchStock)}
+              placeholder="0"
+              style={{ width: 64, padding: '4px 8px', borderRadius: 6, border: '0.5px solid var(--border)', fontSize: 13, textAlign: 'center', background: 'var(--bg)', color: 'var(--text)' }}
+            />
+            <button onClick={() => applyBatch('stock', batchStock, setBatchStock)}
+              style={{ padding: '4px 10px', borderRadius: 6, border: '0.5px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 11, cursor: 'pointer' }}>套用</button>
+          </div>
+        </div>
+      )}
+
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {sorted.map(v => {
           const s = v.stock || 0
@@ -454,7 +501,8 @@ function VariantStockEditor({ variants, optionTypes, canEdit, onSaved, productCo
                   <span className="muted fs11">成本</span>
                   <input
                     type="number"
-                    defaultValue={v.variant_cost ?? ''}
+                    value={v.variant_cost ?? ''}
+                    onChange={e => setRows(prev => prev.map(r => r.id === v.id ? { ...r, variant_cost: e.target.value === '' ? null : e.target.value } : r))}
                     onBlur={e => saveCost(v.id, e.target.value)}
                     onKeyDown={e => !isComposing(e) && e.key === 'Enter' && e.currentTarget.blur()}
                     placeholder={productCost != null ? String(productCost) : costCurrency}
@@ -464,7 +512,8 @@ function VariantStockEditor({ variants, optionTypes, canEdit, onSaved, productCo
                   <span className="muted fs11">庫存</span>
                   <input
                     type="number"
-                    defaultValue={s}
+                    value={v.stock ?? ''}
+                    onChange={e => setRows(prev => prev.map(r => r.id === v.id ? { ...r, stock: e.target.value === '' ? '' : Number(e.target.value) } : r))}
                     onBlur={e => saveStock(v.id, e.target.value)}
                     onKeyDown={e => !isComposing(e) && e.key === 'Enter' && e.currentTarget.blur()}
                     style={{ width: 64, textAlign: 'center', border: '0.5px solid var(--border)', borderRadius: 8, padding: '6px 8px', fontSize: 14, fontWeight: 600, background: 'var(--bg)', color: 'var(--text)' }}

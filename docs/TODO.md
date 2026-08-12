@@ -8,6 +8,19 @@
 
 ---
 
+## 行程匯率（2026-08-11）：remote 已套，local 未套、UI 未驗收
+
+每趟行程可自己設匯率（`trips.exchange_rates` jsonb），該趟的商品成本、進貨成本、代墊返還
+一律用它重算，蓋過下單當下的成本快照。口徑寫在 `docs/architecture.md` §4 成本軸 §5 行程匯率。
+
+- `supabase/migrations/20260811120000_trip_exchange_rates.sql` 還要套 local
+  （`psql -f`）—— **絕不可 `supabase db push`**
+- 套用前 `TripSheet` 存檔會失敗（欄位不存在），行程報告則會安靜走全域匯率
+- UI 沒有人眼驗過：行程表單的匯率列新增／刪除／存檔、報告上的「本趟匯率」說明列
+- **已拆過帳的行程若補設匯率，要 `void_trip_settlement` 再重算**，否則拆賬單快照跟報告數字對不上
+
+---
+
 ## 〇、2026-08-05 這一批：已在 main，未驗收、未上線
 
 五份 spec 全部合併進本地 `main`（設計與計畫在 `docs/superpowers/specs/`、`plans/`）：

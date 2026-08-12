@@ -21,13 +21,18 @@
 // 客戶自己拿明細加總不會對不上。
 //
 // 成本軸優先序（越前面越可信）：
+//   0. trips.exchange_rates —— 該趟行程自己設的匯率。每趟出國實際換到的
+//      價格不一樣，同一件日本貨這趟 0.21、下趟 0.25，老闆要的是「這趟真的
+//      花了多少」，所以它蓋過下面所有回退值，含快照。
+//      代價要知道：改一次行程匯率，該趟歷史毛利就跟著變，已拆過的帳要
+//      作廢重算才對得起來。只有行程報告會帶 tripRateMap，營收報表不帶。
 //   1. consumer_order_item_costs —— 下單當下由 DB trigger 凍結的快照，
 //      日後改商品成本、改匯率都不會回頭改寫歷史（見 20250057 migration）。
 //      刻意存在獨立表而不是 items_json，因為消費者讀得到自己的訂單。
 //   2. product_variants.variant_cost —— 規格層成本，可覆蓋商品層
 //   3. products.cost
-//   2/3 都得用「當前」匯率換算，屬於會隨時間漂移的回退值，只有快照上線前
-//   的舊訂單、或成本沒填過的商品才會走到。
+//   2/3 都得用「當前」全域匯率換算，屬於會隨時間漂移的回退值，只有快照
+//   上線前的舊訂單、或成本沒填過的商品才會走到。
 // ══════════════════════════════════════════════════════════════
 
 // 台北是固定 UTC+8，不用管日光節約
@@ -65,18 +70,30 @@ export function buildCostSnapshotMap(rows = []) {
 }
 
 /**
+ * 某幣別該用的匯率：行程匯率 > 全域匯率，TWD 恆為 1。
+ * 回 0 代表換不出來（缺匯率），呼叫端要當「未知」處理而不是 0 元。
+ *
+ * 採購批次成本與代墊返還走這支，訂單商品成本走 itemUnitCost —— 兩邊
+ * 「行程匯率優先且需為正數」的規則必須一致，改一邊要記得改另一邊。
+ */
+export function effectiveRate(currency, { rateMap = {}, tripRateMap = null } = {}) {
+  const cur = currency || 'TWD'
+  if (cur === 'TWD') return 1
+  const trip = Number(tripRateMap?.[cur])
+  if (Number.isFinite(trip) && trip > 0) return trip
+  const global = Number(rateMap[cur])
+  return Number.isFinite(global) && global > 0 ? global : 0
+}
+
+/**
  * 單一品項的進貨成本（TWD）。
- * snapshotTwd 來自 consumer_order_item_costs；沒有才回退到現值。
+ * ctx.tripRateMap 有該幣別就用它換算現值（source 'trip'）；
+ * 否則 snapshotTwd（來自 consumer_order_item_costs）；再否則全域匯率換算現值。
  * 回傳 { twd, source }；source 為 null 代表這個品項算不出成本，
  * 上層要把它當「未設定成本」示警，而不是當成 0 元進貨。
  */
 export function itemUnitCost(item, ctx = {}, snapshotTwd = null) {
-  const { productMap = {}, variantMap = {}, rateMap = {} } = ctx
-
-  const snapshot = Number(snapshotTwd ?? item?.unitCostTwd)
-  if (Number.isFinite(snapshot) && snapshot > 0) {
-    return { twd: snapshot, source: 'snapshot' }
-  }
+  const { productMap = {}, variantMap = {}, rateMap = {}, tripRateMap = null } = ctx
 
   const variant = item?.variantId != null && item.variantId !== ''
     ? variantMap[String(item.variantId)]
@@ -92,9 +109,25 @@ export function itemUnitCost(item, ctx = {}, snapshotTwd = null) {
     raw = Number(product.cost)
     source = 'product'
   }
-  if (raw == null) return { twd: 0, source: null }
 
   const currency = product?.currency || 'TWD'
+
+  // 行程匯率最優先，連快照都蓋過去（見檔頭成本軸說明）。
+  // 只在算得出原幣成本、且該幣別真的填了正數匯率時生效；
+  // 填 0 或留空視為沒設，不能讓成本掉成 0 元。
+  if (raw != null && currency !== 'TWD') {
+    const tripRate = Number(tripRateMap?.[currency])
+    if (Number.isFinite(tripRate) && tripRate > 0) {
+      return { twd: raw * tripRate, source: 'trip' }
+    }
+  }
+
+  const snapshot = Number(snapshotTwd ?? item?.unitCostTwd)
+  if (Number.isFinite(snapshot) && snapshot > 0) {
+    return { twd: snapshot, source: 'snapshot' }
+  }
+
+  if (raw == null) return { twd: 0, source: null }
   if (currency === 'TWD') return { twd: raw, source }
 
   const rate = Number(rateMap[currency])
