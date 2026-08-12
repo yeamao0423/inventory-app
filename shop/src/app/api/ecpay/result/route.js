@@ -5,6 +5,12 @@
 //
 // 導回網址用當下請求的 origin（消費者原本所在的店家網域），不可用 callbackBaseUrl()——
 // 那個只給綠界機器背景通知（notify）用的固定網域。
+//
+// 注意兩支路由吃的鍵不一樣，別搞混：
+// - /api/ecpay/credit/<id>：數字主鍵（consumer_orders.id / ecpay_transactions.order_id）
+// - /order/<token>（消費者看的訂單頁）：不可猜的 public_token（uuid，見 20250031 migration），
+//   頁面內部用它呼叫 get_consumer_order({ p_token })。這裡導回消費者一定要用 public_token，
+//   組數字 id 進這個路徑訂單頁會查不到資料，變成一片空白。
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '../../../../lib/supabase-admin'
 import { getEcpayConfigForStore } from '../../../../lib/ecpayStore'
@@ -16,27 +22,27 @@ async function resolve(request) {
   const origin = new URL(request.url).origin
 
   let data = null
-  let orderId = null
   try {
     const form = await request.formData()
     data = Object.fromEntries(form)
   } catch {
-    // 非表單（例如直接 GET）——退回讀 query
-    const url = new URL(request.url)
-    orderId = url.searchParams.get('orderId')
+    // 非表單（例如直接 GET 無 body）——沒有綠界帶回的交易編號可反查訂單，
+    // 底下會因 data 為 null 直接落到「查不到就導回首頁」，不強猜路徑。
   }
 
   const rtnCode = data?.RtnCode ?? null
+  let publicToken = null
 
   // 後援確認：只在綠界帶回完整結果（data 存在）且設定了 service key 時處理
   if (data && supabaseAdmin) {
     const tradeNo = data.MerchantTradeNo || null
 
     // 綠界不會告訴我們是哪家店 —— 用交易編號反查（trade_no 有唯一索引），
-    // 與 notify 完全相同的作法：先反查店家，才能取得該店金鑰驗章。
+    // 與 notify 完全相同的作法：先反查店家，才能取得該店金鑰驗章；
+    // 順便把 consumer_orders.public_token 一併帶出來（見上方注意事項）。
     const { data: txn } = await supabaseAdmin
       .from('ecpay_transactions')
-      .select('order_id, store_id')
+      .select('order_id, store_id, consumer_orders(public_token)')
       .eq('trade_no', tradeNo)
       .maybeSingle()
 
@@ -65,12 +71,15 @@ async function resolve(request) {
       })
     }
 
-    orderId = txn?.order_id ?? (data.CustomField1 || null)
+    // CustomField1 是數字主鍵，不是 public_token，不能拿來當導回訂單頁的路徑；
+    // 反查失敗（trade_no 對不上、舊資料沒 token）就沒有 publicToken 可用，
+    // 底下會退回導首頁，不組出查不到訂單的壞網址。
+    publicToken = txn?.consumer_orders?.public_token ?? null
   }
 
-  if (orderId) {
+  if (publicToken) {
     const paid = String(rtnCode) === '1' ? '1' : '0'
-    return NextResponse.redirect(`${origin}/order/${orderId}?paid=${paid}`, 303)
+    return NextResponse.redirect(`${origin}/order/${publicToken}?paid=${paid}`, 303)
   }
   return NextResponse.redirect(`${origin}/`, 303)
 }
