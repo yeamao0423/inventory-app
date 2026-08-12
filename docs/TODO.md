@@ -102,16 +102,16 @@ vitest 429 個、後台 build。含跨兩支 migration 的整合點（預購扣�
 
 四個分支有未合併的工作。這是目前最大的一塊 —— 程式碼已經存在，價值卡在合併這一步。
 
-### 1. `feature/ecpay-integration` — 綠界金流＋物流（12 commits，最後 2026-06-25）
+### 1. 綠界金物流 — 改走重做，計畫見 `docs/superpowers/plans/2026-08-12-ecpay-multitenant.md`
 
-main **完全沒有** ECPay 程式碼，但 `shop/.env.local` 的 `ECPAY_*` 已經設好了。分支上有完整的
-API routes（`shop/src/app/api/ecpay/` 八支：付款 notify/result、超商電子地圖、物流建單/回呼/列印）、
-`shop/src/lib/ecpay.js` 檢查碼實作、金流 rollback（`release_order`／棄單清理）。
+**不合併 `feature/ecpay-integration`**。實測 `git merge-tree` 只有 6 個檔衝突，但分支落後 main
+123 個 commit，其中 3 個 commit（快取失效、售罄看真實庫存）已被 main 用別的方式做掉，
+且分支是單租戶設計（`ECPAY_*` 讀 env），與「部分客戶已申請綠界、部分還沒」的需求不相容。
 
-- **合併前必須處理 migration 撞號**：分支有 `20250028_ecpay_payment_logistics.sql`，
-  main 有 `20250028_accept_invitation_by_email.sql`。同編號不同內容，直接合會亂。要重新編號到 `20250060+`。
-- 分支落後 main 一個多月（其間 main 改了付款狀態設計、訂單加購、行程拆賬），衝突不會小。
-- 合併後仍需真機測試：綠界回呼要對外網址，本機得用 ngrok 之類的隧道。
+做法改成：從 main 開分支，15 個 main 沒動過的檔案直接搬、6 個衝突檔在現行版本上重接，
+金鑰改成每店存 `store_ecpay_secrets`。舊分支保留當參考來源，上線後才刪。
+
+在 worktree `worktree-ecpay-multitenant` 進行中。範圍、決策與逐項任務全在上面那份計畫。
 
 ### 2. `feat/threads-line-integration` — Threads 收單串接（2 commits，最後 2026-07-14）
 
