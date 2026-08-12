@@ -63,6 +63,18 @@ async function hasStoreRole(sb, user, storeId) {
   return !!data
 }
 
+// N6：只查 store_id，趕在載入訂單其餘欄位（與綠界設定）之前先驗角色。
+// 訂單不存在／角色不符統一回同一句訊息，避免用「找不到訂單」跟「無權限」
+// 的訊息差異當 oracle，讓登入中的任何使用者可以枚舉全平台的訂單 id 分佈。
+async function loadOrderStoreId(orderId) {
+  const { data } = await supabaseAdmin
+    .from('consumer_orders')
+    .select('id, store_id')
+    .eq('id', orderId)
+    .maybeSingle()
+  return data
+}
+
 export async function POST(request) {
   if (!supabaseAdmin) return fail('伺服器未設定（缺少 service key）', 500)
 
@@ -78,6 +90,13 @@ export async function POST(request) {
   }
   if (!orderId) return fail('請帶入 orderId')
 
+  // N6：先只用 store_id 驗角色。訂單不存在與角色不符回同一句、同一個狀態碼，
+  // 角色驗證通過之後才載入訂單其餘欄位與該店的綠界設定。
+  const minimalOrder = await loadOrderStoreId(orderId)
+  if (!minimalOrder || !(await hasStoreRole(sb, user, minimalOrder.store_id))) {
+    return fail('找不到訂單或無權限', 404)
+  }
+
   let order, cfg, error
   try {
     ({ order, cfg, error } = await loadOrderForEcpay(
@@ -89,10 +108,6 @@ export async function POST(request) {
     return fail(e.message, 500)
   }
   if (error) return fail(error)
-
-  if (!(await hasStoreRole(sb, user, order.store_id))) {
-    return fail('無此店家的操作權限', 403)
-  }
 
   // 物流金鑰是延後檢查的（金流與物流在綠界分開申請，只有金流的店照樣能刷卡），
   // 但走到這支就非有不可——沒有就給店家一句看得懂的話，別讓它爛在 CheckMacValue。

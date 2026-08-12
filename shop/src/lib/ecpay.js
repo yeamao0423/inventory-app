@@ -352,7 +352,7 @@ export function buildAutoSubmitForm(action, params, { title = 'redirecting...' }
     .filter(([, v]) => v !== undefined && v !== null)
     .map(([k, v]) => `<input type="hidden" name="${escapeHtml(k)}" value="${escapeHtml(v)}">`)
     .join('')
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title></head>
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title></head>
 <body onload="document.forms[0].submit()">
 <form method="post" action="${escapeHtml(action)}">${inputs}</form>
 </body></html>`

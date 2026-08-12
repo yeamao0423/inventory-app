@@ -464,6 +464,62 @@ BEGIN
   PERFORM pg_temp.assert_eq(v_code_order, v_other_oid, '不可把別人已核銷的碼搶回來');
 END $$;
 
+-- ── N4：棄單清理退券後，店員手動把訂單改回處理中，遲到通知才進來 ──
+-- 判準改成「快照是否存在」之前，這裡會因為 status 已經不是「已取消」而
+-- 整段跳過還原，變成「已收折扣後金額，卻顯示還欠折扣額度」的假欠款。
+DO $$
+DECLARE
+  v_oid bigint; v_cid bigint;
+  v_total numeric; v_disc numeric; v_paid numeric;
+  v_pstatus text; v_status text; v_alert text; v_coupon_after bigint;
+  v_snap_rows int;
+BEGIN
+  v_oid := pg_temp.setup_order(1, 5, 1000);
+
+  INSERT INTO public.coupons (store_id, name, type, discount_type, discount_value, usage_count)
+  VALUES (1, 'TEST店員手動復活券', 'shared', 'fixed', 200, 1)
+  RETURNING id INTO v_cid;
+
+  UPDATE public.consumer_orders
+     SET coupon_id = v_cid, discount_amount = 200, total_amount = 800,
+         created_at = now() - interval '31 minutes'
+   WHERE id = v_oid;
+  INSERT INTO public.coupon_usage (coupon_id, order_id, consumer_email, discount_amount)
+  VALUES (v_cid, v_oid, 't@test.local', 200);
+
+  PERFORM public.create_ecpay_transaction(v_oid, 'TESTTRADE012', 800);
+
+  -- 棄單清理跑過：取消、退券（total_amount 加回 200），快照留在 abandoned_order_coupons
+  PERFORM public.cancel_abandoned_credit_orders(30);
+  SELECT total_amount, coupon_id INTO v_total, v_coupon_after
+    FROM public.consumer_orders WHERE id = v_oid;
+  PERFORM pg_temp.assert_eq(v_total, 1000::numeric, '退券後 total_amount 被加回折扣金額');
+  PERFORM pg_temp.assert_eq(v_coupon_after, NULL::bigint, '退券後 coupon_id 被清空');
+
+  -- 客人來訊說已經付款，店員先手動把訂單改回處理中（此時綠界通知還沒到）
+  UPDATE public.consumer_orders SET status = '處理中' WHERE id = v_oid;
+
+  -- 綠界的遲到通知現在才進來：此時 status 已經不是「已取消」
+  PERFORM public.apply_ecpay_payment('TESTTRADE012', '1', 'Credit_CreditCard');
+
+  SELECT total_amount, discount_amount, paid_amount, payment_status, status,
+         payment_alert, coupon_id
+    INTO v_total, v_disc, v_paid, v_pstatus, v_status, v_alert, v_coupon_after
+    FROM public.consumer_orders WHERE id = v_oid;
+
+  PERFORM pg_temp.assert_eq(v_status, '處理中', '訂單狀態維持店員已手動復活的處理中');
+  PERFORM pg_temp.assert_eq(v_total, 800::numeric,
+    '就算通知進來時 status 已不是已取消，金額仍要還原成折扣後金額');
+  PERFORM pg_temp.assert_eq(v_disc, 200::numeric, 'discount_amount 一併還原');
+  PERFORM pg_temp.assert_eq(v_coupon_after, v_cid, '優惠券掛回訂單');
+  PERFORM pg_temp.assert_eq(v_paid, 800::numeric, '記入當初請款的折扣後金額');
+  PERFORM pg_temp.assert_eq(v_pstatus, '已付清', '付清的客人不可被顯示成部分付款／假欠款');
+  PERFORM pg_temp.assert_eq(v_alert, NULL::text, '正常還原時不該標警示');
+
+  SELECT count(*) INTO v_snap_rows FROM public.abandoned_order_coupons WHERE order_id = v_oid;
+  PERFORM pg_temp.assert_eq(v_snap_rows, 0, '還原後快照被清掉，不會留下孤兒快照');
+END $$;
+
 -- ── I3：兩個分頁各發起一次全額付款 → 溢收要照實記帳並標警示 ──
 DO $$
 DECLARE v_oid bigint; v_paid numeric; v_pstatus text; v_alert text; v_tstatus text;

@@ -343,6 +343,14 @@ describe('buildAutoSubmitForm', () => {
     expect(html).not.toContain('name="B"')
     expect(html).not.toContain('name="C"')
   })
+
+  it('title 也要跳脫，避免帶入 </title><script> 之類的內容注入頁面（N7）', () => {
+    const html = buildAutoSubmitForm('https://x.test/pay', { A: '1' }, {
+      title: '</title><script>alert(1)</script>',
+    })
+    expect(html).not.toContain('<script>alert(1)</script>')
+    expect(html).toContain('&lt;/title&gt;&lt;script&gt;alert(1)&lt;/script&gt;')
+  })
 })
 
 describe('getPrintUrl', () => {
