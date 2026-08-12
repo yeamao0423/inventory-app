@@ -20,7 +20,7 @@ function htmlError(msg) {
 export async function GET(request, { params }) {
   const { order, cfg, error } = await loadOrderForEcpay(
     params.orderId,
-    'id, store_id, total_amount, paid_amount, payment_method, payment_status, items'
+    'id, store_id, total_amount, paid_amount, payment_method, payment_status, items, public_token'
   )
   if (error) return htmlError(error)
   if (order.payment_method !== 'credit') return htmlError('此訂單非信用卡付款')
@@ -57,7 +57,11 @@ export async function GET(request, { params }) {
     ItemName: itemName,
     ReturnURL: `${callbackBase}/api/ecpay/notify`,
     OrderResultURL: `${origin}/api/ecpay/result`,
-    ClientBackURL: `${origin}/order/${order.id}`,
+    // 此路由（/api/ecpay/credit/<id>）自己吃的鍵是數字 id，但消費者訂單頁
+    // /order/<token> 吃的是不可猜的 public_token（uuid，見 20250031 migration）
+    // ——兩支路由的鍵不一樣，別搞混。public_token 理論上不會是 null（DB not
+    // null），但舊資料萬一有缺，退回導向首頁而非組出一個壞掉的網址。
+    ClientBackURL: order.public_token ? `${origin}/order/${order.public_token}` : `${origin}/`,
     ChoosePayment: 'Credit',
     EncryptType: 1,
     NeedExtraPaidInfo: 'Y',
