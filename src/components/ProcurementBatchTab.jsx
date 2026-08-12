@@ -343,9 +343,14 @@ function BatchDetailSheet({ batch, members, memberMap, rates, onClose, onSaved }
   }
 
   async function deleteBatch() {
-    if (!window.confirm('確定取消此批次？品項將回到採購彙整。')) return
-    // procurement_items 有 ON DELETE CASCADE，刪批次會連帶刪品項
-    await supabase.from('procurement_batches').delete().eq('id', batch.id)
+    const synced = batch.inventory_synced
+    const msg = synced
+      ? '這個批次已經入庫過。取消批次會把已入庫的數量從庫存扣回去，確定嗎？'
+      : '確定取消此批次？品項將回到採購彙整。'
+    if (!window.confirm(msg)) return
+    const { data, error } = await supabase.rpc('delete_batch', { p_batch_id: batch.id })
+    if (error) return alert('取消失敗：' + error.message)
+    if (data?.ok === false) return alert('取消失敗：' + data.error)
     onSaved()
     onClose()
   }
@@ -574,54 +579,20 @@ function BatchDetailSheet({ batch, members, memberMap, rates, onClose, onSaved }
 
 /* ─── 庫存同步確認 Sheet ──────────────────────── */
 function InventorySyncSheet({ batch, items, onClose, onSaved }) {
-  const { storeId } = useAuth()
   const syncableItems = items.filter(i => i.status === 'bought' || i.status === 'partial')
-  const [checked, setChecked] = useState(
-    syncableItems.reduce((acc, item) => { acc[item.id] = true; return acc }, {})
-  )
   const [syncing, setSyncing] = useState(false)
 
-  const toggleCheck = (id) => setChecked(prev => ({ ...prev, [id]: !prev[id] }))
+  const totalQty = syncableItems.reduce((s, i) => s + (i.actual_qty || 0), 0)
 
-  const checkedItems = syncableItems.filter(i => checked[i.id])
-  const totalQty = checkedItems.reduce((s, i) => s + (i.actual_qty || 0), 0)
-
+  // 入庫改由 DB 端的 receive_batch_inventory 一次做完：庫存加減、history、
+  // inventory_synced 標記都在同一個交易內，連點也只會加一次。
   async function syncInventory() {
-    if (checkedItems.length === 0) return
+    if (syncableItems.length === 0) return
     setSyncing(true)
-
-    for (const item of checkedItems) {
-      const qty = item.actual_qty || 0
-      if (qty <= 0) continue
-
-      if (item.variant_id) {
-        const { data: variant } = await supabase
-          .from('product_variants').select('stock').eq('id', item.variant_id).single()
-        if (variant) {
-          await supabase.from('product_variants')
-            .update({ stock: (variant.stock || 0) + qty }).eq('id', item.variant_id)
-        }
-      } else {
-        const { data: product } = await supabase
-          .from('products').select('quantity').eq('id', item.product_id).single()
-        if (product) {
-          await supabase.from('products')
-            .update({ quantity: (product.quantity || 0) + qty }).eq('id', item.product_id)
-        }
-      }
-
-      await supabase.from('history').insert({
-        product_id: item.product_id,
-        change: qty,
-        reason: `採購入庫（批次 #${batch.id}）`,
-        store_id: storeId,
-      })
-    }
-
-    await supabase.from('procurement_batches')
-      .update({ inventory_synced: true }).eq('id', batch.id)
-
+    const { data, error } = await supabase.rpc('receive_batch_inventory', { p_batch_id: batch.id })
     setSyncing(false)
+    if (error) return alert('入庫失敗：' + error.message)
+    if (data?.already_synced) return alert('這個批次已經入庫過了')
     onSaved()
   }
 
@@ -634,6 +605,8 @@ function InventorySyncSheet({ batch, items, onClose, onSaved }) {
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: 'var(--text-3)' }}>×</button>
         </div>
 
+        <div className="muted fs12" style={{ marginBottom: 12 }}>整批一起入庫，數量以「實際數量」為準</div>
+
         {syncableItems.length === 0 ? (
           <div className="empty">沒有可入庫的品項</div>
         ) : (
@@ -642,9 +615,9 @@ function InventorySyncSheet({ batch, items, onClose, onSaved }) {
               const productName = item.products?.name || `商品 #${item.product_id}`
               return (
                 <div key={item.id} className="card" style={{ marginBottom: 6 }}>
-                  <div className="card-row row-sb" onClick={() => toggleCheck(item.id)} style={{ cursor: 'pointer' }}>
+                  <div className="card-row row-sb">
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <span style={{ fontSize: 18 }}>{checked[item.id] ? '☑' : '☐'}</span>
+                      <span style={{ fontSize: 18 }}>☑</span>
                       <div>
                         <div className="fs13 fw600">{productName}</div>
                         {item.status === 'partial' && <div className="muted fs12">部分到貨</div>}
@@ -658,8 +631,8 @@ function InventorySyncSheet({ batch, items, onClose, onSaved }) {
 
             <div className="card" style={{ marginBottom: 16, marginTop: 12 }}>
               <div className="card-row row-sb">
-                <span className="muted fs13">勾選品項</span>
-                <span className="fs13">{checkedItems.length} 品項</span>
+                <span className="muted fs13">入庫品項</span>
+                <span className="fs13">{syncableItems.length} 品項</span>
               </div>
               <div className="card-row row-sb">
                 <span className="muted fs13">合計入庫</span>
@@ -678,10 +651,10 @@ function InventorySyncSheet({ batch, items, onClose, onSaved }) {
               >取消</button>
               <button
                 onClick={syncInventory}
-                disabled={syncing || checkedItems.length === 0}
+                disabled={syncing || syncableItems.length === 0}
                 style={{
                   flex: 1, padding: '12px 0', borderRadius: 12,
-                  border: 'none', background: checkedItems.length > 0 ? 'var(--green)' : 'var(--border)',
+                  border: 'none', background: syncableItems.length > 0 ? 'var(--green)' : 'var(--border)',
                   color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer',
                 }}
               >
@@ -737,11 +710,13 @@ function expandItemsToRows(items) {
   return rows
 }
 
-export function CreateBatchSheet({ source, items, onClose, onSaved }) {
+// tripMode：從行程頁進來的「建立入庫批次」。行程鎖定、建立即入庫，走 create_trip_batch RPC。
+// 未帶 tripMode 時完全維持既有的訂單／採購彙整流程。
+export function CreateBatchSheet({ source, items, tripMode = false, lockedTripId = null, onClose, onSaved }) {
   const { storeId } = useAuth()
   const [members, setMembers] = useState([])
   const [trips, setTrips] = useState([])
-  const [tripId, setTripId] = useState(null)
+  const [tripId, setTripId] = useState(lockedTripId)
   const [batchDate, setBatchDate] = useState(new Date().toISOString().slice(0, 10))
   const [buyerId, setBuyerId] = useState(null)
   const [managerId, setManagerId] = useState(null)
@@ -806,6 +781,32 @@ export function CreateBatchSheet({ source, items, onClose, onSaved }) {
     if (!buyerId) return alert('請選擇付款人')
     setSaving(true)
 
+    // 行程模式：批次、品項、入庫一次做完，避免建完批次還要記得按「同步庫存入庫」
+    if (tripMode) {
+      const { data, error } = await supabase.rpc('create_trip_batch', {
+        p_store_id: storeId,
+        p_trip_id: lockedTripId,
+        p_batch_date: batchDate,
+        p_buyer_id: buyerId,
+        p_manager_id: managerId || null,
+        p_note: note.trim() || null,
+        p_source: '行程採購',
+        p_items: checkedRows.map(r => ({
+          productId: r.productId,
+          variantId: r.variantId,
+          qty: r.qty,
+          cost: Number(r.cost) || 0,
+          currency: r.currency || 'TWD',
+        })),
+      })
+      setSaving(false)
+      if (error) return alert('建立失敗：' + error.message)
+      if (data?.ok === false) return alert('建立失敗：' + data.error)
+      onSaved()
+      onClose()
+      return
+    }
+
     const { data: batch, error } = await supabase.from('procurement_batches').insert({
       batch_date: batchDate,
       source: source || null,
@@ -845,7 +846,7 @@ export function CreateBatchSheet({ source, items, onClose, onSaved }) {
   }
 
   return (
-    <Sheet title={`建立採購批次${source ? ` — ${source}` : ''}`} onClose={onClose}>
+    <Sheet title={tripMode ? '建立入庫批次' : `建立採購批次${source ? ` — ${source}` : ''}`} onClose={onClose}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
         <div className="form-group">
           <label className="form-label">採購日期</label>
@@ -878,15 +879,26 @@ export function CreateBatchSheet({ source, items, onClose, onSaved }) {
         </div>
       </div>
 
-      <div className="form-group" style={{ marginBottom: 16 }}>
-        <label className="form-label">掛行程（選填）</label>
-        <CustomSelect
-          label="不掛行程"
-          value={tripId}
-          options={trips.map(t => ({ value: t.id, label: `${t.destination}（${t.depart_date} ~ ${t.return_date}）` }))}
-          onChange={v => setTripId(v)}
-        />
-      </div>
+      {tripMode ? (
+        <div className="form-group" style={{ marginBottom: 16 }}>
+          <label className="form-label">掛行程</label>
+          <div className="muted fs13" style={{ padding: '8px 0' }}>
+            {trips.find(t => t.id === lockedTripId)
+              ? `${trips.find(t => t.id === lockedTripId).destination}（本趟，不可更改）`
+              : '本趟'}
+          </div>
+        </div>
+      ) : (
+        <div className="form-group" style={{ marginBottom: 16 }}>
+          <label className="form-label">掛行程（選填）</label>
+          <CustomSelect
+            label="不掛行程"
+            value={tripId}
+            options={trips.map(t => ({ value: t.id, label: `${t.destination}（${t.depart_date} ~ ${t.return_date}）` }))}
+            onChange={v => setTripId(v)}
+          />
+        </div>
+      )}
 
       <div className="row-sb" style={{ marginTop: 0 }}>
         <div className="sec" style={{ margin: 0 }}>採購品項</div>
@@ -959,12 +971,19 @@ export function CreateBatchSheet({ source, items, onClose, onSaved }) {
         </div>
       ))}
 
-      <button className="btn" onClick={createBatch} disabled={saving} style={{ marginTop: 12 }}>
+      <button
+        className="btn"
+        onClick={createBatch}
+        disabled={saving || (tripMode && checkedRows.length === 0)}
+        style={{ marginTop: 12 }}
+      >
         {saving
           ? '建立中…'
           : checkedRows.length === 0
-            ? '建立空批次'
-            : `建立批次（${checkedRows.length} 項, ${checkedRows.reduce((s, r) => s + r.qty, 0)} 件）`}
+            ? (tripMode ? '請先加入商品' : '建立空批次')
+            : tripMode
+              ? `建立並入庫（${checkedRows.length} 項, ${checkedRows.reduce((s, r) => s + r.qty, 0)} 件）`
+              : `建立批次（${checkedRows.length} 項, ${checkedRows.reduce((s, r) => s + r.qty, 0)} 件）`}
       </button>
 
       {showPicker && (

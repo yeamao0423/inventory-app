@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
 import { SUPPORTED_CURRENCIES } from '../constants/currency'
 import { useAuth } from '../hooks/useAuth'
-import { fetchStoreMembers } from '../components/ProcurementBatchTab'
+import { fetchStoreMembers, CreateBatchSheet } from '../components/ProcurementBatchTab'
 import {
   taipeiDayStart, taipeiDayEnd, summarizeOrders, computeTripFinance, buildCostSnapshotMap, isActiveItem,
   effectiveRate,
@@ -204,6 +204,7 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
   const [customerSort, setCustomerSort] = useState('amount') // 'amount' | 'profit' | 'recent'
   const [selectedCustomer, setSelectedCustomer] = useState(null)
   const [showSettleSheet, setShowSettleSheet] = useState(false)
+  const [showCreateBatch, setShowCreateBatch] = useState(false)
   const [activeSlide, setActiveSlide] = useState(0)
   const carouselRef = useRef(null)
   const SLIDE_COUNT = 3
@@ -634,6 +635,16 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
             ))}
           </div>
 
+          {/* 進貨成本那張卡就在上面的 slide 裡，入口擺這裡才不用先滑到第二頁才看得到 */}
+          <button
+            onClick={() => setShowCreateBatch(true)}
+            style={{
+              width: '100%', padding: '12px 0', borderRadius: 12, marginTop: 8,
+              border: '1px solid var(--border)', background: 'var(--card)',
+              color: 'var(--text)', fontSize: 14, fontWeight: 600, cursor: 'pointer',
+            }}
+          >建立入庫批次</button>
+
           {/* ── Section: 拆賬 ── */}
           <div className="sec">拆賬</div>
           {data.settlement ? (
@@ -836,6 +847,16 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
 
       {selectedCustomer && (
         <CustomerDetailSheet c={selectedCustomer} onClose={() => setSelectedCustomer(null)} />
+      )}
+
+      {showCreateBatch && (
+        <CreateBatchSheet
+          tripMode
+          lockedTripId={trip.id}
+          items={[]}
+          onClose={() => setShowCreateBatch(false)}
+          onSaved={() => { setShowCreateBatch(false); fetchReportData() }}
+        />
       )}
 
       {/* ── Product Detail Sheet ── */}

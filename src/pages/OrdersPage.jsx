@@ -8,6 +8,7 @@ import ListToolbar from '../components/ListToolbar'
 import { Pill } from '../components/MenuPopover'
 import Sheet from '../components/Sheet'
 import ConsumerOrderDetailSheet from '../components/ConsumerOrderDetailSheet'
+import { stockKey, buildInTransitMap, needFor } from '../lib/procurementNeed'
 
 export default function OrdersPage() {
   const { can, profile, storeId } = useAuth()
@@ -49,20 +50,19 @@ export default function OrdersPage() {
   const CONSUMER_PAGE_SIZE = 15
   const isAdmin = ['admin', 'super_admin'].includes(profile?.role)
 
+  // 待採購量的口徑：max(0, −庫存 − 在途量)，見 src/lib/procurementNeed.js。
+  // 下單一律扣庫存（consumer_orders 的 reconcile_stock trigger），所以不再掃訂單累加需求，
+  // 否則同一筆需求會被記兩次（庫存少了 N，採購清單又叫你買 N）。
   async function fetchProcurement() {
     setLoading(true)
-    const [{ data: pending }, { data: products }, { data: spProducts }, { data: rates }, { data: images }, { data: allVariants }, { data: existingBatchItems }] = await Promise.all([
-      supabase.from('consumer_orders').select('*').eq('store_id', storeId).not('status', 'in', '("已購買","已出貨","完成","已取消")'),
-      supabase.from('products').select('id, name, sku, source, cost, currency').eq('store_id', storeId),
+    const [{ data: products }, { data: allVariants }, { data: spProducts }, { data: rates }, { data: images }, { data: batchItems }] = await Promise.all([
+      supabase.from('products').select('id, name, sku, source, cost, currency, quantity').eq('store_id', storeId),
+      supabase.from('product_variants').select('id, product_id, options, stock, variant_cost').eq('store_id', storeId),
       supabase.from('storefront_products').select('product_id, shop_price').eq('store_id', storeId),
       supabase.from('exchange_rates').select('*'),
       supabase.from('product_images').select('product_id, url, sort_order').order('sort_order', { ascending: true }),
-      supabase.from('product_variants').select('id, product_id, options').eq('store_id', storeId),
-      supabase.from('procurement_items').select('product_id, variant_id, quantity, actual_qty, status, batch:batch_id(status)'),
+      supabase.from('procurement_items').select('product_id, variant_id, quantity, actual_qty, status, batch:batch_id(inventory_synced)'),
     ])
-
-    const productMap = {}
-    ;(products || []).forEach(p => { productMap[p.id] = p })
 
     const priceMap = {}
     ;(spProducts || []).forEach(sp => { priceMap[sp.product_id] = sp.shop_price })
@@ -77,70 +77,54 @@ export default function OrdersPage() {
       imageMap[img.product_id].push(img.url)
     })
 
-    // variant map: product_id → { label → variant }
-    const variantMap = {}
-    ;(allVariants || []).forEach(v => {
-      if (!variantMap[v.product_id]) variantMap[v.product_id] = {}
-      const label = v.options ? Object.values(v.options).join(' / ') : ''
-      variantMap[v.product_id][label] = v
-    })
+    // 規格 label（沿用既有寫法：options 的 value 直接 join）
+    const variantLabel = v => (v.options ? Object.values(v.options).join(' / ') : '')
+
+    // 在途量：尚未入庫的批次已排入的數量，按「商品:規格」計（已入庫的量已進到庫存數字裡）
+    const inTransit = buildInTransitMap(batchItems)
 
     // 找出缺少的匯率
     const usedCurrencies = new Set()
 
     const agg = {}
-    ;(pending || []).forEach(order => {
-      const items = Array.isArray(order.items_json) ? order.items_json : []
-      items.forEach(item => {
-        if (item.status === 'cancelled') return
-        const pid = item.id
-        const prod = productMap[pid]
-        if (!agg[pid]) {
-          agg[pid] = {
-            productId: pid,
-            name: item.name,
-            sku: prod?.sku || item.sku || '',
-            source: prod?.source || '',
-            cost: prod?.cost != null ? Number(prod.cost) : null,
-            currency: prod?.currency || 'TWD',
-            shopPrice: priceMap[pid] != null ? Number(priceMap[pid]) : null,
-            images: imageMap[pid] || [],
-            thumbnail: (imageMap[pid] || [])[0] || null,
-            totalQty: 0,
-            variants: {},
-            variantDetails: variantMap[pid] || {},
-          }
+
+    function pushNeed(prod, variant, stock) {
+      const key = stockKey(prod.id, variant?.id ?? null)
+      const qty = needFor(stock, inTransit[key] || 0)
+      if (qty <= 0) return
+      const pid = prod.id
+      if (!agg[pid]) {
+        agg[pid] = {
+          productId: pid,
+          name: prod.name,
+          sku: prod.sku || '',
+          source: prod.source || '',
+          cost: prod.cost != null ? Number(prod.cost) : null,
+          currency: prod.currency || 'TWD',
+          shopPrice: priceMap[pid] != null ? Number(priceMap[pid]) : null,
+          images: imageMap[pid] || [],
+          thumbnail: (imageMap[pid] || [])[0] || null,
+          totalQty: 0,
+          variants: {},
+          variantDetails: {},
         }
-        const qty = Number(item.qty) || 0
-        agg[pid].totalQty += qty
-        const vLabel = item.variantLabel || '無規格'
-        agg[pid].variants[vLabel] = (agg[pid].variants[vLabel] || 0) + qty
-      })
-    })
-
-    // 扣除已排入批次的數量（非 settled 的批次中已買到的數量）
-    const batchedQty = {} // productId → qty already handled
-    ;(existingBatchItems || []).forEach(bi => {
-      if (!bi.batch || bi.batch.status === 'settled') return // settled 批次不扣（已完結）
-      const pid = bi.product_id
-      const bought = bi.status === 'bought' || bi.status === 'partial'
-        ? (bi.actual_qty ?? bi.quantity)
-        : bi.status === 'pending' ? bi.quantity : 0 // pending 也算已排入
-      if (!batchedQty[pid]) batchedQty[pid] = 0
-      batchedQty[pid] += bought
-    })
-
-    Object.values(agg).forEach(item => {
-      const deducted = batchedQty[item.productId] || 0
-      if (deducted > 0) {
-        item.batchedQty = deducted
-        item.totalQty = Math.max(0, item.totalQty - deducted)
       }
+      agg[pid].totalQty += qty
+      const label = variant ? (variantLabel(variant) || `規格 #${variant.id}`) : '無規格'
+      agg[pid].variants[label] = (agg[pid].variants[label] || 0) + qty
+      if (variant) agg[pid].variantDetails[label] = variant
+    }
+
+    const variantsByProduct = {}
+    ;(allVariants || []).forEach(v => {
+      if (!variantsByProduct[v.product_id]) variantsByProduct[v.product_id] = []
+      variantsByProduct[v.product_id].push(v)
     })
 
-    // 移除數量為 0 的品項
-    Object.keys(agg).forEach(pid => {
-      if (agg[pid].totalQty <= 0) delete agg[pid]
+    ;(products || []).forEach(prod => {
+      const vs = variantsByProduct[prod.id]
+      if (vs && vs.length > 0) vs.forEach(v => pushNeed(prod, v, v.stock))
+      else pushNeed(prod, null, prod.quantity)
     })
 
     // 計算每項成本（TWD）和營收
@@ -556,7 +540,8 @@ export default function OrdersPage() {
 
         return (
           <>
-            {/* 手動建立進貨批次：不依賴待採購品項，隨時可開 */}
+            {/* 建立採購批次：不依賴待採購品項，隨時可開，品項自己挑。
+                「採購」是還要去買的，與行程頁的「入庫批次」（已經買回來了）區分 */}
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 14 }}>
               <button
                 onClick={() => setCreateBatchData({ source: null, items: [] })}
@@ -565,7 +550,7 @@ export default function OrdersPage() {
                   border: '1px solid var(--border)', background: 'var(--card)',
                   fontSize: 13, fontWeight: 600, cursor: 'pointer', color: 'var(--text)',
                 }}
-              >+ 手動建立進貨批次</button>
+              >+ 建立採購批次</button>
             </div>
 
             {isEmpty ? (
@@ -960,18 +945,10 @@ function AddOrderSheet({ onClose, onSaved }) {
     ).join(', ')
     const itemsJson = selectedItems.map(({ _key, ...rest }) => rest)
 
-    await supabase.from('orders').insert({
-      store_id: storeId,
-      customer: form.customer,
-      items: itemsStr,
-      deposit,
-      total_amount: total || null,
-      payment_status: payStatus,
-      note: form.note,
-    })
-
-    // 同時建立 consumer_orders 以便採購彙整計算
-    const { data: co } = await supabase.from('consumer_orders').insert({
+    // consumer_orders 先寫：庫存由它的 trigger 扣，現貨不足會在這裡被擋下。
+    // 順序不可對調 —— 先寫 orders 的話，庫存被擋下時會留下一筆對不到
+    // consumer_orders 的孤兒訂單，使用者看到「建立失敗」但清單已經多一張。
+    const { data: co, error: coErr } = await supabase.from('consumer_orders').insert({
       store_id: storeId,
       customer_name: form.customer,
       phone: form.phone || null,
@@ -984,6 +961,28 @@ function AddOrderSheet({ onClose, onSaved }) {
       status: '待確認',
       note: form.note,
     }).select('id').single()
+
+    if (coErr) {
+      setSaving(false)
+      return alert('建立失敗：' + coErr.message)
+    }
+
+    const { error: orderErr } = await supabase.from('orders').insert({
+      store_id: storeId,
+      customer: form.customer,
+      items: itemsStr,
+      deposit,
+      total_amount: total || null,
+      payment_status: payStatus,
+      note: form.note,
+    })
+    if (orderErr) {
+      // 庫存已經被 consumer_orders 扣掉了，把它刪回去讓 trigger 回補，
+      // 否則庫存會平白短少而畫面上沒有任何訂單對得起來
+      await supabase.from('consumer_orders').delete().eq('id', co.id)
+      setSaving(false)
+      return alert('建立失敗：' + orderErr.message)
+    }
 
     // 收到的訂金要落成一筆收款紀錄；payment_status 由金額推導，
     // 直接寫欄位會被 trigger 覆蓋成「未付」

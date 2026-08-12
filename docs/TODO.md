@@ -8,6 +8,49 @@
 
 ---
 
+## 庫存變動單一來源（2026-08-12）：程式碼在工作區，migration 只套 local，未驗收
+
+設計見 `docs/superpowers/specs/2026-08-12-inventory-batch-and-stock-movement-design.md`，
+計畫見 `docs/superpowers/plans/2026-08-12-inventory-batch-and-stock-movement.md`。
+口徑寫在 `docs/architecture.md` §4b 庫存口徑。
+
+**已驗過的**：`npm run test:sql` 20 個斷言、`npm run test:sql:batch` 18 個斷言、
+vitest 429 個、後台 build。含跨兩支 migration 的整合點（預購扣成 −12 → 行程批次入庫 20 → 剩 8）
+與權限測試（非本店成員呼叫批次 RPC 被擋）。
+
+**完全沒有人眼看過**：所有 UI 行為。清單在計畫文件末尾，重點是這幾條——
+
+- 行程頁的「建立入庫批次」（按鈕放在 carousel 圓點下方）
+- 採購批次入庫**不再吃逐項勾選**，改成整批入庫。要部分入庫得先把該品項「實際數量」改 0
+- 已入庫批次按「取消此批次」會退庫，confirm 文案有警告
+- 訂單詳情把數量改到超過現貨庫存 → 應跳錯且**不寄出通知信**
+- 庫存頁的負庫存紅字與「已售未進貨 N 件」
+- 採購彙整右上的按鈕已改名為「+ 建立採購批次」（原「+ 手動建立進貨批次」），
+  與行程頁的「建立入庫批次」區分：採購＝還要去買，入庫＝已經買回來了
+
+**上 remote 前要做的三件事**（順序不可換）：
+
+1. **先跑 `node scripts/export-uncommitted-demand.mjs` 對 remote 留底**。設計決定不校正舊資料，
+   切換後採購彙整改讀負庫存，舊預購單的需求會從系統上消失。local 目前有 5 筆這種需求
+2. 跑完 UI 驗收清單
+3. 兩支 migration 用 MCP `apply_migration` 上 remote，**絕不可 `supabase db push`**：
+   `20260812100000_stock_committed_trigger.sql`、`20260812110000_batch_inventory_rpcs.sql`
+   —— **注意 owner**：local 上 `append_to_order`、`deduct_items_stock` 等 7 支函式的 owner 是
+   `supabase_admin`，用 `postgres` 套會擋在 `must be owner of function`。remote 若相同，
+   `apply_migration` 可能踩到同一件事，要先確認
+
+### 這一批刻意留下的後續
+
+- **入庫的逐項勾選沒了**。要恢復得讓 `receive_batch_inventory` 收品項 id 陣列
+- **`place_order` 保留的前置檢查與 trigger 判準不同源**：前者看購物車帶的 `isCollection`，
+  後者看 `storefront_products` 當下的設定。不一致時前者較嚴（會擋掉 trigger 本來允許的負庫存）。
+  這是「保留現狀」的必然結果，不是 bug，但商品改過銷售模式後可能出現
+- **`filterLowStock` 對預購商品仍然無效**（`isStockTracked` 對 `skip_stock_check` 回 false），
+  負庫存商品不會被「低庫存」篩選抓到。要找出所有欠貨商品需要另開一個篩選
+- `deduct_items_stock` 已無呼叫端，之後可整支移除
+
+---
+
 ## 行程匯率（2026-08-11）：remote 已套，local 未套、UI 未驗收
 
 每趟行程可自己設匯率（`trips.exchange_rates` jsonb），該趟的商品成本、進貨成本、代墊返還
@@ -109,7 +152,6 @@ API routes（`shop/src/app/api/ecpay/` 八支：付款 notify/result、超商電
 | 購物車運費寫死 | `shop/src/app/cart/page.jsx:11-12` | 寫死 3800/60，但結帳讀 `store.settings`。自訂運費的店兩頁對不上 |
 | 匯率缺該幣別 → 墊付算 NT$0 | `src/components/ProcurementBatchTab.jsx:78,289` | `rates[cur] \|\| 0`，未設匯率的幣別應還款低估為 0 |
 | 墊付單價清空存 `''` | `src/components/ProcurementBatchTab.jsx:458` | numeric 欄位收到 `''` 會被 PostgREST 拒絕，但 save 沒檢查 error 就關閉，使用者以為存好了 |
-| 入庫非原子 | `src/components/ProcurementBatchTab.jsx:589` `syncInventory` | 讀-改-寫，連點或兩人同時操作會重複計數。應改 DB 端 `stock = stock + n` + 防重入旗標 |
 
 ### 會弄丟資料的
 

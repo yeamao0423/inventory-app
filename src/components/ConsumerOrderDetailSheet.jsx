@@ -375,21 +375,13 @@ export default function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, c
 
     setSaving(true)
 
-    // ── 加購品項：驗庫存並實際扣除 ──
-    // 舊版只查詢比對、從不扣庫存，同一批貨被多張訂單加購就會超賣。
-    // 交給 RPC 在單一交易裡「驗 + 扣」，庫存不足直接中止儲存。
-    const addedItems = active.filter(i => i._added && i.id)
-    if (addedItems.length > 0) {
-      const { data: stockRes, error: stockErr } = await supabase.rpc('deduct_items_stock', {
-        p_store_id: storeId,
-        p_items_json: addedItems.map(({ _cancelled, _added, _originalQty, _stock, ...item }) => item),
-      })
-      if (stockErr || !stockRes?.ok) {
-        alert('加購商品無法扣庫存：\n\n' + (stockRes?.error || stockErr?.message))
-        setSaving(false)
-        return
-      }
-    }
+    // 加購品項的庫存不在這裡處理。consumer_orders 的 reconcile_stock trigger
+    // 會在下面寫入 items_json 時算出差額並扣減，庫存不足就中止整筆儲存。
+    //
+    // 這裡原本先呼叫 deduct_items_stock 做一次前置檢查，現在移除：它的判準是
+    // 購物車帶進來的 isCollection，trigger 的判準是 storefront_products 當下的
+    // skip_stock_check / collection_end。兩者不同源，限時單商品庫存為 0 時
+    // 前置檢查會誤擋，但 trigger 其實該放行為負。留著只會擋掉合法操作。
 
     // 判斷 fulfillment_type
     let fulfillment_type = o.fulfillment_type || null
@@ -413,7 +405,7 @@ export default function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, c
     // 這裡改了 total_amount，trigger 會自動把付款狀態調成待補款或待退款
     // total_amount 已經扣過 discount_amount（見 newTotal 算法），跟 place_order/append_to_order 的淨額慣例一致，
     // 避免品項/狀態編輯把折讓洗掉
-    await supabase.from('consumer_orders').update({
+    const { error: updErr } = await supabase.from('consumer_orders').update({
       status,
       items_json: updatedItemsJson,
       shipping_fee: effectiveShippingFee,
@@ -422,6 +414,14 @@ export default function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, c
       fulfillment_type,
       tracking_number: trackingNumber || null,
     }).eq('id', o.id)
+
+    // 庫存不足時 reconcile_stock trigger 會擋下這筆 update，訂單根本沒改到。
+    // 一定要在寄信之前中止，否則客人會收到「訂單已更新」卻什麼都沒變。
+    if (updErr) {
+      setSaving(false)
+      alert('儲存失敗：' + updErr.message)
+      return
+    }
 
     // 半自動出貨通知：已收款 + 狀態改為已出貨 → 詢問是否寄出貨通知
     if (status === '已出貨' && paidAmount >= updatedTotal && updatedTotal > 0) {

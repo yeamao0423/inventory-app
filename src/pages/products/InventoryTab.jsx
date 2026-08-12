@@ -68,14 +68,21 @@ function totalStock(p) {
   const vs = p.product_variants || []
   return vs.length > 0 ? vs.reduce((s, v) => s + (v.stock || 0), 0) : (p.quantity || 0)
 }
-// 低庫存：任一庫存單位 < LOW（含 0=缺貨）；不追蹤者永不低庫存
+// 低庫存：任一庫存單位 < LOW（含 0=缺貨、負數=已售未進貨）；不追蹤者永不低庫存
 function isLowStock(p) {
   if (!isStockTracked(p)) return false
   return stockUnits(p).some(s => s < LOW)
 }
+// 缺貨用數值比較（<= 0）而不是 === 0：負庫存比 0 更嚴重，不能漏掉
 function isOutOfStock(p) {
   if (!isStockTracked(p)) return false
-  return stockUnits(p).some(s => s === 0)
+  return stockUnits(p).some(s => s <= 0)
+}
+// 已售未進貨的件數：負庫存的絕對值加總。
+// 預購／限時單下單會把庫存扣成負，負數 = 欠客人幾件、要去採購幾件，
+// 所以不追蹤庫存的商品也要顯示。
+function shortageOf(p) {
+  return stockUnits(p).reduce((s, u) => s + (u < 0 ? -u : 0), 0)
 }
 // 把 variant.options 解析成可讀字串，需要 optionTypes（含 values）
 function resolveVariantLabel(options, optionTypes) {
@@ -290,6 +297,7 @@ function ProductRow({ product: p, onTap, exchangeRates = {}, canDelete = false, 
   const tracked = isStockTracked(p)
   const low = isLowStock(p)
   const out = isOutOfStock(p)
+  const shortage = shortageOf(p)
   const sf = storefrontOf(p)
 
   // 售價/成本/毛利同源：逐規格原價 + 逐規格成本（variant_* ?? 商品層）。庫存頁不套特價，只算原價。
@@ -326,7 +334,8 @@ function ProductRow({ product: p, onTap, exchangeRates = {}, canDelete = false, 
           <div className="muted fs12 mt8" style={{whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{infoParts.join(' · ')}</div>
         </div>
         <div style={{textAlign:'right',flexShrink:0}}>
-          <div className="fw600 fs15" style={{color: (low || out) ? 'var(--red)' : 'var(--text)'}}>{total}</div>
+          <div className="fw600 fs15" style={{color: (low || out || shortage > 0) ? 'var(--red)' : 'var(--text)'}}>{total}</div>
+          {shortage > 0 && <div className="muted fs11">已售未進貨 {shortage} 件</div>}
           {hasVar && <div className="muted fs11">{vs.length} 規格</div>}
           <div className="fs12 mt8">{badge}</div>
           {canDelete && (
@@ -422,7 +431,9 @@ function VariantStockEditor({ variants, optionTypes, canEdit, onSaved, productCo
   const total = rows.reduce((s, v) => s + (v.stock || 0), 0)
 
   async function saveStock(id, value) {
-    const v = Math.max(0, Math.round(Number(value) || 0))
+    // 不夾到 0：庫存可以是負的（已售未進貨）。夾的話光是點過輸入框失焦，
+    // 就會把 -5 洗成 0，欠客人的量憑空消失
+    const v = Math.round(Number(value) || 0)
     await supabase.from('product_variants').update({ stock: v }).eq('id', id)
     setRows(prev => prev.map(r => r.id === id ? { ...r, stock: v } : r))
     if (onSaved) onSaved()
@@ -440,7 +451,7 @@ function VariantStockEditor({ variants, optionTypes, canEdit, onSaved, productCo
     if (raw === '' || !Number.isFinite(Number(raw))) return
     const ids = rows.map(r => r.id)
     if (ids.length === 0) return
-    const val = field === 'stock' ? Math.max(0, Math.round(Number(raw))) : Number(raw)
+    const val = field === 'stock' ? Math.round(Number(raw)) : Number(raw)
     await supabase.from('product_variants').update({ [field]: val }).in('id', ids)
     setRows(prev => prev.map(r => ({ ...r, [field]: val })))
     setRaw('')
@@ -490,11 +501,15 @@ function VariantStockEditor({ variants, optionTypes, canEdit, onSaved, productCo
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {sorted.map(v => {
           const s = v.stock || 0
-          const out = s === 0
+          // 數值比較：負庫存＝已售未進貨，比 0 更嚴重
+          const out = s <= 0
           const low = s > 0 && s < LOW
           return (
             <div key={v.id} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 10, padding: '8px 12px' }}>
-              <span className="fs13 fw600" style={{ flex: 1, minWidth: 120 }}>{resolveVariantLabel(v.options, optionTypes)}</span>
+              <span className="fs13 fw600" style={{ flex: 1, minWidth: 120 }}>
+                {resolveVariantLabel(v.options, optionTypes)}
+                {s < 0 && <span className="muted fs11" style={{ marginLeft: 6, fontWeight: 400 }}>已售未進貨 {Math.abs(s)} 件</span>}
+              </span>
               {(out || low) && <span className="badge badge-low" style={{ fontSize: 11 }}>{out ? '缺貨' : '低'}</span>}
               {canEdit ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -520,7 +535,7 @@ function VariantStockEditor({ variants, optionTypes, canEdit, onSaved, productCo
                   />
                 </div>
               ) : (
-                <span className="fs14 fw600">{s}</span>
+                <span className="fs14 fw600" style={{ color: s < 0 ? 'var(--red)' : undefined }}>{s}</span>
               )}
             </div>
           )
