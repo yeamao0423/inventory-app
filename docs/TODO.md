@@ -8,6 +8,21 @@
 
 ---
 
+## 行程費用代墊（2026-08-13）：migration 只套 local，UI 未驗收
+
+`trip_expenses` 補上 `paid_by`／`settled`，員工代墊機票、住宿等費用比照進貨代墊
+（`procurement_items.paid_by`），拆賬時一併算進「代墊返還」。`settle_trip` /
+`void_trip_settlement` 已同步改（結清時標記 `settled=true`，作廢時還原）。
+
+- `supabase/migrations/20260813120000_trip_expense_paid_by.sql` 已套 local，還要上 remote
+  （MCP `apply_migration`，**絕不可 `supabase db push`**）
+- UI 沒有人眼驗過：`TripSheet` 固定費用／其他支出的代墊人選單、已結清費用鎖住不可編輯、
+  拆賬摘要的「待還代墊」是否正確併入行程費用
+- 編輯行程時只刪重建「未結清」的費用列，已結清的原樣保留 —— 這是刻意避開既有的
+  「先刪全部再重插」模式對已結清資料的破壞，改動前先理解這段再動
+
+---
+
 ## 庫存變動單一來源（2026-08-12）：程式碼在工作區，migration 只套 local，未驗收
 
 設計見 `docs/superpowers/specs/2026-08-12-inventory-batch-and-stock-movement-design.md`，

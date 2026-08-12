@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { SUPPORTED_CURRENCIES } from '../constants/currency'
 import { useAuth } from '../hooks/useAuth'
 import { fetchStoreMembers, CreateBatchSheet } from '../components/ProcurementBatchTab'
+import CustomSelect from '../components/CustomSelect'
 import {
   taipeiDayStart, taipeiDayEnd, summarizeOrders, computeTripFinance, buildCostSnapshotMap, isActiveItem,
   effectiveRate,
@@ -352,6 +353,13 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
         // 代墊是真的換匯付出去的錢，最該用本趟的匯率算
         advanceByPayer[payerId] = (advanceByPayer[payerId] || 0) + cost * effectiveRate(item.currency, rateCtx)
       })
+    })
+
+    // 本趟未結清的營運費用代墊（機票／住宿／交通等，員工代墊指定了 paid_by 才算）
+    // 金額本身就是台幣，不用再套匯率
+    const unsettledExpenses = (trip.trip_expenses || []).filter(e => e.paid_by && !e.settled)
+    unsettledExpenses.forEach(e => {
+      advanceByPayer[e.paid_by] = (advanceByPayer[e.paid_by] || 0) + Number(e.amount || 0)
     })
 
     // 墊錢的人不一定還在後台成員名單裡，補查 profile 才不會顯示成「未知」
@@ -732,7 +740,15 @@ function TripReport({ trip, onBack, onEdit, onDelete }) {
             )}
             {(trip.trip_expenses || []).map((e, i) => (
               <div key={i} className="card-row row-sb">
-                <span className="fs13">{e.label}</span>
+                <span className="fs13">
+                  {e.label}
+                  {e.paid_by && (
+                    <span className="muted" style={{ fontSize: 11, marginLeft: 6 }}>
+                      {data.members.find(m => m.id === e.paid_by)?.name || '未知'}代墊
+                      {e.settled ? '・已還' : ''}
+                    </span>
+                  )}
+                </span>
                 <span className="fs13 num">${Number(e.amount).toLocaleString()}</span>
               </div>
             ))}
@@ -1710,13 +1726,25 @@ function TripSheet({ trip, onClose, onSaved, onDelete }) {
   const [returnDate, setReturnDate] = useState(trip?.return_date || '')
   const [note, setNote] = useState(trip?.note || '')
   const [saving, setSaving] = useState(false)
+  const [members, setMembers] = useState([])
+
+  useEffect(() => {
+    if (!storeId) return
+    fetchStoreMembers(storeId).then(m => setMembers(m))
+  }, [storeId])
+
+  // 已被某次拆賬結清的費用不能再改：金額改了會跟拆賬單快照對不上，
+  // 代墊人改了也會讓「已還給誰」變成假的。這裡分成鎖住／可編輯兩組，
+  // 存檔時也只刪重建可編輯那組（見 handleSave）。
+  const settledExpenses = (trip?.trip_expenses || []).filter(e => e.settled)
+  const settledCategories = new Set(settledExpenses.filter(e => e.category !== 'other').map(e => e.category))
 
   const initFixed = {}
-  FIXED_CATEGORIES.forEach(c => { initFixed[c.key] = '' })
+  FIXED_CATEGORIES.forEach(c => { initFixed[c.key] = { amount: '', paidBy: null } })
   if (trip?.trip_expenses) {
     trip.trip_expenses.forEach(e => {
-      if (e.category !== 'other') {
-        initFixed[e.category] = String(e.amount)
+      if (e.category !== 'other' && !e.settled) {
+        initFixed[e.category] = { amount: String(e.amount), paidBy: e.paid_by || null }
       }
     })
   }
@@ -1724,8 +1752,8 @@ function TripSheet({ trip, onClose, onSaved, onDelete }) {
 
   const initOther = trip?.trip_expenses
     ? trip.trip_expenses
-        .filter(e => e.category === 'other')
-        .map(e => ({ label: e.label, amount: String(e.amount), note: e.note || '' }))
+        .filter(e => e.category === 'other' && !e.settled)
+        .map(e => ({ label: e.label, amount: String(e.amount), note: e.note || '', paidBy: e.paid_by || null }))
     : []
   const [otherExpenses, setOtherExpenses] = useState(initOther)
 
@@ -1764,8 +1792,12 @@ function TripSheet({ trip, onClose, onSaved, onDelete }) {
     return out
   }
 
+  function updateFixed(key, field, value) {
+    setFixedAmounts({ ...fixedAmounts, [key]: { ...fixedAmounts[key], [field]: value } })
+  }
+
   function addOther() {
-    setOtherExpenses([...otherExpenses, { label: '', amount: '', note: '' }])
+    setOtherExpenses([...otherExpenses, { label: '', amount: '', note: '', paidBy: null }])
   }
 
   function updateOther(idx, field, value) {
@@ -1780,8 +1812,9 @@ function TripSheet({ trip, onClose, onSaved, onDelete }) {
 
   function calcTotal() {
     let total = 0
-    Object.values(fixedAmounts).forEach(v => { total += Number(v) || 0 })
+    Object.values(fixedAmounts).forEach(v => { total += Number(v.amount) || 0 })
     otherExpenses.forEach(e => { total += Number(e.amount) || 0 })
+    settledExpenses.forEach(e => { total += Number(e.amount) || 0 })
     return total
   }
 
@@ -1791,15 +1824,15 @@ function TripSheet({ trip, onClose, onSaved, onDelete }) {
 
     const expenses = []
     FIXED_CATEGORIES.forEach(c => {
-      const amt = Number(fixedAmounts[c.key]) || 0
+      const amt = Number(fixedAmounts[c.key].amount) || 0
       if (amt > 0) {
-        expenses.push({ category: c.key, label: c.label, amount: amt, note: '' })
+        expenses.push({ category: c.key, label: c.label, amount: amt, note: '', paid_by: fixedAmounts[c.key].paidBy || null })
       }
     })
     otherExpenses.forEach(e => {
       const amt = Number(e.amount) || 0
       if (e.label.trim() && amt > 0) {
-        expenses.push({ category: 'other', label: e.label.trim(), amount: amt, note: e.note })
+        expenses.push({ category: 'other', label: e.label.trim(), amount: amt, note: e.note, paid_by: e.paidBy || null })
       }
     })
 
@@ -1814,7 +1847,8 @@ function TripSheet({ trip, onClose, onSaved, onDelete }) {
         exchange_rates: exchangeRates,
       }).eq('id', trip.id)
 
-      await supabase.from('trip_expenses').delete().eq('trip_id', trip.id)
+      // 只刪重建「未結清」的費用列，已拆過賬的那幾筆原樣保留（見上方 settledExpenses 註解）
+      await supabase.from('trip_expenses').delete().eq('trip_id', trip.id).eq('settled', false)
       if (expenses.length > 0) {
         await supabase.from('trip_expenses').insert(
           expenses.map(e => ({ ...e, trip_id: trip.id }))
@@ -1968,19 +2002,51 @@ function TripSheet({ trip, onClose, onSaved, onDelete }) {
 
         <div style={{ borderTop: '1px solid var(--border)', marginBottom: 16 }} />
 
-        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>固定費用</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
-          {FIXED_CATEGORIES.map(c => (
-            <div key={c.key} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div style={{ width: 48, fontSize: 14, fontWeight: 500, flexShrink: 0 }}>{c.label}</div>
-              <input
-                style={{ ...inputStyle, width: undefined, flex: 1 }}
-                type="number"
-                inputMode="numeric"
-                placeholder="0"
-                value={fixedAmounts[c.key]}
-                onChange={e => setFixedAmounts({ ...fixedAmounts, [c.key]: e.target.value })}
-              />
+        {settledExpenses.length > 0 && (
+          <>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>已結清代墊</div>
+            <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 12 }}>
+              已經拆過賬、還給代墊人了，鎖住不能改。要調整請先作廢該次拆賬。
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
+              {settledExpenses.map(e => (
+                <div key={e.id} className="row-sb" style={{ fontSize: 13, opacity: 0.6 }}>
+                  <span>{e.label} · {members.find(m => m.id === e.paid_by)?.name || '未知'}代墊</span>
+                  <span className="num">${Number(e.amount).toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>固定費用</div>
+        <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 12 }}>
+          代墊人選了店家以外的人，拆賬時會自動算進他的代墊返還。
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginBottom: 16 }}>
+          {FIXED_CATEGORIES.filter(c => !settledCategories.has(c.key)).map(c => (
+            <div key={c.key} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ width: 48, fontSize: 14, fontWeight: 500, flexShrink: 0 }}>{c.label}</div>
+                <input
+                  style={{ ...inputStyle, width: undefined, flex: 1 }}
+                  type="number"
+                  inputMode="numeric"
+                  placeholder="0"
+                  value={fixedAmounts[c.key].amount}
+                  onChange={e => updateFixed(c.key, 'amount', e.target.value)}
+                />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 60 }}>
+                <span className="muted fs12" style={{ flexShrink: 0 }}>代墊人</span>
+                <CustomSelect
+                  label="店家出資"
+                  value={fixedAmounts[c.key].paidBy}
+                  options={members.map(m => ({ value: m.id, label: m.name }))}
+                  onChange={v => updateFixed(c.key, 'paidBy', v)}
+                  compact
+                />
+              </div>
             </div>
           ))}
         </div>
@@ -2009,35 +2075,47 @@ function TripSheet({ trip, onClose, onSaved, onDelete }) {
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
           {otherExpenses.map((item, idx) => (
-            <div key={idx} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-              <input
-                style={{ ...inputStyle, width: undefined, flex: 1 }}
-                placeholder="品項名稱"
-                value={item.label}
-                onChange={e => updateOther(idx, 'label', e.target.value)}
-              />
-              <input
-                style={{ ...inputStyle, width: 100, flexShrink: 0 }}
-                type="number"
-                inputMode="numeric"
-                placeholder="金額"
-                value={item.amount}
-                onChange={e => updateOther(idx, 'amount', e.target.value)}
-              />
-              <button
-                onClick={() => removeOther(idx)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  fontSize: 18,
-                  cursor: 'pointer',
-                  color: 'var(--text-3)',
-                  padding: '8px 4px',
-                  flexShrink: 0,
-                }}
-              >
-                ×
-              </button>
+            <div key={idx} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <input
+                  style={{ ...inputStyle, width: undefined, flex: 1 }}
+                  placeholder="品項名稱"
+                  value={item.label}
+                  onChange={e => updateOther(idx, 'label', e.target.value)}
+                />
+                <input
+                  style={{ ...inputStyle, width: 100, flexShrink: 0 }}
+                  type="number"
+                  inputMode="numeric"
+                  placeholder="金額"
+                  value={item.amount}
+                  onChange={e => updateOther(idx, 'amount', e.target.value)}
+                />
+                <button
+                  onClick={() => removeOther(idx)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    fontSize: 18,
+                    cursor: 'pointer',
+                    color: 'var(--text-3)',
+                    padding: '8px 4px',
+                    flexShrink: 0,
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span className="muted fs12" style={{ flexShrink: 0 }}>代墊人</span>
+                <CustomSelect
+                  label="店家出資"
+                  value={item.paidBy}
+                  options={members.map(m => ({ value: m.id, label: m.name }))}
+                  onChange={v => updateOther(idx, 'paidBy', v)}
+                  compact
+                />
+              </div>
             </div>
           ))}
         </div>
