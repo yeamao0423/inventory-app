@@ -160,21 +160,23 @@ export default function CheckoutPage() {
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   // ── 綠界付款方式：依店家設定決定可選項 ──
-  // 沒設綠界金鑰的店家（ecpayReady=false）完全不出現信用卡／貨到付款選項，
-  // 只剩現行的匯款流程；沒設匯款帳號則不出現匯款選項。兩者都沒設時
-  // payOptions 為空陣列，UI 不顯示付款方式選擇區，維持現行匯款流程，不可讓消費者無法結帳。
+  // 沒設綠界金鑰的店家（ecpayReady=false）完全不出現信用卡／貨到付款選項。
   //
   // 金流與物流是分開申請的：只設了金流、還沒設物流的店家（logisticsReady=false）
   // 不能出現「貨到付款」（COD 需要物流建單），也不能走電子地圖選店（見下面的
   // cvsPickupAvailable）——但信用卡本身不依賴物流，仍然開放，取貨改回手填店名/店號。
+  //
+  // 匯款一律提供，不看 settings.remit_account。這是接綠界之前唯一的付款方式，
+  // 而且三家店的 remit_account 從來沒人設定過（都是 null）——拿它當開關會直接
+  // 把匯款關掉，等於拔掉店家原本唯一的收款管道。remit_account 只決定「訂單頁與
+  // 確認信要不要顯示匯款帳號」，不決定這個選項存不存在。
   const ecpayReady = !!store?.settings?.ecpay_set
   const logisticsReady = ecpayReady && !!store?.settings?.ecpay_logistics_set
   const codMax = Number(store?.settings?.ecpay_cod_max) || 20000
-  const remitConfigured = !!store?.settings?.remit_account
   const payOptions = [
     ...(ecpayReady ? [{ value: 'credit', zh: '信用卡線上付款', en: 'Credit card' }] : []),
     ...(logisticsReady ? [{ value: 'cod', zh: '貨到付款', en: 'Cash on delivery' }] : []),
-    ...(remitConfigured ? [{ value: 'remittance', zh: '銀行匯款', en: 'Bank transfer' }] : []),
+    { value: 'remittance', zh: '銀行匯款', en: 'Bank transfer' },
   ]
 
   // 電子地圖選店只有在物流就緒、且目前選的付款方式是 credit／cod 時才可用。
@@ -698,9 +700,9 @@ export default function CheckoutPage() {
             </div>
           ))}
 
-          {/* 付款方式：店家沒設綠界金鑰或匯款帳號時 payOptions 為空，不顯示選擇區，
-              維持現行只有匯款一種流程 */}
-          {payOptions.length > 0 && (
+          {/* 付款方式：沒接綠界的店家只有匯款一種，不顯示只能單選的選擇區，
+              維持接綠界之前的樣子 */}
+          {payOptions.length > 1 && (
             <div className="form-group">
               <label className="form-label">{lang === 'zh' ? '付款方式' : 'Payment method'} *</label>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
