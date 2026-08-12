@@ -741,6 +741,11 @@ DECLARE v_oid bigint; v_pid bigint; v_token uuid; v_total numeric;
 BEGIN
   v_oid := pg_temp.setup_order(1, 20, 1000);
   v_pid := pg_temp.pid_of(v_oid);
+  -- 加購品項的價格由伺服器從 storefront_products 回算（見 C 組與
+  -- 20260812190000_order_amount_hardening.sql），沒有上架資料會被擋下，
+  -- 所以這裡要給 setup_order 建的商品補一列上架資料。
+  INSERT INTO public.storefront_products (product_id, store_id, published, shop_price)
+  VALUES (v_pid, 1, true, 100);
   UPDATE public.consumer_orders
      SET append_deadline = now() + interval '1 day'
    WHERE id = v_oid;
@@ -795,7 +800,8 @@ CREATE OR REPLACE FUNCTION pg_temp.mk_shop_product(
   p_name text, p_qty int, p_shop_price numeric,
   p_on_sale boolean DEFAULT false, p_sale_price numeric DEFAULT NULL,
   p_sale_start timestamptz DEFAULT NULL, p_sale_end timestamptz DEFAULT NULL,
-  p_skip_stock boolean DEFAULT false, p_collection_end timestamptz DEFAULT NULL)
+  p_skip_stock boolean DEFAULT false, p_collection_end timestamptz DEFAULT NULL,
+  p_published boolean DEFAULT true)
 RETURNS bigint LANGUAGE plpgsql AS $$
 DECLARE v_pid bigint;
 BEGIN
@@ -805,7 +811,7 @@ BEGIN
   INSERT INTO public.storefront_products (
     product_id, store_id, published, shop_price,
     on_sale, sale_price, sale_start, sale_end, skip_stock_check, collection_end)
-  VALUES (v_pid, 1, true, p_shop_price,
+  VALUES (v_pid, 1, p_published, p_shop_price,
           p_on_sale, p_sale_price, p_sale_start, p_sale_end, p_skip_stock, p_collection_end);
 
   RETURN v_pid;
@@ -1238,18 +1244,25 @@ BEGIN
                             'A24 金額＝1200＋1300＋1400，達門檻免運');
 END $$;
 
--- A25 商品不在 storefront_products（後台自建訂單的品項）→ 放行
+-- A25 商品不在 storefront_products → 擋下（沒有店家設定的價格可回算）
+--
+-- 這則原本是「放行、沿用傳入價格」，理由是「後台自建訂單的品項不在 storefront_products」。
+-- 那個理由不成立：place_order 全 repo 只有商城結帳一個呼叫端
+-- （shop/src/app/checkout/page.jsx:452），後台建單是直接 insert consumer_orders
+-- 加 trigger，不經過這支 RPC。所以放行只是留給 anon 的旁門。
 DO $$
 DECLARE v_pid bigint; v_r jsonb;
 BEGIN
   v_pid := pg_temp.mk_offshelf_product('TEST未上架', 100);
   v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 777)), 837, 60);
 
-  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A25 未上架商品仍可建單（不可擋死店家）');
-  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 837::numeric, 'A25 沿用傳入價格 777');
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'false', 'A25 沒有上架資料的商品被擋下');
+  PERFORM pg_temp.assert_eq(v_r->>'error' LIKE '%已下架%', true, 'A25 錯誤訊息是人話');
+  PERFORM pg_temp.assert_eq((SELECT quantity FROM public.products WHERE id = v_pid), 100,
+                            'A25 被擋下時庫存沒有被佔走');
 END $$;
 
--- A26 上架商品與未上架商品混在同一張單
+-- A26 上架商品與未上架商品混在同一張單 → 整張擋下
 DO $$
 DECLARE v_on bigint; v_off bigint; v_r jsonb;
 BEGIN
@@ -1260,9 +1273,42 @@ BEGIN
            pg_temp.line(v_on, 1, 1000),
            pg_temp.line(v_off, 1, 300)), 1360, 60);
 
-  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A26 混合單成立');
-  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 1360::numeric,
-                            'A26 上架品用 DB 價、未上架品沿用傳入價');
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'false', 'A26 混合單只要有一項沒上架就整張擋下');
+  PERFORM pg_temp.assert_eq((SELECT quantity FROM public.products WHERE id = v_on), 100,
+                            'A26 被擋下時上架品的庫存也沒被佔走');
+END $$;
+
+-- A27 storefront_products 有列但 published = false（商城暫時隱藏）→ 放行
+--
+-- UX 邊界：published 只管「前台看不看得到」，價格照樣是店家在後台設的，
+-- 伺服器回算得出來。拿 published 擋單只會誤傷「加入購物車後店家臨時隱藏」的
+-- 正常客人，曝險卻一毛都沒減少。這則測試釘住這個判準。
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST隱藏中', 100, 1000, false, NULL, NULL, NULL,
+                                   false, NULL, false);
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 1000)), 1060, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A27 有上架資料但暫時隱藏的商品仍可下單');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 1060::numeric,
+                            'A27 金額用 DB 的 shop_price 1000＋運費60');
+END $$;
+
+-- A28 有上架資料但那一列屬於別家店 → 擋下（不能借別家店的定價）
+DO $$
+DECLARE v_pid bigint; v_sid bigint; v_r jsonb;
+BEGIN
+  INSERT INTO public.stores (name, is_active) VALUES ('TEST別家店', true) RETURNING id INTO v_sid;
+  INSERT INTO public.products (store_id, name, quantity, cost, currency)
+  VALUES (v_sid, 'TEST別家店商品', 100, 0, 'TWD') RETURNING id INTO v_pid;
+  INSERT INTO public.storefront_products (product_id, store_id, published, shop_price)
+  VALUES (v_pid, v_sid, true, 1000);
+
+  -- 用 store_id = 1 下單，但商品的上架資料掛在別家店
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 1000)), 1060, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'false', 'A28 別家店的上架資料不算數，被擋下');
 END $$;
 
 
@@ -1416,23 +1462,27 @@ BEGIN
   PERFORM pg_temp.assert_eq(v_r->>'ok', 'false', 'B9b 達免運門檻卻收運費被擋下');
 END $$;
 
--- B9c 已知缺口：少付運費目前放行（運費只驗上界）
---
--- 這則測試鎖住的是「還沒關的洞」，不是想要的行為。運費之所以不驗等值，
--- 是因為 supabase/tests/stock_reconcile.sql:65 的 fixture 用 1000 元的小計
--- 傳 p_shipping_fee = 0，而本輪不得修改該檔（見 migration 檔頭）。
--- 修法：把那則 fixture 改成 p_shipping_fee = 60，再把 place_order 的上界檢查
--- 換成等值比對，然後把這則測試翻成「被擋下」。屆時這裡會紅，那是正確的訊號。
+-- B9c 少付運費 → 擋下（運費現在是等值比對，不是上下界）
 DO $$
 DECLARE v_pid bigint; v_r jsonb;
 BEGIN
   v_pid := pg_temp.mk_shop_product('TEST逃運費', 100, 1000);
   v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 1000)), 1000, 0);
 
-  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true',
-    'B9c 少付運費目前仍放行（已知缺口，曝險 = 每單一次運費；修法見註解）');
-  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 1000::numeric,
-    'B9c 商品金額本身沒有被動到');
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'false', 'B9c 未達免運門檻卻不付運費被擋下');
+  PERFORM pg_temp.assert_eq(v_r->>'error' LIKE '%運費%', true, 'B9c 錯誤訊息講得出原因');
+  PERFORM pg_temp.assert_eq((SELECT quantity FROM public.products WHERE id = v_pid), 100,
+                            'B9c 被擋下時庫存沒有被佔走');
+END $$;
+
+-- B9d 運費差 1 元的零頭放行（與金額比對同一個容許度）
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST運費零頭', 100, 1000);
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 1000)), 1059, 59);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'B9d 運費差 1 元的零頭放行');
 END $$;
 
 -- B10 前端金額比較高也要擋（多收錢同樣是 bug，不可靜靜通過）
@@ -1471,15 +1521,297 @@ BEGIN
                             'B12 金額只算未取消的品項');
 END $$;
 
--- B13 用未上架商品的 id 借道（現行放行行為的代價，明文鎖住以免無聲改變）
+-- B13 用未上架商品的 id 借道，1 元買走 → 擋下
 DO $$
 DECLARE v_pid bigint; v_r jsonb;
 BEGIN
   v_pid := pg_temp.mk_offshelf_product('TEST未上架借道', 100);
   v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 1)), 61, 60);
 
-  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true',
-                            'B13 未上架商品仍沿用傳入價（保留後台建單路徑，殘留風險見報告）');
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'false', 'B13 拿沒上架的 product_id 借道被擋下');
+  PERFORM pg_temp.assert_eq((SELECT quantity FROM public.products WHERE id = v_pid), 100,
+                            'B13 被擋下時庫存沒有被佔走');
+END $$;
+
+-- B14 已取消的品項不受上架檢查約束（不用付錢，也就不需要伺服器價）
+DO $$
+DECLARE v_on bigint; v_off bigint; v_r jsonb;
+BEGIN
+  v_on  := pg_temp.mk_shop_product('TEST取消未上架-上架品', 100, 1000);
+  v_off := pg_temp.mk_offshelf_product('TEST取消未上架-未上架品', 100);
+
+  v_r := pg_temp.po(jsonb_build_array(
+           pg_temp.line(v_on, 1, 1000),
+           pg_temp.line(v_off, 1, 9999, NULL, NULL, '{"status": "cancelled"}'::jsonb)), 1060, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'B14 已取消的未上架品項不擋單');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 1060::numeric,
+                            'B14 金額只算未取消的品項');
+END $$;
+
+
+-- ══════════════════════════════════════════════════════════════
+-- C 組：append_to_order（加購）
+--
+-- 原本 v_subtotal 從 v_merged（既有 items_json ＋ 新加購品項）用呼叫端傳來的
+-- price 重算再寫回 total_amount，等於呼叫端可以改寫整張訂單的金額。
+-- 現在：加購品項從 storefront_products 回算，既有品項小計從訂單欄位回推
+-- （total_amount + discount_amount - shipping_fee），兩段都不看傳入的 price。
+--
+-- 加購窗口預設是關的（stores.settings.append_mode 預設 'off' → append_deadline
+-- 為 NULL → 「加購時間已截止」），所以測試裡直接把 append_deadline 撐開，
+-- 才驗得到金額那一段。
+-- ══════════════════════════════════════════════════════════════
+
+-- 下一張可加購的訂單，回傳 public_token
+CREATE OR REPLACE FUNCTION pg_temp.mk_appendable_order(p_items jsonb, p_total numeric, p_shipping int)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_r jsonb; v_token uuid;
+BEGIN
+  v_r := pg_temp.po(p_items, p_total, p_shipping);
+  IF v_r->>'ok' <> 'true' THEN
+    RAISE EXCEPTION 'FAIL  建立可加購訂單時 place_order 就失敗了：%', v_r->>'error';
+  END IF;
+  v_token := (v_r->>'public_token')::uuid;
+  UPDATE public.consumer_orders SET append_deadline = now() + interval '1 day'
+   WHERE public_token = v_token;
+  RETURN v_token;
+END $$;
+
+CREATE OR REPLACE FUNCTION pg_temp.ap(p_token uuid, p_items jsonb)
+RETURNS jsonb LANGUAGE sql AS $$
+  SELECT public.append_to_order(p_token, p_items);
+$$;
+
+-- C1 正常加購：金額用 DB 價回算，運費依新小計重算
+DO $$
+DECLARE v_a bigint; v_b bigint; v_tok uuid; v_r jsonb;
+BEGIN
+  v_a := pg_temp.mk_shop_product('TEST加購原品', 100, 1000);
+  v_b := pg_temp.mk_shop_product('TEST加購新品', 100, 500);
+
+  v_tok := pg_temp.mk_appendable_order(jsonb_build_array(pg_temp.line(v_a, 1, 1000)), 1060, 60);
+  v_r   := pg_temp.ap(v_tok, jsonb_build_array(pg_temp.line(v_b, 2, 500)));
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'C1 正常加購成立');
+  PERFORM pg_temp.assert_eq((v_r->>'subtotal')::numeric, 2000::numeric,
+                            'C1 小計＝原 1000＋加購 500×2');
+  PERFORM pg_temp.assert_eq((v_r->>'new_total')::numeric, 2060::numeric, 'C1 金額＝2000＋運費60');
+  PERFORM pg_temp.assert_eq((SELECT quantity FROM public.products WHERE id = v_b), 98,
+                            'C1 加購品的庫存被扣掉 2 件');
+END $$;
+
+-- C2 加購灌價：加購品項傳一個誇張的 price，伺服器不採用
+DO $$
+DECLARE v_a bigint; v_b bigint; v_tok uuid; v_r jsonb;
+BEGIN
+  v_a := pg_temp.mk_shop_product('TEST加購灌價原品', 100, 1000);
+  v_b := pg_temp.mk_shop_product('TEST加購灌價新品', 100, 500);
+
+  v_tok := pg_temp.mk_appendable_order(jsonb_build_array(pg_temp.line(v_a, 1, 1000)), 1060, 60);
+  v_r   := pg_temp.ap(v_tok, jsonb_build_array(pg_temp.line(v_b, 1, 1)));
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'C2 加購成立');
+  PERFORM pg_temp.assert_eq((v_r->>'subtotal')::numeric, 1500::numeric,
+                            'C2 加購品用 DB 價 500，不是傳入的 1');
+  PERFORM pg_temp.assert_eq(
+    (SELECT (items_json->1->>'price')::numeric FROM public.consumer_orders WHERE public_token = v_tok),
+    500::numeric, 'C2 寫進 items_json 的價格也是伺服器價');
+END $$;
+
+-- C3 改寫整張單：既有品項的金額不隨呼叫端起舞
+--
+-- 攻擊路徑（原本可行）：下單時誠實傳 p_total_amount，但把 items_json 某一列的
+-- price 灌成 1；place_order 驗的是總額等式，不逐列驗 price，所以訂單成立、
+-- items_json 留下假價格。接著加購一次，整張單的金額就照那個假價格塌下來。
+-- 現在既有小計改由訂單欄位回推，這條路不通。
+DO $$
+DECLARE v_a bigint; v_b bigint; v_tok uuid; v_r jsonb; v_total numeric;
+BEGIN
+  v_a := pg_temp.mk_shop_product('TEST改寫原品', 100, 3800);
+  v_b := pg_temp.mk_shop_product('TEST改寫新品', 100, 500);
+
+  -- 下單：總額誠實（3800，達免運門檻），但 items_json 的 price 灌成 1
+  v_tok := pg_temp.mk_appendable_order(jsonb_build_array(pg_temp.line(v_a, 1, 1)), 3800, 0);
+  PERFORM pg_temp.assert_eq(
+    (SELECT total_amount FROM public.consumer_orders WHERE public_token = v_tok),
+    3800::numeric, 'C3 前提：訂單金額是誠實的 3800');
+
+  v_r := pg_temp.ap(v_tok, jsonb_build_array(pg_temp.line(v_b, 1, 500)));
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'C3 加購成立');
+  PERFORM pg_temp.assert_eq((v_r->>'subtotal')::numeric, 4300::numeric,
+                            'C3 既有小計仍是 3800，沒有被 items_json 的假價格改寫');
+  SELECT total_amount INTO v_total FROM public.consumer_orders WHERE public_token = v_tok;
+  PERFORM pg_temp.assert_eq(v_total, 4300::numeric, 'C3 訂單金額沒有塌成 501');
+END $$;
+
+-- C4 加購沒有上架資料的商品 → 擋下
+DO $$
+DECLARE v_a bigint; v_off bigint; v_tok uuid; v_r jsonb; v_total numeric;
+BEGIN
+  v_a   := pg_temp.mk_shop_product('TEST加購擋下原品', 100, 1000);
+  v_off := pg_temp.mk_offshelf_product('TEST加購未上架', 100);
+
+  v_tok := pg_temp.mk_appendable_order(jsonb_build_array(pg_temp.line(v_a, 1, 1000)), 1060, 60);
+  v_r   := pg_temp.ap(v_tok, jsonb_build_array(pg_temp.line(v_off, 1, 1)));
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'false', 'C4 加購沒上架的商品被擋下');
+  PERFORM pg_temp.assert_eq(v_r->>'error' LIKE '%已下架%', true, 'C4 錯誤訊息是人話');
+  SELECT total_amount INTO v_total FROM public.consumer_orders WHERE public_token = v_tok;
+  PERFORM pg_temp.assert_eq(v_total, 1060::numeric, 'C4 被擋下時訂單金額沒被改到');
+  PERFORM pg_temp.assert_eq((SELECT quantity FROM public.products WHERE id = v_off), 100,
+                            'C4 被擋下時庫存沒有被佔走');
+END $$;
+
+-- C5 加購 published = false 的商品 → 放行（判準是有沒有那一列）
+DO $$
+DECLARE v_a bigint; v_b bigint; v_tok uuid; v_r jsonb;
+BEGIN
+  v_a := pg_temp.mk_shop_product('TEST加購隱藏原品', 100, 1000);
+  v_b := pg_temp.mk_shop_product('TEST加購隱藏新品', 100, 500, false, NULL, NULL, NULL,
+                                 false, NULL, false);
+
+  v_tok := pg_temp.mk_appendable_order(jsonb_build_array(pg_temp.line(v_a, 1, 1000)), 1060, 60);
+  v_r   := pg_temp.ap(v_tok, jsonb_build_array(pg_temp.line(v_b, 1, 500)));
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'C5 加購暫時隱藏的商品仍放行');
+  PERFORM pg_temp.assert_eq((v_r->>'subtotal')::numeric, 1500::numeric, 'C5 用 DB 價 500');
+END $$;
+
+-- C6 加購用特價：檔期內用特價，不是原價
+DO $$
+DECLARE v_a bigint; v_b bigint; v_tok uuid; v_r jsonb;
+BEGIN
+  v_a := pg_temp.mk_shop_product('TEST加購特價原品', 100, 1000);
+  v_b := pg_temp.mk_shop_product('TEST加購特價新品', 100, 1000, true, 800,
+                                 now() - interval '1 day', now() + interval '1 day');
+
+  v_tok := pg_temp.mk_appendable_order(jsonb_build_array(pg_temp.line(v_a, 1, 1000)), 1060, 60);
+  v_r   := pg_temp.ap(v_tok, jsonb_build_array(pg_temp.line(v_b, 1, 1000)));
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'C6 加購特價商品成立');
+  PERFORM pg_temp.assert_eq((v_r->>'subtotal')::numeric, 1800::numeric,
+                            'C6 加購品用特價 800，不是傳入的 1000');
+END $$;
+
+-- C7 加購跨過免運門檻 → 運費歸零
+DO $$
+DECLARE v_a bigint; v_b bigint; v_tok uuid; v_r jsonb;
+BEGIN
+  v_a := pg_temp.mk_shop_product('TEST加購免運原品', 100, 3000);
+  v_b := pg_temp.mk_shop_product('TEST加購免運新品', 100, 1000);
+
+  v_tok := pg_temp.mk_appendable_order(jsonb_build_array(pg_temp.line(v_a, 1, 3000)), 3060, 60);
+  v_r   := pg_temp.ap(v_tok, jsonb_build_array(pg_temp.line(v_b, 1, 1000)));
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'C7 加購成立');
+  PERFORM pg_temp.assert_eq((v_r->>'shipping_fee')::numeric, 0::numeric,
+                            'C7 小計 4000 跨過門檻 → 運費歸零');
+  PERFORM pg_temp.assert_eq((v_r->>'new_total')::numeric, 4000::numeric, 'C7 金額＝4000，不收運費');
+END $$;
+
+-- C8 帶優惠券的訂單加購兩次：折扣沿用不重算，既有小計每次都回推正確
+DO $$
+DECLARE v_a bigint; v_b bigint; v_tok uuid; v_r jsonb;
+BEGIN
+  v_a := pg_temp.mk_shop_product('TEST加購券原品', 100, 1000);
+  v_b := pg_temp.mk_shop_product('TEST加購券新品', 100, 500);
+  PERFORM pg_temp.mk_coupon('TESTAPPEND100', 'fixed', 100);
+
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_a, 1, 1000)), 1060, 60, 'TESTAPPEND100', 1000);
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'C8 前提：帶券下單成立');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 960::numeric, 'C8 前提：金額＝1060－100');
+  v_tok := (v_r->>'public_token')::uuid;
+  UPDATE public.consumer_orders SET append_deadline = now() + interval '1 day'
+   WHERE public_token = v_tok;
+
+  v_r := pg_temp.ap(v_tok, jsonb_build_array(pg_temp.line(v_b, 1, 500)));
+  PERFORM pg_temp.assert_eq((v_r->>'subtotal')::numeric, 1500::numeric, 'C8 第一次加購：小計 1500');
+  PERFORM pg_temp.assert_eq((v_r->>'new_total')::numeric, 1460::numeric,
+                            'C8 第一次加購：金額＝1500－券100＋運費60');
+
+  v_r := pg_temp.ap(v_tok, jsonb_build_array(pg_temp.line(v_b, 1, 500)));
+  PERFORM pg_temp.assert_eq((v_r->>'subtotal')::numeric, 2000::numeric,
+                            'C8 第二次加購：小計 2000（回推沒有累積誤差）');
+  PERFORM pg_temp.assert_eq((v_r->>'new_total')::numeric, 1960::numeric,
+                            'C8 第二次加購：金額＝2000－券100＋運費60');
+END $$;
+
+-- C9 後台取消一個品項後再加購：以後台寫回的 total_amount 為準
+DO $$
+DECLARE v_a bigint; v_b bigint; v_c bigint; v_tok uuid; v_r jsonb;
+BEGIN
+  v_a := pg_temp.mk_shop_product('TEST加購取消A', 100, 1000);
+  v_b := pg_temp.mk_shop_product('TEST加購取消B', 100, 2000);
+  v_c := pg_temp.mk_shop_product('TEST加購取消C', 100, 500);
+
+  v_tok := pg_temp.mk_appendable_order(jsonb_build_array(
+             pg_temp.line(v_a, 1, 1000), pg_temp.line(v_b, 1, 2000)), 3060, 60);
+
+  -- 模擬後台編輯訂單：取消 B，三個金額欄位一起寫回
+  -- （src/components/ConsumerOrderDetailSheet.jsx:509-517 同形）
+  UPDATE public.consumer_orders
+     SET items_json = jsonb_build_array(
+           items_json->0,
+           (items_json->1) || '{"status":"cancelled"}'::jsonb),
+         total_amount = 1060, shipping_fee = 60
+   WHERE public_token = v_tok;
+
+  v_r := pg_temp.ap(v_tok, jsonb_build_array(pg_temp.line(v_c, 1, 500)));
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'C9 加購成立');
+  PERFORM pg_temp.assert_eq((v_r->>'subtotal')::numeric, 1500::numeric,
+                            'C9 已取消的品項不再計費，小計＝1000＋500');
+END $$;
+
+-- C10 加購窗口關著（append_deadline 為 NULL）→ 擋下，金額不動
+DO $$
+DECLARE v_a bigint; v_b bigint; v_r jsonb; v_tok uuid; v_total numeric;
+BEGIN
+  v_a := pg_temp.mk_shop_product('TEST加購關閉原品', 100, 1000);
+  v_b := pg_temp.mk_shop_product('TEST加購關閉新品', 100, 500);
+
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_a, 1, 1000)), 1060, 60);
+  v_tok := (v_r->>'public_token')::uuid;
+
+  v_r := pg_temp.ap(v_tok, jsonb_build_array(pg_temp.line(v_b, 1, 500)));
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'false', 'C10 加購窗口關著時被擋下');
+  SELECT total_amount INTO v_total FROM public.consumer_orders WHERE public_token = v_tok;
+  PERFORM pg_temp.assert_eq(v_total, 1060::numeric, 'C10 被擋下時訂單金額沒被改到');
+END $$;
+
+-- C11 加購品項庫存不足 → 擋下，訂單金額不動
+DO $$
+DECLARE v_a bigint; v_b bigint; v_tok uuid; v_r jsonb; v_total numeric;
+BEGIN
+  v_a := pg_temp.mk_shop_product('TEST加購缺貨原品', 100, 1000);
+  v_b := pg_temp.mk_shop_product('TEST加購缺貨新品', 1, 500);
+
+  v_tok := pg_temp.mk_appendable_order(jsonb_build_array(pg_temp.line(v_a, 1, 1000)), 1060, 60);
+  v_r   := pg_temp.ap(v_tok, jsonb_build_array(pg_temp.line(v_b, 5, 500)));
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'false', 'C11 加購品庫存不足被擋下');
+  PERFORM pg_temp.assert_eq(v_r->>'error' LIKE '%庫存不足%', true, 'C11 錯誤訊息講得出原因');
+  SELECT total_amount INTO v_total FROM public.consumer_orders WHERE public_token = v_tok;
+  PERFORM pg_temp.assert_eq(v_total, 1060::numeric, 'C11 被擋下時訂單金額沒被改到');
+END $$;
+
+-- C12 加購規格品：用 variant_price，且規格必須屬於該商品
+DO $$
+DECLARE v_a bigint; v_b bigint; v_vid bigint; v_tok uuid; v_r jsonb;
+BEGIN
+  v_a := pg_temp.mk_shop_product('TEST加購規格原品', 100, 1000);
+  v_b := pg_temp.mk_shop_product('TEST加購規格新品', 0, 500);
+  v_vid := pg_temp.mk_variant(v_b, 50, 1200);
+
+  v_tok := pg_temp.mk_appendable_order(jsonb_build_array(pg_temp.line(v_a, 1, 1000)), 1060, 60);
+  v_r   := pg_temp.ap(v_tok, jsonb_build_array(pg_temp.line(v_b, 1, 1200, v_vid)));
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'C12 加購規格品成立');
+  PERFORM pg_temp.assert_eq((v_r->>'subtotal')::numeric, 2200::numeric,
+                            'C12 用 variant_price 1200');
 END $$;
 
 ROLLBACK;

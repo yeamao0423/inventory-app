@@ -62,11 +62,15 @@ VALUES (-101, -1, '測試客', '預購商品 × 12',
 SELECT pg_temp.assert_eq(pg_temp.stock_of(-20, NULL), -12, 'T2 預購下單 12 件 → 庫存 0→-12');
 
 -- T3 走 place_order（而非裸 insert）也只扣一次
+-- 金額要對得上伺服器回算的結果，否則 place_order 會在扣庫存前就擋下這張單：
+-- 商品 -10 上架價 500 × 2 = 1000，店家 -1 沒有 settings → 免運門檻 3800／運費 60，
+-- 所以總額 1060、運費 60。（place_order 的金額驗證見
+-- supabase/migrations/20260812190000_order_amount_hardening.sql）
 SELECT public.place_order(
   '測試客', 'a@b.c', '0900000000', '地址', NULL, NULL, NULL, NULL, NULL,
   '現貨商品 × 2',
   '[{"id":-10,"name":"現貨商品","qty":2,"price":500}]'::jsonb,
-  1000, 0, NULL, 1000, 'a@b.c', -1);
+  1060, 60, NULL, 1000, 'a@b.c', -1);
 
 SELECT pg_temp.assert_eq(pg_temp.stock_of(-10, NULL), 5, 'T3 place_order 扣 2 件 → 7→5（不是 3）');
 
