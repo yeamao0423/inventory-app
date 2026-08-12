@@ -7,7 +7,17 @@ import { getStore, getStoreId } from '../../lib/store'
 import { trackPixel } from '../../lib/metaPixel'
 import { fetchBundlesByIds } from '../../lib/bundles'
 import { bundleIdsInCart, cartLineKey, computeCartTotals } from '../../lib/bundleCart'
+import { saveCheckoutDraft, readCheckoutDraft, cvsFromSearchParams } from '../../lib/checkoutDraft'
+import { CVS_SUBTYPES } from '../../lib/ecpay'
 import { useI18n, useCart, useUser } from '../layout'
+
+// 電子地圖四大 C2C 通路的顯示名稱（純 UI 文字，非綠界規格的一部分）
+const CVS_SUBTYPE_LABELS = {
+  UNIMARTC2C: { zh: '7-11', en: '7-ELEVEN' },
+  FAMIC2C: { zh: '全家', en: 'FamilyMart' },
+  HILIFEC2C: { zh: '萊爾富', en: 'Hi-Life' },
+  OKMARTC2C: { zh: 'OK超商', en: 'OK Mart' },
+}
 
 export default function CheckoutPage() {
   const { t, lang } = useI18n()
@@ -17,7 +27,12 @@ export default function CheckoutPage() {
   // 加購模式：購物車要併進既有訂單，不建新單也不重填收件資料
   const isAppend = !!appendTo?.token
   const [appendOrder, setAppendOrder] = useState(null)
-  const [form, setForm] = useState({ name: '', phone: '', email: '', store_name: '', store_number: '', line_id: '', remittance_last5: '', note: '' })
+  const [form, setForm] = useState({
+    name: '', phone: '', email: '', store_name: '', store_number: '', line_id: '', remittance_last5: '', note: '',
+    payment_method: 'remittance',   // 'credit' | 'cod' | 'remittance'
+    shipping_subtype: 'UNIMARTC2C',
+    cvs_store_id: '', cvs_store_name: '', cvs_address: '',
+  })
   const [errors, setErrors] = useState({})
   const [submitting, setSubmitting] = useState(false)
   const [profileLoaded, setProfileLoaded] = useState(false)
@@ -36,6 +51,22 @@ export default function CheckoutPage() {
 
   useEffect(() => {
     getStore().then(setStore).catch(() => {})
+  }, [])
+
+  // 從綠界電子地圖選完店導回：先還原離開前存的草稿，再套上選到的門市資訊。
+  // 一次性：讀完即清 sessionStorage，也把 query 清掉避免重新整理時重跑。
+  useEffect(() => {
+    const cvs = cvsFromSearchParams(new URLSearchParams(window.location.search))
+    if (!cvs) return
+    const draft = readCheckoutDraft(window.sessionStorage)
+    setForm(f => ({
+      ...f, ...(draft || {}),
+      cvs_store_id: cvs.cvs_store_id,
+      cvs_store_name: cvs.cvs_store_name,
+      cvs_address: cvs.cvs_address,
+      shipping_subtype: cvs.shipping_subtype || f.shipping_subtype,
+    }))
+    window.history.replaceState({}, '', '/checkout')
   }, [])
 
   useEffect(() => {
@@ -121,6 +152,41 @@ export default function CheckoutPage() {
   const discountAmount = hasBundlePrice ? 0 : (couponPreview?.discount_amount || 0)
   const total = subtotal - bundleDiscount - discountAmount + shippingFee
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  // ── 綠界付款方式：依店家設定決定可選項 ──
+  // 沒設綠界金鑰的店家（ecpayReady=false）完全不出現信用卡／貨到付款選項，
+  // 只剩現行的匯款流程；沒設匯款帳號則不出現匯款選項。兩者都沒設時
+  // payOptions 為空陣列，UI 不顯示付款方式選擇區，維持現行匯款流程，不可讓消費者無法結帳。
+  const ecpayReady = !!store?.settings?.ecpay_set
+  const codMax = Number(store?.settings?.ecpay_cod_max) || 20000
+  const remitConfigured = !!store?.settings?.remit_account
+  const payOptions = [
+    ...(ecpayReady ? [{ value: 'credit', zh: '信用卡線上付款', en: 'Credit card' }] : []),
+    ...(ecpayReady ? [{ value: 'cod', zh: '貨到付款', en: 'Cash on delivery' }] : []),
+    ...(remitConfigured ? [{ value: 'remittance', zh: '銀行匯款', en: 'Bank transfer' }] : []),
+  ]
+
+  // store 設定載入後才知道有哪些付款選項，套一次預設值。只在 store 這個
+  // 參照第一次從 null 變成物件時跑一次，不會蓋掉使用者之後自己選的付款方式。
+  useEffect(() => {
+    if (!store) return
+    setForm(f => ({ ...f, payment_method: payOptions[0]?.value ?? 'remittance' }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [store])
+
+  // 換超商子類型時清掉已選門市 —— 不同通路的門市代碼不通用
+  function setShippingSubtype(subtype) {
+    setForm(f => ({ ...f, shipping_subtype: subtype, cvs_store_id: '', cvs_store_name: '', cvs_address: '' }))
+  }
+
+  // 選門市：整頁導轉到綠界電子地圖前，先把表單存進 sessionStorage（回來才能還原）
+  function goPickStore() {
+    if (!store?.id) return
+    saveCheckoutDraft(window.sessionStorage, form)
+    const isMobile = /Mobi|Android/i.test(navigator.userAgent)
+    window.location.href =
+      `/api/ecpay/logistics/map?subtype=${form.shipping_subtype}&storeId=${store.id}&device=${isMobile ? 1 : 0}`
+  }
 
   // ── 加購金額試算：與 DB 的 append_to_order 用同一組規則 ──
   // 合併後小計重新對免運門檻，所以「加購跨過門檻」會把原本收的運費退掉。
@@ -242,11 +308,31 @@ export default function CheckoutPage() {
     if (!form.phone.trim()) e.phone = t('checkout.required')
     if (!form.email.trim()) e.email = t('checkout.required')
     if (!form.line_id.trim()) e.line_id = t('checkout.required')
-    if (!form.store_name.trim()) e.store_name = t('checkout.required')
-    if (!form.store_number.trim()) e.store_number = t('checkout.required')
-    if (!form.remittance_last5.trim() || !/^\d{5}$/.test(form.remittance_last5.trim())) {
-      e.remittance_last5 = lang === 'zh' ? '請輸入 5 位數字' : 'Please enter exactly 5 digits'
+
+    // 走綠界選店（credit／cod）：門市必填，手填店名/店號不必填
+    // 沒走綠界（remittance 且沒選門市）：維持現行手填店名/店號必填 —— 這是沒設綠界金鑰
+    // 的店家唯一的取貨路徑，不可拿掉
+    if (form.payment_method === 'remittance' && !form.cvs_store_id) {
+      if (!form.store_name.trim()) e.store_name = t('checkout.required')
+      if (!form.store_number.trim()) e.store_number = t('checkout.required')
     }
+    if ((form.payment_method === 'credit' || form.payment_method === 'cod') && !form.cvs_store_id) {
+      e.cvs_store_id = lang === 'zh' ? '請選擇取貨門市' : 'Please choose a pickup store'
+    }
+
+    // 匯款後五碼只有匯款流程需要
+    if (form.payment_method === 'remittance') {
+      if (!form.remittance_last5.trim() || !/^\d{5}$/.test(form.remittance_last5.trim())) {
+        e.remittance_last5 = lang === 'zh' ? '請輸入 5 位數字' : 'Please enter exactly 5 digits'
+      }
+    }
+
+    if (form.payment_method === 'cod' && total > codMax) {
+      e.payment_method = lang === 'zh'
+        ? `貨到付款金額上限 NT$${codMax.toLocaleString()}，請改用其他付款方式`
+        : `Cash on delivery is limited to NT$${codMax.toLocaleString()}. Please choose another payment method.`
+    }
+
     setErrors(e)
     return Object.keys(e).length === 0
   }
@@ -331,14 +417,23 @@ export default function CheckoutPage() {
     // 原子操作：檢查庫存 + 驗證優惠券 → 扣庫存 + 建立訂單 + 記錄優惠券（單一 transaction）
     const orderTotal = subtotal + shippingFee  // 未折扣金額，RPC 內部會扣除折扣
 
+    // 走綠界電子地圖選店：p_store_name／p_store_number／p_address 沿用既有欄位改帶門市資訊
+    // （後台與通知信不必改）；沒走綠界（手填 fallback）則維持原本的手填值。
+    const usingCvsMap = !!form.cvs_store_id
+    const orderStoreName = usingCvsMap ? form.cvs_store_name : form.store_name.trim()
+    const orderStoreNumber = usingCvsMap ? form.cvs_store_id : form.store_number.trim()
+    const orderAddress = usingCvsMap
+      ? (form.cvs_address || `${form.cvs_store_name} (${form.cvs_store_id})`)
+      : `${form.store_name} (${form.store_number})`
+
     const { data: placeResult, error: placeErr } = await supabase.rpc('place_order', {
       p_store_id: storeId,
       p_customer_name: form.name,
       p_email: form.email,
       p_phone: form.phone,
-      p_address: `${form.store_name} (${form.store_number})`,
-      p_store_name: form.store_name.trim(),
-      p_store_number: form.store_number.trim(),
+      p_address: orderAddress,
+      p_store_name: orderStoreName,
+      p_store_number: orderStoreNumber,
       p_line_id: form.line_id || null,
       p_remittance_last5: form.remittance_last5.trim(),
       p_note: form.note,
@@ -350,6 +445,11 @@ export default function CheckoutPage() {
       p_coupon_code: hasBundlePrice ? null : (couponPreview?.code || null),
       p_subtotal: !hasBundlePrice && couponPreview ? subtotal : null,
       p_consumer_email: form.email,
+      p_payment_method: form.payment_method,
+      p_shipping_subtype: form.cvs_store_id ? form.shipping_subtype : null,
+      p_cvs_store_id: form.cvs_store_id || null,
+      p_cvs_store_name: form.cvs_store_name || null,
+      p_cvs_address: form.cvs_address || null,
     })
 
     if (placeErr || !placeResult?.ok) {
@@ -392,7 +492,13 @@ export default function CheckoutPage() {
     }
 
     clearCart()
-    router.push(`/order/${orderToken}`)
+    if (form.payment_method === 'credit') {
+      // 信用卡：導去綠界付款頁。用 DB 的數字 id（/api/ecpay/credit/[orderId] 用它查訂單），
+      // 不是上面用來查詢完成頁的 public_token —— 兩支路由吃的鍵不一樣。
+      window.location.href = `/api/ecpay/credit/${placeResult.order_id}`
+    } else {
+      router.push(`/order/${orderToken}`)
+    }
   }
 
   // 導向必須等 localStorage 讀入後才判斷，否則重新整理結帳頁會因為
@@ -547,7 +653,10 @@ export default function CheckoutPage() {
             { key: 'phone', label: t('checkout.phone'), type: 'tel', required: true },
             { key: 'email', label: t('checkout.email'), type: 'email', required: true },
             { key: 'line_id', label: t('checkout.line_id'), type: 'text', required: true, placeholder: t('checkout.line_id_placeholder') },
-            { key: 'remittance_last5', label: t('checkout.remittance_last5'), type: 'text', required: true, placeholder: t('checkout.remittance_last5_placeholder'), maxLength: 5, inputMode: 'numeric' },
+            // 匯款後五碼只有匯款流程需要，信用卡／貨到付款不顯示這欄
+            ...(form.payment_method === 'remittance'
+              ? [{ key: 'remittance_last5', label: t('checkout.remittance_last5'), type: 'text', required: true, placeholder: t('checkout.remittance_last5_placeholder'), maxLength: 5, inputMode: 'numeric' }]
+              : []),
           ].map(({ key, label, type, required, placeholder, maxLength, inputMode }) => (
             <div className="form-group" key={key}>
               <label className="form-label">{label}{required ? ' *' : ''}</label>
@@ -565,34 +674,112 @@ export default function CheckoutPage() {
             </div>
           ))}
 
-          {/* 7-11 取貨門市 */}
-          <div style={{ marginBottom: 16 }}>
-            <label className="form-label">{t('checkout.store_section')} *</label>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-              <div>
-                <input
-                  className="form-input"
-                  type="text"
-                  value={form.store_name}
-                  onChange={e => set('store_name', e.target.value)}
-                  placeholder={t('checkout.store_name_placeholder')}
-                  style={errors.store_name ? { borderColor: 'var(--red)' } : {}}
-                />
-                {errors.store_name && <div className="form-error">{errors.store_name}</div>}
+          {/* 付款方式：店家沒設綠界金鑰或匯款帳號時 payOptions 為空，不顯示選擇區，
+              維持現行只有匯款一種流程 */}
+          {payOptions.length > 0 && (
+            <div className="form-group">
+              <label className="form-label">{lang === 'zh' ? '付款方式' : 'Payment method'} *</label>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {payOptions.map(opt => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    className={form.payment_method === opt.value ? 'btn-primary' : 'btn-outline'}
+                    onClick={() => set('payment_method', opt.value)}
+                    style={{ padding: '8px 14px', fontSize: 13 }}
+                  >
+                    {lang === 'zh' ? opt.zh : opt.en}
+                  </button>
+                ))}
               </div>
-              <div>
-                <input
-                  className="form-input"
-                  type="text"
-                  value={form.store_number}
-                  onChange={e => set('store_number', e.target.value)}
-                  placeholder={t('checkout.store_number_placeholder')}
-                  style={errors.store_number ? { borderColor: 'var(--red)' } : {}}
-                />
-                {errors.store_number && <div className="form-error">{errors.store_number}</div>}
+              {form.payment_method === 'cod' && (
+                <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>
+                  {lang === 'zh'
+                    ? `貨到付款金額上限 NT$${codMax.toLocaleString()}`
+                    : `Cash on delivery is limited to NT$${codMax.toLocaleString()}`}
+                </div>
+              )}
+              {errors.payment_method && <div className="form-error">{errors.payment_method}</div>}
+            </div>
+          )}
+
+          {/* 取貨門市：credit／cod 必須走綠界電子地圖選店（自動建立物流單需要綠界認得的門市代碼）；
+              匯款則維持現行手填店名/店號 —— 這是沒設綠界金鑰的店家唯一的取貨路徑，不可拿掉 */}
+          {form.payment_method === 'credit' || form.payment_method === 'cod' ? (
+            <div style={{ marginBottom: 16 }}>
+              <label className="form-label">{lang === 'zh' ? '取貨門市' : 'Pickup store'} *</label>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+                {CVS_SUBTYPES.map(sub => (
+                  <button
+                    key={sub}
+                    type="button"
+                    className={form.shipping_subtype === sub ? 'btn-primary' : 'btn-outline'}
+                    onClick={() => setShippingSubtype(sub)}
+                    style={{ padding: '6px 12px', fontSize: 13 }}
+                  >
+                    {CVS_SUBTYPE_LABELS[sub]?.[lang] || sub}
+                  </button>
+                ))}
+              </div>
+              {form.cvs_store_id ? (
+                <div style={{
+                  border: `1px solid ${errors.cvs_store_id ? 'var(--red)' : 'var(--border)'}`,
+                  borderRadius: 8, padding: '10px 12px', fontSize: 14,
+                }}>
+                  <div style={{ fontWeight: 600 }}>{form.cvs_store_name}</div>
+                  {form.cvs_address && (
+                    <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>{form.cvs_address}</div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={goPickStore}
+                    style={{
+                      marginTop: 8, background: 'none', border: 'none', padding: 0,
+                      color: 'var(--text-3)', fontSize: 12, textDecoration: 'underline', cursor: 'pointer',
+                    }}>
+                    {lang === 'zh' ? '重新選擇' : 'Choose again'}
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="btn-outline"
+                  onClick={goPickStore}
+                  style={errors.cvs_store_id ? { borderColor: 'var(--red)' } : {}}>
+                  {lang === 'zh' ? '選擇門市' : 'Choose a store'}
+                </button>
+              )}
+              {errors.cvs_store_id && <div className="form-error">{errors.cvs_store_id}</div>}
+            </div>
+          ) : (
+            <div style={{ marginBottom: 16 }}>
+              <label className="form-label">{t('checkout.store_section')} *</label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                  <input
+                    className="form-input"
+                    type="text"
+                    value={form.store_name}
+                    onChange={e => set('store_name', e.target.value)}
+                    placeholder={t('checkout.store_name_placeholder')}
+                    style={errors.store_name ? { borderColor: 'var(--red)' } : {}}
+                  />
+                  {errors.store_name && <div className="form-error">{errors.store_name}</div>}
+                </div>
+                <div>
+                  <input
+                    className="form-input"
+                    type="text"
+                    value={form.store_number}
+                    onChange={e => set('store_number', e.target.value)}
+                    placeholder={t('checkout.store_number_placeholder')}
+                    style={errors.store_number ? { borderColor: 'var(--red)' } : {}}
+                  />
+                  {errors.store_number && <div className="form-error">{errors.store_number}</div>}
+                </div>
               </div>
             </div>
-          </div>
+          )}
 
           <div className="form-group">
             <label className="form-label">{t('checkout.note')}</label>
