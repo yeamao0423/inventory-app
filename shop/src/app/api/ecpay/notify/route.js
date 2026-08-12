@@ -67,10 +67,14 @@ export async function POST(request) {
 
   if (!macValid) return text('0|CheckMacValue Error')
 
+  // TradeAmt 是綠界回報的實收金額（整數字串）——帶進去讓 apply_ecpay_payment 對帳。
+  // 缺值時傳 null，不可傳 0：0 會被當成「這筆實收 0 元」，反而誤觸不符警示。
+  const tradeAmt = data.TradeAmt != null && data.TradeAmt !== '' ? Number(data.TradeAmt) : null
   const { data: applied, error: applyError } = await supabaseAdmin.rpc('apply_ecpay_payment', {
     p_trade_no: tradeNo,
     p_rtn_code: data.RtnCode != null ? String(data.RtnCode) : null,
     p_payment_type: data.PaymentType || null,
+    p_trade_amt: Number.isFinite(tradeAmt) ? tradeAmt : null,
   })
 
   // 回 1|OK 等於告訴綠界「已收到，不必再送」——所以必須先確認錢真的記進去了。

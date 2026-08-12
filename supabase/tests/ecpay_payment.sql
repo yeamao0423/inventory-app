@@ -1814,4 +1814,90 @@ BEGIN
                             'C12 用 variant_price 1200');
 END $$;
 
+-- ══════════════════════════════════════════════════════════════
+-- I2：apply_ecpay_payment 與綠界回傳的實收金額（TradeAmt）對帳
+-- ══════════════════════════════════════════════════════════════
+
+-- ── 不帶 p_trade_amt → 行為與現在完全相同（回歸保護）──
+DO $$
+DECLARE v_oid bigint; v_paid numeric; v_pstatus text; v_alert text;
+BEGIN
+  v_oid := pg_temp.setup_order(1, 5, 1000);
+  PERFORM public.create_ecpay_transaction(v_oid, 'TESTTRADE013', 1000);
+
+  PERFORM public.apply_ecpay_payment('TESTTRADE013', '1', 'Credit_CreditCard');
+
+  SELECT paid_amount, payment_status, payment_alert INTO v_paid, v_pstatus, v_alert
+    FROM public.consumer_orders WHERE id = v_oid;
+  PERFORM pg_temp.assert_eq(v_paid, 1000::numeric, 'I2 不帶 p_trade_amt 時仍照 v_txn.amount 記帳');
+  PERFORM pg_temp.assert_eq(v_pstatus, '已付清', 'I2 不帶 p_trade_amt 時 payment_status 不受影響');
+  PERFORM pg_temp.assert_eq(v_alert, NULL::text, 'I2 不帶 p_trade_amt 時不標警示');
+END $$;
+
+-- ── 帶的金額與交易相符 → 正常記帳、無警示 ──
+DO $$
+DECLARE v_oid bigint; v_paid numeric; v_pstatus text; v_alert text;
+BEGIN
+  v_oid := pg_temp.setup_order(1, 5, 1000);
+  PERFORM public.create_ecpay_transaction(v_oid, 'TESTTRADE014', 1000);
+
+  PERFORM public.apply_ecpay_payment('TESTTRADE014', '1', 'Credit_CreditCard', 1000);
+
+  SELECT paid_amount, payment_status, payment_alert INTO v_paid, v_pstatus, v_alert
+    FROM public.consumer_orders WHERE id = v_oid;
+  PERFORM pg_temp.assert_eq(v_paid, 1000::numeric, 'I2 金額相符時正常記帳');
+  PERFORM pg_temp.assert_eq(v_pstatus, '已付清', 'I2 金額相符時 payment_status 已付清');
+  PERFORM pg_temp.assert_eq(v_alert, NULL::text, 'I2 金額相符時不標警示');
+END $$;
+
+-- ── 帶的金額少於交易金額（應收 1000、實收 1）→ 照實收記帳，標警示，不可誤標已付清 ──
+DO $$
+DECLARE v_oid bigint; v_paid numeric; v_pstatus text; v_alert text;
+BEGIN
+  v_oid := pg_temp.setup_order(1, 5, 1000);
+  PERFORM public.create_ecpay_transaction(v_oid, 'TESTTRADE015', 1000);
+
+  PERFORM public.apply_ecpay_payment('TESTTRADE015', '1', 'Credit_CreditCard', 1);
+
+  SELECT paid_amount, payment_status, payment_alert INTO v_paid, v_pstatus, v_alert
+    FROM public.consumer_orders WHERE id = v_oid;
+  PERFORM pg_temp.assert_eq(v_paid, 1::numeric, 'I2 實收遠低於應收時照實收金額記帳（不可假裝收滿）');
+  PERFORM pg_temp.assert_eq(v_pstatus <> '已付清', true, 'I2 實收不足時 payment_status 不可是已付清');
+  PERFORM pg_temp.assert_eq(v_alert IS NOT NULL, true, 'I2 金額不符要標警示');
+  PERFORM pg_temp.assert_eq(v_alert LIKE '%不符%', true, 'I2 警示內容講得出不符');
+END $$;
+
+-- ── 帶的金額多於交易金額 → 記實收金額並標警示，與既有溢收守衛不衝突 ──
+DO $$
+DECLARE v_oid bigint; v_paid numeric; v_pstatus text; v_alert text;
+BEGIN
+  v_oid := pg_temp.setup_order(1, 5, 1000);
+  PERFORM public.create_ecpay_transaction(v_oid, 'TESTTRADE016', 1000);
+
+  PERFORM public.apply_ecpay_payment('TESTTRADE016', '1', 'Credit_CreditCard', 1500);
+
+  SELECT paid_amount, payment_status, payment_alert INTO v_paid, v_pstatus, v_alert
+    FROM public.consumer_orders WHERE id = v_oid;
+  PERFORM pg_temp.assert_eq(v_paid, 1500::numeric, 'I2 實收高於應收時照實收金額記帳');
+  PERFORM pg_temp.assert_eq(v_pstatus, '待退款', 'I2 實收超過訂單總額時 payment_status 推導成待退款');
+  PERFORM pg_temp.assert_eq(v_alert IS NOT NULL, true, 'I2 金額不符要標警示');
+  PERFORM pg_temp.assert_eq(v_alert LIKE '%不符%', true, 'I2 警示內容講得出不符');
+END $$;
+
+-- ── 1 元內零頭 → 視為相符，不標警示 ──
+DO $$
+DECLARE v_oid bigint; v_paid numeric; v_pstatus text; v_alert text;
+BEGIN
+  v_oid := pg_temp.setup_order(1, 5, 1000);
+  PERFORM public.create_ecpay_transaction(v_oid, 'TESTTRADE017', 1000);
+
+  PERFORM public.apply_ecpay_payment('TESTTRADE017', '1', 'Credit_CreditCard', 999.5);
+
+  SELECT paid_amount, payment_status, payment_alert INTO v_paid, v_pstatus, v_alert
+    FROM public.consumer_orders WHERE id = v_oid;
+  PERFORM pg_temp.assert_eq(v_paid, 1000::numeric, 'I2 一元內零頭視為相符，仍用 v_txn.amount 記帳');
+  PERFORM pg_temp.assert_eq(v_pstatus, '已付清', 'I2 一元內零頭不影響 payment_status');
+  PERFORM pg_temp.assert_eq(v_alert, NULL::text, 'I2 一元內零頭不標警示');
+END $$;
+
 ROLLBACK;
