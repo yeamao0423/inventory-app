@@ -43,6 +43,7 @@ export default function SettingsPage() {
   const [ecpaySaved, setEcpaySaved] = useState(false)
   const [ecpayError, setEcpayError] = useState('')
   const [ecpayClearing, setEcpayClearing] = useState(false)
+  const [ecpayEnabled, setEcpayEnabled] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
@@ -70,6 +71,7 @@ export default function SettingsPage() {
       merchant_id: store.settings?.ecpay_merchant_id ?? '',
       logistics_merchant_id: store.settings?.ecpay_logistics_merchant_id ?? '',
     }))
+    setEcpayEnabled(!!store.settings?.ecpay_enabled)
   }, [store])
 
   useEffect(() => {
@@ -181,6 +183,23 @@ export default function SettingsPage() {
     setEcpaySaving(false)
   }
 
+  // 對外開放開關：與金鑰分開存（非機密，只是 settings 上的布林），
+  // 所以走自己的 RPC、按下就生效，不必等「儲存綠界設定」。
+  async function toggleEcpayEnabled(next) {
+    setEcpayError('')
+    setEcpayEnabled(next)                       // 樂觀更新，失敗再轉回來
+    const { error: err } = await supabase.rpc('set_store_ecpay_enabled', {
+      p_store_id: storeId,
+      p_enabled: next,
+    })
+    if (err) {
+      setEcpayEnabled(!next)
+      setEcpayError('切換失敗：' + err.message)
+      return
+    }
+    await refreshStore()
+  }
+
   // 清除整組綠界設定（p_clear=true）：獨立動作、需二次確認，因為清掉後結帳頁會立刻
   // 不再顯示綠界付款方式，正在收真錢的店家會直接斷金流
   async function clearEcpay() {
@@ -196,6 +215,10 @@ export default function SettingsPage() {
     })
     if (err) setEcpayError('清除失敗：' + err.message)
     else {
+      // 開放開關一併關掉：否則旗標會留著 true，日後重新填金鑰時會直接對外開放，
+      // 跳過「先自己走一遍再開」的緩衝
+      await supabase.rpc('set_store_ecpay_enabled', { p_store_id: storeId, p_enabled: false })
+      setEcpayEnabled(false)
       setEcpayForm({
         env: 'stage', merchant_id: '', hash_key: '', hash_iv: '',
         logistics_merchant_id: '', logistics_hash_key: '', logistics_hash_iv: '',
@@ -610,6 +633,29 @@ export default function SettingsPage() {
             </span>
           </div>
           <div className="card" style={{ padding: 16 }}>
+            {/* 對外開放開關：與金鑰分開。金鑰填好不等於想立刻開賣——先把物流單流程
+                走過一遍確認沒問題，再按這個開關讓消費者看到。按下即生效，不必等下面的儲存。 */}
+            <label style={{
+              display: 'flex', alignItems: 'flex-start', gap: 10, cursor: form.ecpay_set ? 'pointer' : 'not-allowed',
+              padding: 12, marginBottom: 14, borderRadius: 10,
+              background: ecpayEnabled ? 'var(--green-bg, #e8f7ee)' : 'var(--bg, #f7f7f5)',
+              opacity: form.ecpay_set ? 1 : .55,
+            }}>
+              <input type="checkbox"
+                checked={ecpayEnabled}
+                disabled={!form.ecpay_set}
+                onChange={e => toggleEcpayEnabled(e.target.checked)}
+                style={{ marginTop: 2 }} />
+              <span>
+                <b style={{ fontSize: 14 }}>在商城開放綠界付款</b>
+                <span style={{ display: 'block', fontSize: 12, color: 'var(--text-3)', marginTop: 3, lineHeight: 1.6 }}>
+                  {form.ecpay_set
+                    ? '關閉時結帳頁只出現銀行匯款，金鑰仍保留。要停售或排查問題時關掉它，不必清除金鑰。'
+                    : '要先在下面填好金鑰並儲存，才能開放。'}
+                </span>
+              </span>
+            </label>
+
             <div className="form-group" style={{ marginBottom: 10 }}>
               <label className="form-label">環境</label>
               <select className="form-input" value={ecpayForm.env} onChange={setEcpay('env')}>

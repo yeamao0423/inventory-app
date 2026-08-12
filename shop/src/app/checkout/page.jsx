@@ -170,13 +170,33 @@ export default function CheckoutPage() {
   // 而且三家店的 remit_account 從來沒人設定過（都是 null）——拿它當開關會直接
   // 把匯款關掉，等於拔掉店家原本唯一的收款管道。remit_account 只決定「訂單頁與
   // 確認信要不要顯示匯款帳號」，不決定這個選項存不存在。
-  const ecpayReady = !!store?.settings?.ecpay_set
+  // 兩個條件都要成立：金鑰設好了（ecpay_set），而且店家在後台按下開關對外開放
+  // （ecpay_enabled）。分開的理由是設好金鑰不等於想立刻開賣——店家會先把物流單
+  // 流程走過一遍確認沒問題才對消費者開。
+  const ecpayReady = !!store?.settings?.ecpay_set && !!store?.settings?.ecpay_enabled
   const logisticsReady = ecpayReady && !!store?.settings?.ecpay_logistics_set
   const codMax = Number(store?.settings?.ecpay_cod_max) || 20000
+  // 每個選項都帶一句說明：付款方式的差異在「什麼時候付、付給誰」，
+  // 只給標籤的話消費者得自己猜，這是結帳頁棄單的常見原因。
   const payOptions = [
-    ...(ecpayReady ? [{ value: 'credit', zh: '信用卡線上付款', en: 'Credit card' }] : []),
-    ...(logisticsReady ? [{ value: 'cod', zh: '貨到付款', en: 'Cash on delivery' }] : []),
-    { value: 'remittance', zh: '銀行匯款', en: 'Bank transfer' },
+    ...(ecpayReady ? [{
+      value: 'credit',
+      zh: '信用卡線上付款', en: 'Credit card',
+      descZh: '送出後前往綠界刷卡，付款完成訂單才成立',
+      descEn: 'Pay by card via ECPay after submitting',
+    }] : []),
+    ...(logisticsReady ? [{
+      value: 'cod',
+      zh: '貨到付款', en: 'Cash on delivery',
+      descZh: `到超商取貨時付現，金額上限 NT$${codMax.toLocaleString()}`,
+      descEn: `Pay cash at pickup, up to NT$${codMax.toLocaleString()}`,
+    }] : []),
+    {
+      value: 'remittance',
+      zh: '銀行匯款', en: 'Bank transfer',
+      descZh: '下單後匯款，並回報帳號末五碼',
+      descEn: 'Transfer after ordering, then report the last 5 digits',
+    },
   ]
 
   // 電子地圖選店只有在物流就緒、且目前選的付款方式是 credit／cod 時才可用。
@@ -705,26 +725,28 @@ export default function CheckoutPage() {
           {payOptions.length > 1 && (
             <div className="form-group">
               <label className="form-label">{lang === 'zh' ? '付款方式' : 'Payment method'} *</label>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                {payOptions.map(opt => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    className={form.payment_method === opt.value ? 'btn-primary' : 'btn-outline'}
-                    onClick={() => set('payment_method', opt.value)}
-                    style={{ padding: '8px 14px', fontSize: 13 }}
-                  >
-                    {lang === 'zh' ? opt.zh : opt.en}
-                  </button>
-                ))}
+              <div className="opt-list" role="radiogroup"
+                   aria-label={lang === 'zh' ? '付款方式' : 'Payment method'}>
+                {payOptions.map(opt => {
+                  const on = form.payment_method === opt.value
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={on}
+                      className="opt-row"
+                      onClick={() => set('payment_method', opt.value)}
+                    >
+                      <span className="opt-mark" aria-hidden="true" />
+                      <span className="opt-body">
+                        <span className="opt-title">{lang === 'zh' ? opt.zh : opt.en}</span>
+                        <span className="opt-desc">{lang === 'zh' ? opt.descZh : opt.descEn}</span>
+                      </span>
+                    </button>
+                  )
+                })}
               </div>
-              {form.payment_method === 'cod' && (
-                <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>
-                  {lang === 'zh'
-                    ? `貨到付款金額上限 NT$${codMax.toLocaleString()}`
-                    : `Cash on delivery is limited to NT$${codMax.toLocaleString()}`}
-                </div>
-              )}
               {errors.payment_method && <div className="form-error">{errors.payment_method}</div>}
             </div>
           )}
@@ -735,36 +757,29 @@ export default function CheckoutPage() {
           {cvsPickupAvailable ? (
             <div style={{ marginBottom: 16 }}>
               <label className="form-label">{lang === 'zh' ? '取貨門市' : 'Pickup store'} *</label>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+              <div className="cvs-grid" role="radiogroup" style={{ marginBottom: 8 }}
+                   aria-label={lang === 'zh' ? '超商通路' : 'Convenience store chain'}>
                 {CVS_SUBTYPES.map(sub => (
                   <button
                     key={sub}
                     type="button"
-                    className={form.shipping_subtype === sub ? 'btn-primary' : 'btn-outline'}
+                    role="radio"
+                    aria-checked={form.shipping_subtype === sub}
+                    className="cvs-chip"
                     onClick={() => setShippingSubtype(sub)}
-                    style={{ padding: '6px 12px', fontSize: 13 }}
                   >
                     {CVS_SUBTYPE_LABELS[sub]?.[lang] || sub}
                   </button>
                 ))}
               </div>
               {form.cvs_store_id ? (
-                <div style={{
-                  border: `1px solid ${errors.cvs_store_id ? 'var(--red)' : 'var(--border)'}`,
-                  borderRadius: 8, padding: '10px 12px', fontSize: 14,
-                }}>
-                  <div style={{ fontWeight: 600 }}>{form.cvs_store_name}</div>
-                  {form.cvs_address && (
-                    <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>{form.cvs_address}</div>
-                  )}
-                  <button
-                    type="button"
-                    onClick={goPickStore}
-                    style={{
-                      marginTop: 8, background: 'none', border: 'none', padding: 0,
-                      color: 'var(--text-3)', fontSize: 12, textDecoration: 'underline', cursor: 'pointer',
-                    }}>
-                    {lang === 'zh' ? '重新選擇' : 'Choose again'}
+                <div className="store-picked">
+                  <span className="opt-body" style={{ flex: 1 }}>
+                    <span className="sp-name">{form.cvs_store_name}</span>
+                    {form.cvs_address && <span className="sp-addr">{form.cvs_address}</span>}
+                  </span>
+                  <button type="button" className="store-change" onClick={goPickStore}>
+                    {lang === 'zh' ? '更換' : 'Change'}
                   </button>
                 </div>
               ) : (
@@ -772,8 +787,8 @@ export default function CheckoutPage() {
                   type="button"
                   className="btn-outline"
                   onClick={goPickStore}
-                  style={errors.cvs_store_id ? { borderColor: 'var(--red)' } : {}}>
-                  {lang === 'zh' ? '選擇門市' : 'Choose a store'}
+                  style={{ width: '100%', ...(errors.cvs_store_id ? { borderColor: 'var(--red)' } : {}) }}>
+                  {lang === 'zh' ? '選擇取貨門市' : 'Choose a pickup store'}
                 </button>
               )}
               {errors.cvs_store_id && <div className="form-error">{errors.cvs_store_id}</div>}
