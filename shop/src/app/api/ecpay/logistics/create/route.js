@@ -5,6 +5,7 @@
 // 回傳並保存 AllPayLogisticsID / CVSPaymentNo / CVSValidationNo。
 // 建單成功不改訂單 status——狀態機只在取件完成時（logistics/notify）推「完成」。
 import { NextResponse } from 'next/server'
+import { createClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from '../../../../../lib/supabase-admin'
 import { loadOrderForEcpay, callbackBaseUrl } from '../../../../../lib/ecpayStore'
 import {
@@ -12,17 +13,21 @@ import {
   formatEcpayDate,
   genLogisticsTradeNo,
   parseLogisticsResponse,
+  logisticsUnavailableMessage,
 } from '../../../../../lib/ecpay'
 
 export const dynamic = 'force-dynamic'
 
-// 後台（Vite，不同網域）會跨域呼叫這支；此端點不吐機密，只吐物流編號，
-// 沒設定 ADMIN_ORIGIN 就開放 *。
+// 後台（Vite，不同網域）會跨域呼叫這支；呼叫端必須帶 Authorization: Bearer <後台 JWT>，
+// 所以 preflight 要放行 Authorization 標頭。
 const corsHeaders = {
   'Access-Control-Allow-Origin': process.env.ADMIN_ORIGIN || '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Authorization, Content-Type',
 }
+
+const SUPA_URL = process.env.NEXT_PUBLIC_SUPABASE_URL
+const ANON = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
 export async function OPTIONS() {
   return NextResponse.json(null, { headers: corsHeaders })
@@ -32,8 +37,38 @@ function fail(msg, status = 400) {
   return NextResponse.json({ ok: false, error: msg }, { status, headers: corsHeaders })
 }
 
+// 後台身分驗證：用呼叫者的 Supabase JWT 建 anon client（同 send-status-email 的 P0-1 做法）。
+// 回 { sb, user } 或 { error, status }。
+async function authCaller(request) {
+  const jwt = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '')
+  if (!jwt) return { error: '未授權（缺少登入憑證）', status: 401 }
+  if (!SUPA_URL || !ANON) return { error: '伺服器未設定（缺少 Supabase 連線設定）', status: 500 }
+  const sb = createClient(SUPA_URL, ANON, {
+    global: { headers: { Authorization: `Bearer ${jwt}` } },
+    auth: { persistSession: false },
+  })
+  const { data } = await sb.auth.getUser()
+  const user = data?.user
+  if (!user) return { error: '未授權（登入憑證無效）', status: 401 }
+  return { sb, user }
+}
+
+// 角色驗證：store_id 一律取自 DB 上的訂單，不信任前端傳入的任何店家識別。
+async function hasStoreRole(sb, user, storeId) {
+  const { data } = await sb
+    .from('user_store_roles').select('role')
+    .eq('user_id', user.id).eq('store_id', storeId)
+    .in('role', ['super_admin', 'admin', 'editor'])
+    .maybeSingle()
+  return !!data
+}
+
 export async function POST(request) {
   if (!supabaseAdmin) return fail('伺服器未設定（缺少 service key）', 500)
+
+  // 先驗身分再碰訂單：這支會真的向綠界建單並扣店家餘額，且回應含寄件編號與驗證碼。
+  const { sb, user, error: authError, status: authStatus } = await authCaller(request)
+  if (authError) return fail(authError, authStatus)
 
   let orderId
   try {
@@ -43,11 +78,26 @@ export async function POST(request) {
   }
   if (!orderId) return fail('請帶入 orderId')
 
-  const { order, cfg, error } = await loadOrderForEcpay(
-    orderId,
-    'id, store_id, total_amount, payment_method, shipping_subtype, cvs_store_id, customer_name, phone, email, items, allpay_logistics_id'
-  )
+  let order, cfg, error
+  try {
+    ({ order, cfg, error } = await loadOrderForEcpay(
+      orderId,
+      'id, store_id, total_amount, payment_method, shipping_subtype, cvs_store_id, customer_name, phone, email, items, allpay_logistics_id'
+    ))
+  } catch (e) {
+    // makeEcpayConfig 在正式環境「金流」金鑰不完整時會 throw，寧可失敗也不要用公開測試金鑰
+    return fail(e.message, 500)
+  }
   if (error) return fail(error)
+
+  if (!(await hasStoreRole(sb, user, order.store_id))) {
+    return fail('無此店家的操作權限', 403)
+  }
+
+  // 物流金鑰是延後檢查的（金流與物流在綠界分開申請，只有金流的店照樣能刷卡），
+  // 但走到這支就非有不可——沒有就給店家一句看得懂的話，別讓它爛在 CheckMacValue。
+  const logisticsBlocked = logisticsUnavailableMessage(cfg)
+  if (logisticsBlocked) return fail(logisticsBlocked)
   if (order.allpay_logistics_id) return fail('此訂單已建立物流單', 409)
   if (!order.shipping_subtype || !order.cvs_store_id) return fail('訂單缺少超商門市資訊')
   if (!cfg.senderName || !cfg.senderPhone) {

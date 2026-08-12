@@ -70,15 +70,23 @@ export default function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, c
     logistics_status_msg: o.logistics_status_msg || null,
   })
 
+  // 物流兩支端點都需驗證後台身分＋店家角色，呼叫時要帶目前登入者的 Supabase JWT
+  async function getAccessToken() {
+    const { data: { session } } = await supabase.auth.getSession()
+    return session?.access_token || null
+  }
+
   async function handleCreateLogistics() {
     if (!o.cvs_store_id || logiInfo.allpay_logistics_id) return
     // 這一按會真的跟綠界要物流單，物流費從綠界帳戶餘額扣除，不可誤按
     if (!window.confirm('確定向綠界建立物流單？建立後物流費將從綠界帳戶餘額扣除。')) return
     setLogiBusy(true)
     try {
+      const accessToken = await getAccessToken()
+      if (!accessToken) { alert('登入狀態已失效，請重新登入後再試'); setLogiBusy(false); return }
       const res = await fetch(`${SHOP_URL}/api/ecpay/logistics/create`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
         body: JSON.stringify({ orderId: o.id }),
       })
       const data = await res.json()
@@ -98,9 +106,35 @@ export default function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, c
     setLogiBusy(false)
   }
 
-  // 印託運單一定要開新分頁，用 iframe 會被綠界的導轉頁擋下
-  function handlePrintLabel() {
-    window.open(`${SHOP_URL}/api/ecpay/logistics/print/${o.id}`, '_blank')
+  // 印託運單一定要開新分頁，用 iframe 會被綠界的導轉頁擋下。
+  // 端點需驗證後台身分＋店家角色（回應的 hidden input 就是寄件編號與驗證碼），
+  // GET 帶不了 Authorization，所以改成 fetch POST 拿 HTML，再寫進自己開的新分頁——
+  // 那個分頁仍是頂層視窗（不是 iframe），綠界的導轉阻擋不會觸發。
+  // 新分頁必須在點擊當下同步開啟，等 fetch 回來才 open 會被瀏覽器的彈窗阻擋擋掉。
+  async function handlePrintLabel() {
+    const win = window.open('', '_blank')
+    if (!win) { alert('瀏覽器擋下了新分頁，請允許此網站開啟彈出視窗後再試'); return }
+    try {
+      const accessToken = await getAccessToken()
+      if (!accessToken) { win.close(); alert('登入狀態已失效，請重新登入後再試'); return }
+      const res = await fetch(`${SHOP_URL}/api/ecpay/logistics/print/${o.id}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}` },
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        win.close()
+        alert('無法列印：' + (data.error || `HTTP ${res.status}`))
+        return
+      }
+      const html = await res.text()
+      win.document.open()
+      win.document.write(html) // 綠界的自動送出表單，寫進去就會自己 POST 出去
+      win.document.close()
+    } catch (e) {
+      win.close()
+      alert('呼叫失敗：' + e.message)
+    }
   }
 
   // 優惠券退還

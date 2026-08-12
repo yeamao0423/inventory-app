@@ -53,12 +53,18 @@ export default function CheckoutPage() {
     getStore().then(setStore).catch(() => {})
   }, [])
 
+  // 從草稿還原過付款方式的標記。下面 [store] 那個 effect 會在 store 載入後套預設值，
+  // 而 getStore() 是 promise，一定晚於本 effect 執行——沒有這個標記的話，客人選了
+  // 「貨到付款」去挑門市、回來會被靜靜改成信用卡，一按送出就被導去刷卡。
+  const paymentRestoredRef = useRef(false)
+
   // 從綠界電子地圖選完店導回：先還原離開前存的草稿，再套上選到的門市資訊。
   // 一次性：讀完即清 sessionStorage，也把 query 清掉避免重新整理時重跑。
   useEffect(() => {
     const cvs = cvsFromSearchParams(new URLSearchParams(window.location.search))
     if (!cvs) return
     const draft = readCheckoutDraft(window.sessionStorage)
+    if (draft?.payment_method) paymentRestoredRef.current = true
     setForm(f => ({
       ...f, ...(draft || {}),
       cvs_store_id: cvs.cvs_store_id,
@@ -157,20 +163,36 @@ export default function CheckoutPage() {
   // 沒設綠界金鑰的店家（ecpayReady=false）完全不出現信用卡／貨到付款選項，
   // 只剩現行的匯款流程；沒設匯款帳號則不出現匯款選項。兩者都沒設時
   // payOptions 為空陣列，UI 不顯示付款方式選擇區，維持現行匯款流程，不可讓消費者無法結帳。
+  //
+  // 金流與物流是分開申請的：只設了金流、還沒設物流的店家（logisticsReady=false）
+  // 不能出現「貨到付款」（COD 需要物流建單），也不能走電子地圖選店（見下面的
+  // cvsPickupAvailable）——但信用卡本身不依賴物流，仍然開放，取貨改回手填店名/店號。
   const ecpayReady = !!store?.settings?.ecpay_set
+  const logisticsReady = ecpayReady && !!store?.settings?.ecpay_logistics_set
   const codMax = Number(store?.settings?.ecpay_cod_max) || 20000
   const remitConfigured = !!store?.settings?.remit_account
   const payOptions = [
     ...(ecpayReady ? [{ value: 'credit', zh: '信用卡線上付款', en: 'Credit card' }] : []),
-    ...(ecpayReady ? [{ value: 'cod', zh: '貨到付款', en: 'Cash on delivery' }] : []),
+    ...(logisticsReady ? [{ value: 'cod', zh: '貨到付款', en: 'Cash on delivery' }] : []),
     ...(remitConfigured ? [{ value: 'remittance', zh: '銀行匯款', en: 'Bank transfer' }] : []),
   ]
 
+  // 電子地圖選店只有在物流就緒、且目前選的付款方式是 credit／cod 時才可用。
+  // 物流沒就緒時即使選了信用卡，也視同沒有電子地圖，取貨走下面的手填 fallback。
+  const cvsPickupAvailable = logisticsReady && (form.payment_method === 'credit' || form.payment_method === 'cod')
+
   // store 設定載入後才知道有哪些付款選項，套一次預設值。只在 store 這個
   // 參照第一次從 null 變成物件時跑一次，不會蓋掉使用者之後自己選的付款方式。
+  //
+  // 例外：從電子地圖選店回來時，草稿還原的付款方式優先，這裡不可覆寫（見 paymentRestoredRef）。
+  // 但還原值若不在這家店的可選項內（例如店家中途關掉綠界），仍要修正成合法值，
+  // 否則畫面上沒有任何選項被選中、送出後還會走到店家沒開的付款方式。
   useEffect(() => {
     if (!store) return
-    setForm(f => ({ ...f, payment_method: payOptions[0]?.value ?? 'remittance' }))
+    setForm(f => {
+      if (paymentRestoredRef.current && payOptions.some(o => o.value === f.payment_method)) return f
+      return { ...f, payment_method: payOptions[0]?.value ?? 'remittance' }
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store])
 
@@ -309,14 +331,15 @@ export default function CheckoutPage() {
     if (!form.email.trim()) e.email = t('checkout.required')
     if (!form.line_id.trim()) e.line_id = t('checkout.required')
 
-    // 走綠界選店（credit／cod）：門市必填，手填店名/店號不必填
-    // 沒走綠界（remittance 且沒選門市）：維持現行手填店名/店號必填 —— 這是沒設綠界金鑰
-    // 的店家唯一的取貨路徑，不可拿掉
-    if (form.payment_method === 'remittance' && !form.cvs_store_id) {
+    // 走綠界電子地圖選店（cvsPickupAvailable，需物流就緒＋payment_method 為 credit／cod）：
+    // 門市必填，手填店名/店號不必填。
+    // 沒走電子地圖（remittance，或物流未就緒時的 credit）：維持現行手填店名/店號必填 ——
+    // 這是沒設綠界物流金鑰的店家唯一的取貨路徑，不可拿掉
+    if (!cvsPickupAvailable && !form.cvs_store_id) {
       if (!form.store_name.trim()) e.store_name = t('checkout.required')
       if (!form.store_number.trim()) e.store_number = t('checkout.required')
     }
-    if ((form.payment_method === 'credit' || form.payment_method === 'cod') && !form.cvs_store_id) {
+    if (cvsPickupAvailable && !form.cvs_store_id) {
       e.cvs_store_id = lang === 'zh' ? '請選擇取貨門市' : 'Please choose a pickup store'
     }
 
@@ -493,9 +516,10 @@ export default function CheckoutPage() {
 
     clearCart()
     if (form.payment_method === 'credit') {
-      // 信用卡：導去綠界付款頁。用 DB 的數字 id（/api/ecpay/credit/[orderId] 用它查訂單），
-      // 不是上面用來查詢完成頁的 public_token —— 兩支路由吃的鍵不一樣。
-      window.location.href = `/api/ecpay/credit/${placeResult.order_id}`
+      // 信用卡：導去綠界付款頁。路徑是 DB 的數字 id，但一定要帶 ?t=<public_token>
+      // 當持有證明——付款路由是用 token 查訂單的，沒有 token 一律拒絕（防止用可枚舉
+      // 的流水號換到不可猜的 token）。
+      window.location.href = `/api/ecpay/credit/${placeResult.order_id}?t=${orderToken}`
     } else {
       router.push(`/order/${orderToken}`)
     }
@@ -703,9 +727,10 @@ export default function CheckoutPage() {
             </div>
           )}
 
-          {/* 取貨門市：credit／cod 必須走綠界電子地圖選店（自動建立物流單需要綠界認得的門市代碼）；
-              匯款則維持現行手填店名/店號 —— 這是沒設綠界金鑰的店家唯一的取貨路徑，不可拿掉 */}
-          {form.payment_method === 'credit' || form.payment_method === 'cod' ? (
+          {/* 取貨門市：物流就緒時，credit／cod 走綠界電子地圖選店（自動建立物流單需要綠界
+              認得的門市代碼）；物流未就緒（只設了金流）或走匯款，則維持現行手填店名/店號 ——
+              這是沒設綠界物流金鑰的店家唯一的取貨路徑，不可拿掉 */}
+          {cvsPickupAvailable ? (
             <div style={{ marginBottom: 16 }}>
               <label className="form-label">{lang === 'zh' ? '取貨門市' : 'Pickup store'} *</label>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>

@@ -6,6 +6,8 @@ import {
   genMerchantTradeNo,
   genLogisticsTradeNo,
   logisticsMilestone,
+  logisticsMilestoneDetail,
+  logisticsUnavailableMessage,
   parseLogisticsResponse,
   buildAutoSubmitForm,
   getPrintUrl,
@@ -135,6 +137,105 @@ describe('makeEcpayConfig', () => {
   it('env 是未知值時當成 stage（避免誤打正式環境）', () => {
     expect(makeEcpayConfig({ env: 'PROD' }).env).toBe('stage')
   })
+
+  // I5：正式環境若讓金鑰留白 fallback 到綠界「公開」測試金鑰，任何人都能自算
+  // CheckMacValue 偽造付款成功通知白拿商品——所以 production 一律不 fallback。
+  // 但檢查要依用途分組：金流缺就 throw（config 的核心），物流缺只標記不可用
+  // （綠界金流與物流分開申請，「只申請金流」是合理狀態，不該連刷卡都被擋）。
+  describe('env=production 缺金鑰的處理（絕不 fallback 到公開測試金鑰）', () => {
+    const FULL = {
+      env: 'production',
+      merchant_id: '3000001', hash_key: 'K1', hash_iv: 'I1',
+      logistics_merchant_id: '3000002', logistics_hash_key: 'K2', logistics_hash_iv: 'I2',
+    }
+    const PAYMENT_ONLY = {
+      env: 'production',
+      merchant_id: '3000001', hash_key: 'K1', hash_iv: 'I1',
+    }
+
+    it.each([
+      ['merchant_id', '金流特店編號'],
+      ['hash_key', '金流 HashKey'],
+      ['hash_iv', '金流 HashIV'],
+    ])('缺金流的 %s 就 throw，錯誤訊息指出缺哪一欄', (col, label) => {
+      expect(() => makeEcpayConfig({ ...FULL, [col]: '' })).toThrow(label)
+      expect(() => makeEcpayConfig({ ...FULL, [col]: null })).toThrow(label)
+    })
+
+    it('金流三欄全缺時一次列出所有缺漏欄位', () => {
+      expect(() => makeEcpayConfig({ env: 'production' })).toThrow(/金流特店編號.*金流 HashIV/)
+    })
+
+    it.each([
+      ['logistics_merchant_id', '物流特店編號'],
+      ['logistics_hash_key', '物流 HashKey'],
+      ['logistics_hash_iv', '物流 HashIV'],
+    ])('缺物流的 %s 不 throw，但判定為物流不可用', (col, label) => {
+      const secrets = { ...FULL, [col]: '' }
+      expect(() => makeEcpayConfig(secrets)).not.toThrow()
+      const cfg = makeEcpayConfig(secrets)
+      expect(cfg.logisticsReady).toBe(false)
+      expect(cfg.logisticsMissing).toContain(label)
+      expect(logisticsUnavailableMessage(cfg)).toContain(label)
+      // 金流那半邊完全不受影響——只申請金流的店照樣能刷卡
+      expect(cfg.merchantId).toBe('3000001')
+      expect(cfg.hashKey).toBe('K1')
+    })
+
+    it('只有金流金鑰：config 建得出來，物流欄位留 null 且標記不可用', () => {
+      const cfg = makeEcpayConfig(PAYMENT_ONLY)
+      expect(cfg.env).toBe('production')
+      expect(cfg.hashKey).toBe('K1')
+      expect(cfg.logisticsReady).toBe(false)
+      expect(cfg.logisticsMerchantId).toBe(null)
+      expect(cfg.logisticsHashKey).toBe(null)
+      expect(cfg.logisticsHashIV).toBe(null)
+      expect(cfg.logisticsMissing).toEqual(['物流特店編號', '物流 HashKey', '物流 HashIV'])
+    })
+
+    it('金鑰齊全就正常組出設定（不 throw），物流可用', () => {
+      expect(() => makeEcpayConfig(FULL)).not.toThrow()
+      const cfg = makeEcpayConfig(FULL)
+      expect(cfg.hashKey).toBe('K1')
+      expect(cfg.logisticsReady).toBe(true)
+      expect(logisticsUnavailableMessage(cfg)).toBe(null)
+    })
+
+    it('production 下絕不會出現公開測試金鑰的值', () => {
+      const cfg = makeEcpayConfig(FULL)
+      expect(cfg.merchantId).not.toBe('2000132')
+      expect(cfg.hashKey).not.toBe('5294y06JbISpM5x9')
+      expect(cfg.hashIV).not.toBe('v77hoKGq4kWxNNIS')
+      expect(cfg.logisticsMerchantId).not.toBe('2000933')
+      expect(cfg.logisticsHashKey).not.toBe('XBERn1YOvpM9nfZc')
+      expect(cfg.logisticsHashIV).not.toBe('h1ONHk4P4yqbl5LK')
+    })
+
+    it('物流金鑰缺漏時也不會退回公開測試金鑰', () => {
+      const cfg = makeEcpayConfig(PAYMENT_ONLY)
+      expect(cfg.logisticsMerchantId).not.toBe('2000933')
+      expect(cfg.logisticsHashKey).not.toBe('XBERn1YOvpM9nfZc')
+      expect(cfg.logisticsHashIV).not.toBe('h1ONHk4P4yqbl5LK')
+    })
+
+    it('stage 仍允許 fallback（測試金鑰的正當用途），且物流視為可用', () => {
+      const cfg = makeEcpayConfig({ env: 'stage', merchant_id: '2000132' })
+      expect(cfg.hashKey).toBe('5294y06JbISpM5x9')
+      expect(cfg.logisticsHashKey).toBe('XBERn1YOvpM9nfZc')
+      expect(cfg.logisticsReady).toBe(true)
+      expect(logisticsUnavailableMessage(cfg)).toBe(null)
+    })
+  })
+})
+
+describe('logisticsUnavailableMessage', () => {
+  it('沒有 cfg（該店根本沒設綠界）也回可讀訊息', () => {
+    expect(logisticsUnavailableMessage(null)).toContain('尚未設定綠界金鑰')
+  })
+
+  it('物流可用時回 null', () => {
+    expect(logisticsUnavailableMessage(makeEcpayConfig(null))).toBe(null)
+  })
 })
 
 describe('genMerchantTradeNo', () => {
@@ -175,6 +276,36 @@ describe('logisticsMilestone', () => {
   it('都對不上時回 null，不要亂猜', () => {
     expect(logisticsMilestone('9999', '系統處理中')).toBe(null)
     expect(logisticsMilestone(null)).toBe(null)
+  })
+})
+
+// 為什麼要分 source：關鍵字是猜的（萊爾富／OK 沒有官方代碼表）。一則「退貨」通知的訊息
+// 只要含「取件成功」字樣就會被判成 picked，貨到付款訂單就會被自動記成已付清——
+// 貨退回來了、系統卻認為錢收到了。呼叫端要靠 source 決定「猜的就不要自動動錢」。
+describe('logisticsMilestoneDetail', () => {
+  it('官方代碼判出來的 source 是 code', () => {
+    expect(logisticsMilestoneDetail('2073')).toEqual({ milestone: 'arrived', source: 'code' })
+    expect(logisticsMilestoneDetail('2067')).toEqual({ milestone: 'picked', source: 'code' })
+    expect(logisticsMilestoneDetail('2074')).toEqual({ milestone: 'returned', source: 'code' })
+    expect(logisticsMilestoneDetail('3018')).toEqual({ milestone: 'arrived', source: 'code' })
+    expect(logisticsMilestoneDetail('3022')).toEqual({ milestone: 'picked', source: 'code' })
+    expect(logisticsMilestoneDetail('3020')).toEqual({ milestone: 'returned', source: 'code' })
+  })
+
+  it('關鍵字命中的 source 是 keyword', () => {
+    expect(logisticsMilestoneDetail('9999', '消費者取件成功')).toEqual({ milestone: 'picked', source: 'keyword' })
+    expect(logisticsMilestoneDetail('9999', '商品已送達門市')).toEqual({ milestone: 'arrived', source: 'keyword' })
+    expect(logisticsMilestoneDetail('9999', '逾期未取退回')).toEqual({ milestone: 'returned', source: 'keyword' })
+  })
+
+  it('官方代碼優先於關鍵字（代碼說退回、訊息寫取件成功時以代碼為準）', () => {
+    expect(logisticsMilestoneDetail('2074', '退貨（原取件成功後退回）'))
+      .toEqual({ milestone: 'returned', source: 'code' })
+  })
+
+  it('都不中時 milestone 與 source 都是 null', () => {
+    expect(logisticsMilestoneDetail('9999', '系統處理中')).toEqual({ milestone: null, source: null })
+    expect(logisticsMilestoneDetail(null)).toEqual({ milestone: null, source: null })
   })
 })
 

@@ -215,7 +215,8 @@ export default function OrderSuccessPage() {
               ? '可能是刷卡中斷未完成，或加購後產生差額，點下方按鈕繼續付款。'
               : 'Payment may have been interrupted, or a balance is due after adding items. Continue below.'}
           </div>
-          <a href={`/api/ecpay/credit/${order.id}`} className="btn-primary" style={{
+          {/* 付款路由要求 ?t=<public_token> 當持有證明；本頁的路由參數就是那個 token */}
+          <a href={`/api/ecpay/credit/${order.id}?t=${token}`} className="btn-primary" style={{
             display: 'block', textAlign: 'center', padding: '11px 0', borderRadius: 10,
             fontSize: 14, fontWeight: 600,
           }}>

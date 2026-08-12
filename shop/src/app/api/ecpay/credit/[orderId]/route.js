@@ -1,6 +1,11 @@
 // 信用卡：載入訂單 → 組綠界 AIO 參數 → 回自動送出表單導轉到綠界付款頁
+//
+// 持有證明：這支是「消費者」用的（沒有員工 JWT 可驗），而路徑上的數字 id 可枚舉，
+// 所以一律要求 ?t=<public_token>，且**用 token 查訂單**（不信任路徑上的 id，只拿它做
+// 一致性比對）。沒有 token 就沒有任何回應——避免用可枚舉的流水號換到不可猜的 token
+// （token 一旦外流即可讀 get_consumer_order 的 PII，並可呼叫 append_to_order 竄改訂單）。
 import { supabaseAdmin } from '../../../../../lib/supabase-admin'
-import { loadOrderForEcpay, callbackBaseUrl } from '../../../../../lib/ecpayStore'
+import { getEcpayConfigForStore, callbackBaseUrl } from '../../../../../lib/ecpayStore'
 import {
   genPaymentCheckMac,
   formatEcpayDate,
@@ -17,12 +22,33 @@ function htmlError(msg) {
   )
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 export async function GET(request, { params }) {
-  const { order, cfg, error } = await loadOrderForEcpay(
-    params.orderId,
-    'id, store_id, total_amount, paid_amount, payment_method, payment_status, items, public_token'
-  )
-  if (error) return htmlError(error)
+  if (!supabaseAdmin) return htmlError('伺服器未設定（缺少 service key）')
+
+  const token = new URL(request.url).searchParams.get('t') || ''
+  // 格式先擋掉，避免把亂字串丟給 uuid 欄位查詢
+  if (!UUID_RE.test(token)) return htmlError('付款連結不完整或已失效，請從訂單頁重新進入')
+
+  // 以 public_token 查訂單（唯一的持有證明），路徑上的數字 id 只做一致性比對
+  const { data: order, error: qErr } = await supabaseAdmin
+    .from('consumer_orders')
+    .select('id, store_id, total_amount, paid_amount, payment_method, payment_status, items, public_token')
+    .eq('public_token', token)
+    .maybeSingle()
+  if (qErr || !order) return htmlError('找不到訂單')
+  if (String(order.id) !== String(params.orderId)) return htmlError('找不到訂單')
+
+  let cfg
+  try {
+    cfg = await getEcpayConfigForStore(order.store_id)
+  } catch (e) {
+    // makeEcpayConfig 在正式環境金鑰不完整時會 throw，寧可失敗也不要用公開測試金鑰
+    return htmlError(e.message)
+  }
+  if (!cfg) return htmlError('此店家尚未設定綠界金鑰')
+
   if (order.payment_method !== 'credit') return htmlError('此訂單非信用卡付款')
 
   // 未付餘額，而非訂單總額——支援棄單重付與加購補差額（一張訂單多筆交易）
@@ -57,11 +83,10 @@ export async function GET(request, { params }) {
     ItemName: itemName,
     ReturnURL: `${callbackBase}/api/ecpay/notify`,
     OrderResultURL: `${origin}/api/ecpay/result`,
-    // 此路由（/api/ecpay/credit/<id>）自己吃的鍵是數字 id，但消費者訂單頁
-    // /order/<token> 吃的是不可猜的 public_token（uuid，見 20250031 migration）
-    // ——兩支路由的鍵不一樣，別搞混。public_token 理論上不會是 null（DB not
-    // null），但舊資料萬一有缺，退回導向首頁而非組出一個壞掉的網址。
-    ClientBackURL: order.public_token ? `${origin}/order/${order.public_token}` : `${origin}/`,
+    // 導回消費者訂單頁 /order/<token>（uuid，見 20250031 migration）。
+    // 這裡的 token 是呼叫端本來就持有、也是本路由用來查訂單的那一個，
+    // 所以寫進表單不構成外洩（沒有 token 根本進不來這支路由）。
+    ClientBackURL: `${origin}/order/${token}`,
     ChoosePayment: 'Credit',
     EncryptType: 1,
     NeedExtraPaidInfo: 'Y',

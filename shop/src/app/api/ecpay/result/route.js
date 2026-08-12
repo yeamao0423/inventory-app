@@ -46,7 +46,30 @@ async function resolve(request) {
       .eq('trade_no', tradeNo)
       .maybeSingle()
 
-    const cfg = txn ? await getEcpayConfigForStore(txn.store_id) : null
+    // makeEcpayConfig 在正式環境金流金鑰不齊時會 throw，而 throw 會穿過 getEcpayConfigForStore。
+    // 這支是「消費者瀏覽器」導轉，不能因此炸成 500 讓客人看到錯誤頁——接住、留底、照常導轉，
+    // 付款真相仍以 notify 為主（那支會 fail-closed 讓綠界重送）。
+    let cfg = null
+    let cfgError = null
+    if (txn) {
+      try {
+        cfg = await getEcpayConfigForStore(txn.store_id)
+      } catch (e) {
+        cfgError = e
+      }
+    }
+    if (cfgError) {
+      await supabaseAdmin.from('ecpay_payment_logs').insert({
+        order_id: txn?.order_id ?? null,
+        source: 'payment_result',
+        trade_no: tradeNo,
+        rtn_code: data.RtnCode != null ? String(data.RtnCode) : null,
+        rtn_msg: `取得綠界金鑰失敗，無法驗章與後援記帳：${cfgError.message}`,
+        mac_valid: false,
+        raw: { config_error: cfgError.message, result: data },
+      })
+    }
+
     const macValid = cfg
       ? verifyCheckMacValue(data, { hashKey: cfg.hashKey, hashIV: cfg.hashIV, algo: 'sha256' })
       : false
@@ -62,13 +85,29 @@ async function resolve(request) {
       raw: data,
     })
 
-    // 驗章通過就記帳——apply_ecpay_payment 冪等，即使 notify 已經處理過也只會算一次錢
+    // 驗章通過就記帳——apply_ecpay_payment 冪等，即使 notify 已經處理過也只會算一次錢。
+    //
+    // 與 notify 的差別：這支是消費者導轉，綠界不看它的回應決定要不要重送，所以記帳失敗
+    // **不擋導轉**——客人該看到自己的訂單頁。但失敗一定要留痕，否則「後援記帳整條壞掉」
+    // 這件事沒有任何人會知道（notify 若同時漏送，錢就這樣不見了）。
     if (macValid && tradeNo) {
-      await supabaseAdmin.rpc('apply_ecpay_payment', {
+      const { data: applied, error: applyError } = await supabaseAdmin.rpc('apply_ecpay_payment', {
         p_trade_no: tradeNo,
         p_rtn_code: data.RtnCode != null ? String(data.RtnCode) : null,
         p_payment_type: data.PaymentType || null,
       })
+      if (applyError || applied?.ok !== true) {
+        await supabaseAdmin.from('ecpay_payment_logs').insert({
+          order_id: txn?.order_id ?? null,
+          source: 'payment_result',
+          trade_no: tradeNo,
+          rtn_code: data.RtnCode != null ? String(data.RtnCode) : null,
+          rtn_msg: `後援記帳失敗（apply_ecpay_payment）：${applyError?.message || applied?.error || '未知錯誤'}`
+            + '；已照常導轉消費者，付款真相以 ReturnURL(notify) 為準，請人工確認此筆是否入帳。',
+          mac_valid: macValid,
+          raw: { apply_error: applyError?.message ?? null, apply_result: applied ?? null, result: data },
+        })
+      }
     }
 
     // CustomField1 是數字主鍵，不是 public_token，不能拿來當導回訂單頁的路徑；
