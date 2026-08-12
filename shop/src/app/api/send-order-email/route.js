@@ -31,7 +31,7 @@ export async function POST(request) {
   const admin = createClient(SUPA_URL, SERVICE_KEY, { auth: { persistSession: false } })
   const { data: row, error: fetchErr } = await admin
     .from('consumer_orders')
-    .select('id, store_id, customer_name, email, phone, address, store_name, store_number, line_id, remittance_last5, note, items_json, total_amount, discount_amount, coupon_id, append_deadline, paid_amount, status')
+    .select('id, store_id, customer_name, email, phone, address, store_name, store_number, line_id, remittance_last5, note, items_json, total_amount, discount_amount, coupon_id, append_deadline, paid_amount, status, payment_method, cvs_store_name, cvs_address')
     .eq('public_token', token)
     .maybeSingle()
 
@@ -51,7 +51,18 @@ export async function POST(request) {
     line_id: row.line_id,
     remittance_last5: row.remittance_last5,
     note: row.note,
+    payment_method: row.payment_method,
+    cvs_store_name: row.cvs_store_name,
+    cvs_address: row.cvs_address,
   }
+  // 綠界分流：DB 欄位有 NOT NULL DEFAULT 'remittance'，理論上一定有值，這裡再保底一次。
+  const paymentMethod = order.payment_method || 'remittance'
+  const isCredit = paymentMethod === 'credit'
+  const isCod = paymentMethod === 'cod'
+  const isRemittance = !isCredit && !isCod
+  // 消費者當下所在的店家網域：多租戶下每店網址不同，不可用固定值。
+  const origin = new URL(request.url).origin
+  const orderPageUrl = `${origin}/order/${esc(token)}`
   const items = Array.isArray(row.items_json) ? row.items_json : []
   const discount = Number(row.discount_amount) || 0
   const total = Number(row.total_amount) || 0
@@ -90,7 +101,8 @@ export async function POST(request) {
   const balanceDue = total - paid
 
   // 已收過款才需要講「補匯差額」；否則照原本的付款提醒即可
-  const balanceHtml = paid > 0 && balanceDue !== 0 ? `
+  // 「尚需補匯」是匯款專屬措辭，信用卡／貨到付款用各自的付款狀態區塊表達，這裡不重複顯示。
+  const balanceHtml = isRemittance && paid > 0 && balanceDue !== 0 ? `
           <table width="100%" cellpadding="0" cellspacing="0" style="margin:-16px 0 24px;">
             <tr>
               <td style="padding:6px 0;font-size:14px;color:#888;">${zh ? '已收金額' : 'Already paid'}</td>
@@ -164,6 +176,82 @@ export async function POST(request) {
                   ${zh ? '匯款帳號請洽客服取得。' : 'Please contact us for transfer account details.'}
                 </td>
               </tr>`
+
+  // 付款資訊區塊：依付款方式分流。信用卡／貨到付款絕不能顯示匯款帳戶，
+  // 否則已完成線上付款或準備取貨付現的客人會誤以為還要匯款，變成客訴或重複付款。
+  let paymentInfoHtml
+  if (isCredit) {
+    const creditPaid = total > 0 && paid >= total
+    paymentInfoHtml = `
+          <div style="font-size:13px;font-weight:600;color:#999;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;">
+            ${zh ? '付款方式' : 'Payment Method'}
+          </div>
+          <div style="background:${creditPaid ? '#f0faf3' : '#fff8e8'};border-radius:12px;padding:16px 20px;margin-bottom:8px;">
+            <div style="font-size:14px;font-weight:700;color:${creditPaid ? '#1a7a3a' : '#8a5c00'};margin-bottom:6px;">
+              ${creditPaid
+                ? (zh ? '✅ 已完成線上付款' : '✅ Payment completed')
+                : `⚠️ ${zh ? '尚未付款' : 'Payment pending'}`}
+            </div>
+            <div style="font-size:14px;color:${creditPaid ? '#1a7a3a' : '#8a5c00'};line-height:1.7;">
+              ${creditPaid
+                ? (zh ? '您已透過信用卡完成本筆訂單付款，感謝您的支持！' : 'Your credit card payment for this order is complete. Thank you!')
+                : (zh
+                    ? `尚未偵測到付款，請前往<a href="${orderPageUrl}" style="color:#8a5c00;font-weight:700;">訂單頁面</a>重新付款。`
+                    : `Payment not yet received. Please go to the <a href="${orderPageUrl}" style="color:#8a5c00;font-weight:700;">order page</a> to pay again.`)}
+            </div>
+          </div>`
+  } else if (isCod) {
+    paymentInfoHtml = `
+          <div style="font-size:13px;font-weight:600;color:#999;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;">
+            ${zh ? '付款方式' : 'Payment Method'}
+          </div>
+          <div style="background:#fff8e8;border-radius:12px;padding:16px 20px;margin-bottom:8px;">
+            <div style="font-size:14px;font-weight:700;color:#8a5c00;margin-bottom:6px;">
+              ${zh ? '💵 取貨時付現' : '💵 Cash on delivery'}
+            </div>
+            <div style="font-size:14px;color:#8a5c00;line-height:1.7;">
+              ${zh
+                ? `請於取貨時準備 <strong>NT$${total.toLocaleString()}</strong> 現金付款。`
+                : `Please prepare <strong>NT$${total.toLocaleString()}</strong> in cash at pickup.`}
+            </div>
+          </div>`
+  } else {
+    // remittance：維持現行——顯示匯款帳戶。帳戶資訊來自 getStoreEmailBranding 在本次請求
+    // （即下單當下）即時查得的店家設定，等同下單當下的快照，不受店家日後改帳戶影響本封信。
+    paymentInfoHtml = `
+          <div style="font-size:13px;font-weight:600;color:#999;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;">
+            ${zh ? '匯款資訊' : 'Bank Transfer Info'}
+          </div>
+          <div style="background:#f0f7ff;border-radius:12px;padding:16px 20px;margin-bottom:16px;">
+            <table width="100%" cellpadding="0" cellspacing="0">${bankRowsHtml}
+            </table>
+          </div>
+
+          <!-- Payment reminder -->
+          <div style="background:#fff8e8;border-radius:12px;padding:16px 20px;margin-bottom:8px;">
+            <div style="font-size:14px;font-weight:700;color:#8a5c00;margin-bottom:6px;">
+              ⚠️ ${zh ? '付款提醒' : 'Payment Reminder'}
+            </div>
+            <div style="font-size:14px;color:#8a5c00;line-height:1.7;">
+              ${zh
+                ? '請將<strong>匯款截圖</strong>與<strong>訂單編號 #' + orderNo + '</strong> 傳給客服，以便我們加速核對款項。'
+                : 'Please send your <strong>transfer screenshot</strong> and <strong>order number #' + orderNo + '</strong> to our customer service for faster payment verification.'}
+            </div>
+          </div>`
+  }
+
+  // 門市資訊：cvs_store_name／cvs_address 只要有值就顯示，不分付款方式
+  // （沿用 store_name／store_number 的訂單走綠界選店時也會帶到這兩欄，見「收件資訊」表）
+  const cvsInfoHtml = order.cvs_store_name ? `
+            <tr>
+              <td style="font-size:13px;color:#999;padding:4px 0;">${zh ? '超商門市' : 'Store'}</td>
+              <td style="font-size:14px;color:#1a1a1a;padding:4px 0;">${esc(order.cvs_store_name)}</td>
+            </tr>
+            ${order.cvs_address ? `
+            <tr>
+              <td style="font-size:13px;color:#999;padding:4px 0;">${zh ? '門市地址' : 'Store Address'}</td>
+              <td style="font-size:14px;color:#1a1a1a;padding:4px 0;">${esc(order.cvs_address)}</td>
+            </tr>` : ''}` : ''
 
   // footer 客服聯絡：店家有填才顯示對應項目（連結為店家設定值，非消費者輸入）
   const contactParts = []
@@ -259,7 +347,7 @@ ${appendHtml}
             <tr>
               <td style="font-size:13px;color:#999;padding:4px 0;">${zh ? '取貨門市' : 'Store'}</td>
               <td style="font-size:14px;color:#1a1a1a;padding:4px 0;">${esc(order.store_name || '')} (${esc(order.store_number || '')})</td>
-            </tr>
+            </tr>${cvsInfoHtml}
             ${order.note ? `
             <tr>
               <td style="font-size:13px;color:#999;padding:4px 0;">${zh ? '備註' : 'Note'}</td>
@@ -267,26 +355,7 @@ ${appendHtml}
             </tr>` : ''}
           </table>
 
-          <!-- Bank transfer info -->
-          <div style="font-size:13px;font-weight:600;color:#999;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;">
-            ${zh ? '匯款資訊' : 'Bank Transfer Info'}
-          </div>
-          <div style="background:#f0f7ff;border-radius:12px;padding:16px 20px;margin-bottom:16px;">
-            <table width="100%" cellpadding="0" cellspacing="0">${bankRowsHtml}
-            </table>
-          </div>
-
-          <!-- Payment reminder -->
-          <div style="background:#fff8e8;border-radius:12px;padding:16px 20px;margin-bottom:8px;">
-            <div style="font-size:14px;font-weight:700;color:#8a5c00;margin-bottom:6px;">
-              ⚠️ ${zh ? '付款提醒' : 'Payment Reminder'}
-            </div>
-            <div style="font-size:14px;color:#8a5c00;line-height:1.7;">
-              ${zh
-                ? '請將<strong>匯款截圖</strong>與<strong>訂單編號 #' + orderNo + '</strong> 傳給客服，以便我們加速核對款項。'
-                : 'Please send your <strong>transfer screenshot</strong> and <strong>order number #' + orderNo + '</strong> to our customer service for faster payment verification.'}
-            </div>
-          </div>
+${paymentInfoHtml}
 
         </td></tr>
 

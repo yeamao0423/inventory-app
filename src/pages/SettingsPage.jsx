@@ -10,7 +10,7 @@ import BrandColorPicker from '../components/BrandColorPicker'
 // 店家設定（僅店主）：把過去寫死在程式裡的營運參數搬進 stores.settings
 // 新店主首次進入（settings 為空）時作為開店精靈使用
 export default function SettingsPage() {
-  const { profile, store, storeId, refreshStore } = useAuth()
+  const { profile, store, storeId, refreshStore, isPlatformAdmin } = useAuth()
   const isOwner = profile?.role === 'super_admin'
 
   const [form, setForm] = useState({
@@ -27,6 +27,23 @@ export default function SettingsPage() {
   // LINE Channel Secret 為寫入型欄位：值只進不出（存 store_line_secrets，非 settings），
   // 已否設定看 settings.line_channel_secret_set 旗標
   const [lineSecret, setLineSecret] = useState('')
+  // 綠界金物流：整組存 store_ecpay_secrets（零 client policy）。env／cod_max／兩個特店編號
+  // （merchant_id、logistics_merchant_id）不算機密 —— 本來就會出現在送往綠界的付款表單裡，
+  // 消費者瀏覽器看得到 —— 這四個會被 RPC 併回 settings.ecpay_* 供這裡回顯；HashKey/HashIV/
+  // 寄件人資訊仍是值只進不出，重整頁面後顯示為空、留空送出＝維持原值（不是清空）。
+  // 走獨立的 saveEcpay()，不掛在下面的店家設定主表單裡 —— 避免店主改運費時，若這幾個欄位
+  // 剛好是空的一併送出，這裡曾經有個陷阱：RPC 舊版把「特店編號留空」當「清除整組設定」，
+  // 現在已改成只有明確按下「清除綠界設定」（p_clear=true）才會刪，其餘所有欄位留空都是維持原值。
+  const [ecpayForm, setEcpayForm] = useState({
+    env: 'stage', merchant_id: '', hash_key: '', hash_iv: '',
+    logistics_merchant_id: '', logistics_hash_key: '', logistics_hash_iv: '',
+    sender_name: '', sender_phone: '', cod_max: 20000,
+  })
+  const [ecpaySaving, setEcpaySaving] = useState(false)
+  const [ecpaySaved, setEcpaySaved] = useState(false)
+  const [ecpayError, setEcpayError] = useState('')
+  const [ecpayClearing, setEcpayClearing] = useState(false)
+  const [ecpayEnabled, setEcpayEnabled] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
@@ -41,6 +58,20 @@ export default function SettingsPage() {
     if (!store) return
     setStoreName(store.name ?? '')
     setForm(prev => ({ ...prev, ...(store.settings ?? {}) }))
+  }, [store])
+
+  // 只回顯 env／cod_max／兩個特店編號（RPC 有併回 settings 的非機密欄位），HashKey/HashIV/
+  // 寄件人資訊保持空白
+  useEffect(() => {
+    if (!store) return
+    setEcpayForm(prev => ({
+      ...prev,
+      env: store.settings?.ecpay_env || 'stage',
+      cod_max: store.settings?.ecpay_cod_max ?? 20000,
+      merchant_id: store.settings?.ecpay_merchant_id ?? '',
+      logistics_merchant_id: store.settings?.ecpay_logistics_merchant_id ?? '',
+    }))
+    setEcpayEnabled(!!store.settings?.ecpay_enabled)
   }, [store])
 
   useEffect(() => {
@@ -62,6 +93,12 @@ export default function SettingsPage() {
     const v = e.target.value
     setForm(prev => ({ ...prev, [key]: e.target.type === 'number' ? (v === '' ? '' : Number(v)) : v }))
     setSaved(false)
+  }
+
+  const setEcpay = (key) => (e) => {
+    const v = e.target.value
+    setEcpayForm(prev => ({ ...prev, [key]: e.target.type === 'number' ? (v === '' ? '' : Number(v)) : v }))
+    setEcpaySaved(false)
   }
 
   // Logo 上傳：壓縮後存進公開 bucket product-images 的 logos/ 路徑，url 寫入 settings.logo_url
@@ -114,6 +151,83 @@ export default function SettingsPage() {
       setSaved(true)
     }
     setSaving(false)
+  }
+
+  // 綠界金物流：獨立 RPC，成功後把四個 HashKey/HashIV 清空（值只進不出）
+  async function saveEcpay(e) {
+    e.preventDefault()
+    setEcpayError(''); setEcpaySaving(true)
+    const { error: err } = await supabase.rpc('set_store_ecpay_credentials', {
+      p_store_id: storeId,
+      p_env: ecpayForm.env,
+      p_merchant_id: ecpayForm.merchant_id,
+      p_hash_key: ecpayForm.hash_key,
+      p_hash_iv: ecpayForm.hash_iv,
+      p_logistics_merchant_id: ecpayForm.logistics_merchant_id,
+      p_logistics_hash_key: ecpayForm.logistics_hash_key,
+      p_logistics_hash_iv: ecpayForm.logistics_hash_iv,
+      p_sender_name: ecpayForm.sender_name,
+      p_sender_phone: ecpayForm.sender_phone,
+      p_cod_max: Number(ecpayForm.cod_max) || 20000,
+      p_clear: false,
+    })
+    if (err) setEcpayError('儲存失敗：' + err.message)
+    else {
+      setEcpayForm(prev => ({
+        ...prev,
+        hash_key: '', hash_iv: '', logistics_hash_key: '', logistics_hash_iv: '',
+      }))
+      await refreshStore()
+      setEcpaySaved(true)
+    }
+    setEcpaySaving(false)
+  }
+
+  // 對外開放開關：與金鑰分開存（非機密，只是 settings 上的布林），
+  // 所以走自己的 RPC、按下就生效，不必等「儲存綠界設定」。
+  async function toggleEcpayEnabled(next) {
+    setEcpayError('')
+    setEcpayEnabled(next)                       // 樂觀更新，失敗再轉回來
+    const { error: err } = await supabase.rpc('set_store_ecpay_enabled', {
+      p_store_id: storeId,
+      p_enabled: next,
+    })
+    if (err) {
+      setEcpayEnabled(!next)
+      setEcpayError('切換失敗：' + err.message)
+      return
+    }
+    await refreshStore()
+  }
+
+  // 清除整組綠界設定（p_clear=true）：獨立動作、需二次確認，因為清掉後結帳頁會立刻
+  // 不再顯示綠界付款方式，正在收真錢的店家會直接斷金流
+  async function clearEcpay() {
+    const ok = window.confirm(
+      '確定要清除這家店的綠界金物流設定嗎？\n\n' +
+      '清除後該店結帳頁將不再顯示綠界付款方式，且此動作無法復原（要恢復須重新輸入完整金鑰）。'
+    )
+    if (!ok) return
+    setEcpayError(''); setEcpayClearing(true)
+    const { error: err } = await supabase.rpc('set_store_ecpay_credentials', {
+      p_store_id: storeId,
+      p_clear: true,
+    })
+    if (err) setEcpayError('清除失敗：' + err.message)
+    else {
+      // 開放開關一併關掉：否則旗標會留著 true，日後重新填金鑰時會直接對外開放，
+      // 跳過「先自己走一遍再開」的緩衝
+      await supabase.rpc('set_store_ecpay_enabled', { p_store_id: storeId, p_enabled: false })
+      setEcpayEnabled(false)
+      setEcpayForm({
+        env: 'stage', merchant_id: '', hash_key: '', hash_iv: '',
+        logistics_merchant_id: '', logistics_hash_key: '', logistics_hash_iv: '',
+        sender_name: '', sender_phone: '', cod_max: 20000,
+      })
+      await refreshStore()
+      setEcpaySaved(false)
+    }
+    setEcpayClearing(false)
   }
 
   // 手動清除商城快取（強制全體同步）
@@ -500,6 +614,139 @@ export default function SettingsPage() {
           {cacheState === 'clearing' ? '清除中…' : cacheState === 'done' ? '✓ 已清除，商城已同步' : '重新整理商城快取'}
         </button>
       </div>
+
+      {/* 綠界金物流：僅平台管理員可見與設定，理由見 store_ecpay_secrets migration —
+          金鑰填錯代價是收款失敗或進錯帳戶，本輪不開放店主自助設定。獨立 RPC、獨立按鈕，
+          刻意不掛進上面的主表單，避免店主存其他設定時意外一併送出這個區塊。
+          特店編號會回顯（RPC 併回 settings.ecpay_merchant_id／ecpay_logistics_merchant_id，
+          兩者本來就會出現在送往綠界的付款表單裡，不算機密）；HashKey/HashIV/寄件人資訊仍值只進不出。
+          所有欄位留空送出＝維持原值，要整組刪除必須按下方「清除綠界設定」並二次確認。 */}
+      {isPlatformAdmin && (
+        <>
+          <div className="sec" style={{ marginTop: 24 }}>
+            綠界金物流設定（平台管理員）
+            <span style={{
+              fontSize: 11, marginLeft: 8, fontWeight: 600,
+              color: form.ecpay_set ? 'var(--green)' : 'var(--text-3)',
+            }}>
+              {form.ecpay_set ? '已設定' : '未設定'}
+            </span>
+          </div>
+          <div className="card" style={{ padding: 16 }}>
+            {/* 對外開放開關：與金鑰分開。金鑰填好不等於想立刻開賣——先把物流單流程
+                走過一遍確認沒問題，再按這個開關讓消費者看到。按下即生效，不必等下面的儲存。 */}
+            <label style={{
+              display: 'flex', alignItems: 'flex-start', gap: 10, cursor: form.ecpay_set ? 'pointer' : 'not-allowed',
+              padding: 12, marginBottom: 14, borderRadius: 10,
+              background: ecpayEnabled ? 'var(--green-bg, #e8f7ee)' : 'var(--bg, #f7f7f5)',
+              opacity: form.ecpay_set ? 1 : .55,
+            }}>
+              <input type="checkbox"
+                checked={ecpayEnabled}
+                disabled={!form.ecpay_set}
+                onChange={e => toggleEcpayEnabled(e.target.checked)}
+                style={{ marginTop: 2 }} />
+              <span>
+                <b style={{ fontSize: 14 }}>在商城開放綠界付款</b>
+                <span style={{ display: 'block', fontSize: 12, color: 'var(--text-3)', marginTop: 3, lineHeight: 1.6 }}>
+                  {form.ecpay_set
+                    ? '關閉時結帳頁只出現銀行匯款，金鑰仍保留。要停售或排查問題時關掉它，不必清除金鑰。'
+                    : '要先在下面填好金鑰並儲存，才能開放。'}
+                </span>
+              </span>
+            </label>
+
+            <div className="form-group" style={{ marginBottom: 10 }}>
+              <label className="form-label">環境</label>
+              <select className="form-input" value={ecpayForm.env} onChange={setEcpay('env')}>
+                <option value="stage">測試（stage）</option>
+                <option value="production">正式（production）</option>
+              </select>
+            </div>
+
+            <div className="form-group" style={{ marginBottom: 10 }}>
+              <label className="form-label">金流特店編號</label>
+              <input className="form-input" type="text" placeholder="例：2000132（留空維持原值，不會清除）"
+                value={ecpayForm.merchant_id} onChange={setEcpay('merchant_id')} />
+            </div>
+            <div className="form-group" style={{ marginBottom: 10 }}>
+              <label className="form-label">金流 HashKey</label>
+              <input className="form-input" type="password" autoComplete="new-password"
+                placeholder={form.ecpay_set ? '已設定（輸入新值可更新，留空維持不變）' : '貼上綠界金流特店的 HashKey'}
+                value={ecpayForm.hash_key} onChange={setEcpay('hash_key')} />
+            </div>
+            <div className="form-group" style={{ marginBottom: 14 }}>
+              <label className="form-label">金流 HashIV</label>
+              <input className="form-input" type="password" autoComplete="new-password"
+                placeholder={form.ecpay_set ? '已設定（輸入新值可更新，留空維持不變）' : '貼上綠界金流特店的 HashIV'}
+                value={ecpayForm.hash_iv} onChange={setEcpay('hash_iv')} />
+            </div>
+
+            <div className="form-group" style={{ marginBottom: 10 }}>
+              <label className="form-label">物流特店編號</label>
+              <input className="form-input" type="text" placeholder="例：2000933（金流物流分開申請，編號不同；留空維持原值）"
+                value={ecpayForm.logistics_merchant_id} onChange={setEcpay('logistics_merchant_id')} />
+            </div>
+            <div className="form-group" style={{ marginBottom: 10 }}>
+              <label className="form-label">物流 HashKey</label>
+              <input className="form-input" type="password" autoComplete="new-password"
+                placeholder={form.ecpay_set ? '已設定（輸入新值可更新，留空維持不變）' : '貼上綠界物流特店的 HashKey'}
+                value={ecpayForm.logistics_hash_key} onChange={setEcpay('logistics_hash_key')} />
+            </div>
+            <div className="form-group" style={{ marginBottom: 14 }}>
+              <label className="form-label">物流 HashIV</label>
+              <input className="form-input" type="password" autoComplete="new-password"
+                placeholder={form.ecpay_set ? '已設定（輸入新值可更新，留空維持不變）' : '貼上綠界物流特店的 HashIV'}
+                value={ecpayForm.logistics_hash_iv} onChange={setEcpay('logistics_hash_iv')} />
+            </div>
+
+            <div className="form-group" style={{ marginBottom: 10 }}>
+              <label className="form-label">
+                寄件人姓名（綠界物流建單）
+                <span style={{ color: 'var(--red)', fontSize: 11, marginLeft: 6, fontWeight: 600 }}>物流建單必填</span>
+              </label>
+              <input className="form-input" type="text" placeholder="例：王小明"
+                value={ecpayForm.sender_name} onChange={setEcpay('sender_name')} />
+            </div>
+            <div className="form-group" style={{ marginBottom: 10 }}>
+              <label className="form-label">
+                寄件人手機（綠界物流建單）
+                <span style={{ color: 'var(--red)', fontSize: 11, marginLeft: 6, fontWeight: 600 }}>物流建單必填</span>
+              </label>
+              <input className="form-input" type="text" placeholder="例：0912345678"
+                value={ecpayForm.sender_phone} onChange={setEcpay('sender_phone')} />
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">貨到付款上限（NT$）</label>
+              <input className="form-input" type="number" placeholder="20000"
+                value={ecpayForm.cod_max} onChange={setEcpay('cod_max')} />
+            </div>
+
+            {ecpayError && <div className="error-msg" style={{ marginTop: 12 }}>{ecpayError}</div>}
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginTop: 12, flexWrap: 'wrap' }}>
+              <button type="button" className="btn" onClick={saveEcpay} disabled={ecpaySaving || ecpayClearing}
+                style={{ width: 'auto', display: 'inline-block', padding: '8px 16px', fontSize: 13 }}>
+                {ecpaySaving ? '儲存中…' : ecpaySaved ? '✓ 已儲存' : '儲存綠界設定'}
+              </button>
+              {form.ecpay_set && (
+                <button type="button" onClick={clearEcpay} disabled={ecpaySaving || ecpayClearing}
+                  style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 12, padding: 0 }}>
+                  {ecpayClearing ? '清除中…' : '清除綠界設定'}
+                </button>
+              )}
+            </div>
+
+            <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text-3)', lineHeight: 1.7 }}>
+              金流與物流是綠界分開申請的兩組金鑰，特店編號與 HashKey/HashIV 都不同，請分別填寫；
+              正式環境上線前請先確認已在綠界後台完成撥款帳戶設定。<br />
+              HashKey／HashIV／寄件人姓名／寄件人手機儲存後不會回顯（僅伺服器可讀取），要更換直接輸入新值再儲存即可，
+              留空一律代表「維持原值」、不是清空。特店編號會回顯，方便確認目前掛的是測試還是正式帳號。<br />
+              真的要整組移除（例如該店停用綠界）請按左邊的「清除綠界設定」，會二次確認 —— 清除後結帳頁立刻不再顯示綠界付款方式。
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }

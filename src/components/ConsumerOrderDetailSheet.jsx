@@ -9,6 +9,10 @@ import Sheet from './Sheet'
 
 const notifyBtn = { padding: '8px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }
 
+const PAYMENT_METHOD_LABEL = { credit: '信用卡', cod: '貨到付款', remittance: '銀行匯款' }
+// 超商代碼 → 中文店名（cvs_store_id/cvs_store_name 是綠界超商取貨欄位，跟舊的 store_name/store_number 不同）
+const CVS_TYPE_LABEL = { UNIMARTC2C: '7-11', FAMIC2C: '全家', HILIFEC2C: '萊爾富', OKMARTC2C: 'OK' }
+
 export default function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, canEdit }) {
   const { storeId, store } = useAuth()
   // 運費規則以店家設定為準，與 append_to_order（商城加購）用同一組數字，
@@ -52,6 +56,86 @@ export default function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, c
   )
   const [shippingFee, setShippingFee] = useState(o.shipping_fee || DEFAULT_SHIPPING_FEE)
   const [trackingNumber, setTrackingNumber] = useState(o.tracking_number || '')
+
+  // 綠界物流：ecpay_transactions 有 RLS 但沒開 policy，後台讀不到交易編號，
+  // 這裡只用 consumer_orders 上讀得到的欄位。onSaved 只會刷新列表、不會換掉這個
+  // sheet 拿到的 order prop，所以建單成功後要用本地 state 記住，按鈕才會馬上換成「列印」。
+  const SHOP_URL = import.meta.env.VITE_SHOP_URL || 'http://localhost:3000'
+  const [logiBusy, setLogiBusy] = useState(false)
+  const [logiInfo, setLogiInfo] = useState({
+    allpay_logistics_id: o.allpay_logistics_id || null,
+    cvs_payment_no: o.cvs_payment_no || null,
+    cvs_validation_no: o.cvs_validation_no || null,
+    logistics_status: o.logistics_status || null,
+    logistics_status_msg: o.logistics_status_msg || null,
+  })
+
+  // 物流兩支端點都需驗證後台身分＋店家角色，呼叫時要帶目前登入者的 Supabase JWT
+  async function getAccessToken() {
+    const { data: { session } } = await supabase.auth.getSession()
+    return session?.access_token || null
+  }
+
+  async function handleCreateLogistics() {
+    if (!o.cvs_store_id || logiInfo.allpay_logistics_id) return
+    // 這一按會真的跟綠界要物流單，物流費從綠界帳戶餘額扣除，不可誤按
+    if (!window.confirm('確定向綠界建立物流單？建立後物流費將從綠界帳戶餘額扣除。')) return
+    setLogiBusy(true)
+    try {
+      const accessToken = await getAccessToken()
+      if (!accessToken) { alert('登入狀態已失效，請重新登入後再試'); setLogiBusy(false); return }
+      const res = await fetch(`${SHOP_URL}/api/ecpay/logistics/create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ orderId: o.id }),
+      })
+      const data = await res.json()
+      if (!data.ok) { alert('建立失敗：' + (data.error || '未知錯誤')); setLogiBusy(false); return }
+      setLogiInfo({
+        allpay_logistics_id: data.allPayLogisticsID || null,
+        cvs_payment_no: data.cvsPaymentNo || null,
+        cvs_validation_no: data.cvsValidationNo || null,
+        logistics_status: data.rtnCode || null,
+        logistics_status_msg: data.rtnMsg || null,
+      })
+      alert('物流單建立成功，綠界物流編號：' + data.allPayLogisticsID)
+      onSaved()
+    } catch (e) {
+      alert('呼叫失敗：' + e.message)
+    }
+    setLogiBusy(false)
+  }
+
+  // 印託運單一定要開新分頁，用 iframe 會被綠界的導轉頁擋下。
+  // 端點需驗證後台身分＋店家角色（回應的 hidden input 就是寄件編號與驗證碼），
+  // GET 帶不了 Authorization，所以改成 fetch POST 拿 HTML，再寫進自己開的新分頁——
+  // 那個分頁仍是頂層視窗（不是 iframe），綠界的導轉阻擋不會觸發。
+  // 新分頁必須在點擊當下同步開啟，等 fetch 回來才 open 會被瀏覽器的彈窗阻擋擋掉。
+  async function handlePrintLabel() {
+    const win = window.open('', '_blank')
+    if (!win) { alert('瀏覽器擋下了新分頁，請允許此網站開啟彈出視窗後再試'); return }
+    try {
+      const accessToken = await getAccessToken()
+      if (!accessToken) { win.close(); alert('登入狀態已失效，請重新登入後再試'); return }
+      const res = await fetch(`${SHOP_URL}/api/ecpay/logistics/print/${o.id}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}` },
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        win.close()
+        alert('無法列印：' + (data.error || `HTTP ${res.status}`))
+        return
+      }
+      const html = await res.text()
+      win.document.open()
+      win.document.write(html) // 綠界的自動送出表單，寫進去就會自己 POST 出去
+      win.document.close()
+    } catch (e) {
+      win.close()
+      alert('呼叫失敗：' + e.message)
+    }
+  }
 
   // 優惠券退還
   const [refundingCoupon, setRefundingCoupon] = useState(false)
@@ -217,6 +301,10 @@ export default function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, c
     derivedPaymentStatus === '待退款' ? {
       bg: 'var(--red-bg)', color: 'var(--red)', title: '待退款',
       sub: `多收了 NT$${Math.abs(balanceDue).toLocaleString()}，記得退給消費者`,
+    } :
+    // 貨到付款未收款是正常狀態（取件時才代收），顯示「未付款」會誤導成訂單有問題
+    o.payment_method === 'cod' ? {
+      bg: 'var(--bg)', color: 'var(--text-2)', title: '貨到付款', sub: '取貨時由物流代收，尚未收款',
     } : {
       bg: 'var(--bg)', color: 'var(--text-2)', title: '未付款', sub: '尚未收到款項',
     }
@@ -369,6 +457,21 @@ export default function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, c
   }
 
   async function save() {
+    // 取消已收款訂單前先提醒：系統不會自動退款，退款管道依付款方式不同。
+    // 用 paid_amount（DB 實收金額，等同 payment_status !== '未付'）判斷，
+    // 貨到付款訂單如果還沒代收（paid_amount = 0）就不用打擾店家。
+    if (status === '已取消' && o.status !== '已取消' && Number(o.paid_amount || 0) > 0) {
+      const amt = Number(o.paid_amount || 0).toLocaleString()
+      const how = o.payment_method === 'credit'
+        ? '信用卡刷卡，需至綠界後台辦理「退刷」'
+        : o.payment_method === 'cod'
+          ? '貨到付款已代收，需自行處理現金退還'
+          : '銀行匯款，需手動匯款退還客人'
+      if (!window.confirm(`此訂單已收款 NT$${amt}，取消後系統不會自動退款（${how}）。\n確定要取消這筆訂單嗎？`)) {
+        return
+      }
+    }
+
     const active = itemStatuses.filter(i => !i._cancelled)
     const cancelled = itemStatuses.filter(i => i._cancelled)
     const qtyReduced = active.some(i => i.qty < i._originalQty)
@@ -447,6 +550,16 @@ export default function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, c
 
   return (
     <Sheet title={`${o.customer_name} 的訂單`} onClose={onClose}>
+      {/* payment_alert：已收款但庫存不足等需要人工處理的異常，這是唯一入口，不能藏在下面 */}
+      {o.payment_alert && (
+        <div style={{
+          background: 'var(--red-bg)', borderRadius: 12, padding: '12px 16px', marginBottom: 12,
+          fontSize: 13, color: 'var(--red)', lineHeight: 1.6, fontWeight: 600,
+        }}>
+          ⚠️ {o.payment_alert}
+        </div>
+      )}
+
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="card-row row-sb">
           <span className="muted fs13">訂單編號</span>
@@ -456,6 +569,12 @@ export default function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, c
           <span className="muted fs13">下單時間</span>
           <span className="fs13">{new Date(o.created_at).toLocaleString('zh-TW')}</span>
         </div>
+        {o.payment_method && (
+          <div className="card-row row-sb">
+            <span className="muted fs13">付款方式</span>
+            <span className="fs13">{PAYMENT_METHOD_LABEL[o.payment_method] || o.payment_method}</span>
+          </div>
+        )}
         <div className="card-row row-sb">
           <span className="muted fs13">{discountAmount > 0 ? '折扣前金額' : '總金額'}</span>
           <span className="fw600">NT${Number(hasAnyChange ? preDiscountTotal : (Number(o.total_amount || 0) + Number(o.discount_amount || 0))).toLocaleString()}</span>
@@ -933,6 +1052,59 @@ export default function ConsumerOrderDetailSheet({ order: o, onClose, onSaved, c
             </div>
           )}
           <button className="btn" onClick={save} disabled={saving}>{saving ? '更新中…' : '儲存'}</button>
+
+          {/* 綠界物流：cvs_store_id 有值才代表這筆是超商取貨訂單。
+              交易編號讀不到（ecpay_transactions 沒開 RLS policy），這裡只顯示 consumer_orders 上的欄位。 */}
+          {o.cvs_store_id && (
+            <>
+              <div className="sec" style={{ marginTop: 20 }}>綠界物流</div>
+              <div className="card" style={{ marginBottom: 14, padding: 14 }}>
+                <div className="card-row row-sb">
+                  <span className="muted fs13">取貨門市</span>
+                  <span className="fs13" style={{ textAlign: 'right' }}>
+                    {o.shipping_subtype ? `${CVS_TYPE_LABEL[o.shipping_subtype] || o.shipping_subtype} ` : ''}
+                    {o.cvs_store_name || '—'}（{o.cvs_store_id}）
+                  </span>
+                </div>
+                <div className="card-row row-sb">
+                  <span className="muted fs13">物流狀態</span>
+                  <span className="fs13">{logiInfo.logistics_status_msg || logiInfo.logistics_status || '尚未建立物流單'}</span>
+                </div>
+                {logiInfo.allpay_logistics_id && (
+                  <>
+                    <div className="card-row row-sb">
+                      <span className="muted fs13">綠界物流編號</span>
+                      <span className="fs13">{logiInfo.allpay_logistics_id}</span>
+                    </div>
+                    {logiInfo.cvs_payment_no && (
+                      <div className="card-row row-sb">
+                        <span className="muted fs13">寄貨編號</span>
+                        <span className="fs13">{logiInfo.cvs_payment_no}{logiInfo.cvs_validation_no ? `　驗證碼 ${logiInfo.cvs_validation_no}` : ''}</span>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+                {!logiInfo.allpay_logistics_id ? (
+                  <button
+                    onClick={handleCreateLogistics}
+                    disabled={logiBusy}
+                    style={{ ...notifyBtn, background: '#eef3ff', color: '#1e4d8c', border: '0.5px solid #bdd0f5' }}
+                  >
+                    {logiBusy ? '建立中…' : '📦 建立物流單'}
+                  </button>
+                ) : (
+                  <button
+                    onClick={handlePrintLabel}
+                    style={{ ...notifyBtn, background: '#eef3ff', color: '#1e4d8c', border: '0.5px solid #bdd0f5' }}
+                  >
+                    🖨️ 列印託運單
+                  </button>
+                )}
+              </div>
+            </>
+          )}
 
           {/* 手動寄信區塊 */}
           <div className="sec" style={{ marginTop: 20 }}>手動寄送通知</div>

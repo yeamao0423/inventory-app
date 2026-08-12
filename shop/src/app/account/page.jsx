@@ -63,9 +63,17 @@ export default function AccountPage() {
   async function loadOrders() {
     setOrdersLoading(true)
     const storeId = await getStoreId()
+    // 明列欄位，不可用 select('*')：consumer_orders 上有幾欄是刻意不給消費者看的——
+    // payment_alert（店家的內部處理說明）、cvs_payment_no／cvs_validation_no
+    // （寄件編號與驗證碼，外流可被冒領冒寄）。get_consumer_order 特意不吐這三欄，
+    // 這裡若用 * 就等於從旁邊全部漏回瀏覽器。新增欄位時請照這個原則決定要不要加進來。
     const { data } = await supabase
       .from('consumer_orders')
-      .select('*')
+      .select(
+        'id, public_token, created_at, status, payment_status, payment_method, ' +
+        'items, items_json, total_amount, paid_amount, tracking_number, ' +
+        'customer_name, phone, address, note, append_deadline'
+      )
       .eq('store_id', storeId)
       .eq('email', user.email)
       .order('created_at', { ascending: false })
@@ -304,9 +312,18 @@ function paymentLabel(o, zh) {
   return { text: zh ? '待付款' : 'Pending payment', color: undefined }
 }
 
+// 信用卡棄單想再付、或加購後補差額，兩者共用同一個入口——route 自己算未付餘額
+function canRepay(o) {
+  return o.payment_method === 'credit'
+    && Number(o.paid_amount || 0) < Number(o.total_amount || 0)
+    && o.status !== '已取消'
+    && !!o.public_token // 付款路由要求 ?t=<public_token> 當持有證明，沒有就無法重新付款
+}
+
 function OrderCard({ order: o, zh, lang, onClick, onAppend }) {
   const pay = paymentLabel(o, zh)
   const appendable = canAppendToOrder(o)
+  const repayable = canRepay(o)
 
   return (
     <div className="account-order-card">
@@ -328,6 +345,18 @@ function OrderCard({ order: o, zh, lang, onClick, onAppend }) {
           <span>{zh ? '點擊查看明細 →' : 'View details →'}</span>
         </div>
       </div>
+
+      {repayable && (
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid var(--border)' }}>
+          {/* 付款路由要求 ?t=<public_token> 當持有證明（loadOrders 的欄位清單已明確帶回該欄） */}
+          <a href={`/api/ecpay/credit/${o.id}?t=${o.public_token}`} className="btn-primary" style={{
+            display: 'block', textAlign: 'center', width: '100%', padding: '9px 0', borderRadius: 10,
+            fontSize: 13, fontWeight: 600,
+          }}>
+            {zh ? '重新付款' : 'Pay Now'}
+          </a>
+        </div>
+      )}
 
       {appendable && (
         <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid var(--border)' }}>
