@@ -763,4 +763,723 @@ BEGIN
   PERFORM pg_temp.assert_eq(pg_temp.stock_of(v_oid), 18, '加購後 trigger 多佔用 1 件');
 END $$;
 
+
+-- ══════════════════════════════════════════════════════════════
+-- place_order 金額驗證
+--
+-- 上半部（A 組）鎖住「現在就成立且金額正確」的結帳情境：這些是正常客人每天
+-- 在走的路，任何伺服器端回算都不可以把它們擋掉。它們在加驗證之前就必須全綠。
+--
+-- 下半部（B 組）是攻擊面：前端傳來的 p_total_amount／p_subtotal／p_shipping_fee
+-- 都是不可信輸入，改小了就必須被擋。
+--
+-- 定價真相對照（三支前端檔案寫的是同一條式子）：
+--   原價 = product_variants.variant_price
+--          ?? storefront_products.shop_price + COALESCE(price_adjustment, 0)
+--   特價 = COALESCE(variant.sale_price, storefront_products.sale_price)
+--   特價生效 = on_sale AND 在 sale_start/sale_end 檔期內 AND 特價 < 原價
+--   （shop/src/lib/salePrice.js getActivePrice、ProductStateProvider.jsx:110、
+--     ProductDetail.jsx:100、bundles/[id]/BundleDetail.jsx:555）
+--   p_total_amount = Σ(單價 × 數量) + 運費，「未扣折扣」（checkout/page.jsx:441）
+--   運費 = 小計 >= free_shipping_threshold ? 0 : shipping_fee（checkout/page.jsx:157）
+-- ══════════════════════════════════════════════════════════════
+
+-- 運費設定固定住，測試不受本機店家設定影響（交易結束一併 ROLLBACK）
+UPDATE public.stores
+   SET settings = COALESCE(settings, '{}'::jsonb)
+                  || '{"free_shipping_threshold": 3800, "shipping_fee": 60}'::jsonb
+ WHERE id = 1;
+
+-- 上架商品（products + storefront_products）
+CREATE OR REPLACE FUNCTION pg_temp.mk_shop_product(
+  p_name text, p_qty int, p_shop_price numeric,
+  p_on_sale boolean DEFAULT false, p_sale_price numeric DEFAULT NULL,
+  p_sale_start timestamptz DEFAULT NULL, p_sale_end timestamptz DEFAULT NULL,
+  p_skip_stock boolean DEFAULT false, p_collection_end timestamptz DEFAULT NULL)
+RETURNS bigint LANGUAGE plpgsql AS $$
+DECLARE v_pid bigint;
+BEGIN
+  INSERT INTO public.products (store_id, name, quantity, cost, currency)
+  VALUES (1, p_name, p_qty, 0, 'TWD') RETURNING id INTO v_pid;
+
+  INSERT INTO public.storefront_products (
+    product_id, store_id, published, shop_price,
+    on_sale, sale_price, sale_start, sale_end, skip_stock_check, collection_end)
+  VALUES (v_pid, 1, true, p_shop_price,
+          p_on_sale, p_sale_price, p_sale_start, p_sale_end, p_skip_stock, p_collection_end);
+
+  RETURN v_pid;
+END $$;
+
+-- 只有 products、沒有 storefront_products 的商品（後台自建訂單用的品項）
+CREATE OR REPLACE FUNCTION pg_temp.mk_offshelf_product(p_name text, p_qty int)
+RETURNS bigint LANGUAGE plpgsql AS $$
+DECLARE v_pid bigint;
+BEGIN
+  INSERT INTO public.products (store_id, name, quantity, cost, currency)
+  VALUES (1, p_name, p_qty, 0, 'TWD') RETURNING id INTO v_pid;
+  RETURN v_pid;
+END $$;
+
+CREATE OR REPLACE FUNCTION pg_temp.mk_variant(
+  p_pid bigint, p_stock int,
+  p_vprice numeric DEFAULT NULL, p_vsale numeric DEFAULT NULL, p_adj numeric DEFAULT 0)
+RETURNS bigint LANGUAGE plpgsql AS $$
+DECLARE v_id bigint;
+BEGIN
+  INSERT INTO public.product_variants (product_id, options, stock, variant_price, sale_price, price_adjustment)
+  VALUES (p_pid, '{}'::jsonb, p_stock, p_vprice, p_vsale, COALESCE(p_adj, 0))
+  RETURNING id INTO v_id;
+  RETURN v_id;
+END $$;
+
+-- 一列購物車。null 欄位剝掉，模擬前端送出的形狀
+CREATE OR REPLACE FUNCTION pg_temp.line(
+  p_pid bigint, p_qty int, p_price numeric,
+  p_vid bigint DEFAULT NULL, p_bundle bigint DEFAULT NULL,
+  p_extra jsonb DEFAULT '{}'::jsonb)
+RETURNS jsonb LANGUAGE sql AS $$
+  SELECT jsonb_strip_nulls(jsonb_build_object(
+           'id', p_pid, 'qty', p_qty, 'price', p_price, 'name', 'TEST商品',
+           'variantId', p_vid, 'bundleId', p_bundle)) || p_extra;
+$$;
+
+CREATE OR REPLACE FUNCTION pg_temp.po(
+  p_items jsonb, p_total numeric, p_shipping int DEFAULT 0,
+  p_coupon text DEFAULT NULL, p_subtotal numeric DEFAULT NULL)
+RETURNS jsonb LANGUAGE sql AS $$
+  SELECT public.place_order(
+    'TEST客', 't@test.local', '0900000000', 'TEST地址',
+    '', '', NULL, '', 'TEST備註',
+    'TEST品項', p_items, p_total,
+    p_shipping, p_coupon, p_subtotal, 't@test.local', 1, 'credit',
+    NULL, NULL, NULL, NULL);
+$$;
+
+CREATE OR REPLACE FUNCTION pg_temp.mk_bundle(p_price numeric, VARIADIC p_pids bigint[])
+RETURNS bigint LANGUAGE plpgsql AS $$
+DECLARE v_bid bigint; v_pid bigint;
+BEGIN
+  INSERT INTO public.bundles (store_id, name, slug, bundle_price, is_published)
+  VALUES (1, 'TEST組合', 'test-bundle-' || gen_random_uuid()::text, p_price, true)
+  RETURNING id INTO v_bid;
+  FOREACH v_pid IN ARRAY p_pids LOOP
+    INSERT INTO public.bundle_items (bundle_id, product_id) VALUES (v_bid, v_pid);
+  END LOOP;
+  RETURN v_bid;
+END $$;
+
+CREATE OR REPLACE FUNCTION pg_temp.mk_coupon(
+  p_code text, p_type text, p_value numeric,
+  p_min numeric DEFAULT 0, p_max_discount numeric DEFAULT NULL)
+RETURNS bigint LANGUAGE plpgsql AS $$
+DECLARE v_id bigint;
+BEGIN
+  INSERT INTO public.coupons (
+    store_id, name, type, code, discount_type, discount_value,
+    min_amount, max_discount, per_consumer_limit, is_active, starts_at)
+  VALUES (1, 'TEST券', 'shared', p_code, p_type, p_value,
+          p_min, p_max_discount, NULL, true, now() - interval '1 day')
+  RETURNING id INTO v_id;
+  RETURN v_id;
+END $$;
+
+
+-- ══════════════════════════════════════════════════════════════
+-- A 組：現行正確行為（加驗證前後都必須通過）
+-- ══════════════════════════════════════════════════════════════
+
+-- A1 一般商品 + 運費
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST一般', 100, 500);
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 2, 500)), 1060, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A1 一般商品下單成立');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 1060::numeric, 'A1 金額＝500×2＋運費60');
+  PERFORM pg_temp.assert_eq((v_r->>'discount_amount')::numeric, 0::numeric, 'A1 無折扣');
+  PERFORM pg_temp.assert_eq((SELECT quantity FROM public.products WHERE id = v_pid), 98, 'A1 庫存扣 2 件');
+END $$;
+
+-- A2 達免運門檻 → 運費 0
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST免運', 100, 500);
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 8, 500)), 4000, 0);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A2 達免運門檻下單成立');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 4000::numeric, 'A2 金額＝4000，不收運費');
+  PERFORM pg_temp.assert_eq((SELECT shipping_fee FROM public.consumer_orders
+                              WHERE id = (v_r->>'order_id')::bigint), 0, 'A2 運費欄位存 0');
+END $$;
+
+-- A3 未達免運門檻（剛好差 1 元）→ 照收運費
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST差一元', 100, 3799);
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 3799)), 3859, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A3 未達門檻下單成立');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 3859::numeric, 'A3 金額＝3799＋運費60');
+END $$;
+
+-- A4 商品層特價（檔期內）
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST特價', 100, 1000, true, 800,
+                                   now() - interval '1 day', now() + interval '1 day');
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 800)), 860, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A4 特價商品下單成立');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 860::numeric, 'A4 金額用特價 800＋運費60');
+END $$;
+
+-- A5 特價檔期已過 → 回原價
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST特價過期', 100, 1000, true, 800,
+                                   now() - interval '10 days', now() - interval '1 day');
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 1000)), 1060, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A5 檔期已過用原價下單成立');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 1060::numeric, 'A5 金額用原價 1000');
+END $$;
+
+-- A6 特價檔期未開始 → 回原價
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST特價未開始', 100, 1000, true, 800,
+                                   now() + interval '1 day', now() + interval '10 days');
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 1000)), 1060, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A6 檔期未開始用原價下單成立');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 1060::numeric, 'A6 金額用原價 1000');
+END $$;
+
+-- A7 on_sale 關著 → 特價不生效
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST特價未開關', 100, 1000, false, 800,
+                                   now() - interval '1 day', now() + interval '1 day');
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 1000)), 1060, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A7 on_sale 關著用原價下單成立');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 1060::numeric, 'A7 金額用原價 1000');
+END $$;
+
+-- A8 特價高於原價 → 不生效（getActivePrice 要求特價 < 原價）
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST特價比原價高', 100, 1000, true, 1200,
+                                   now() - interval '1 day', now() + interval '1 day');
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 1000)), 1060, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A8 特價高於原價時用原價下單成立');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 1060::numeric, 'A8 金額用原價 1000');
+END $$;
+
+-- A9 規格自帶價格（variant_price 蓋掉 shop_price）
+DO $$
+DECLARE v_pid bigint; v_vid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST規格價', 0, 500);
+  v_vid := pg_temp.mk_variant(v_pid, 50, 1200);
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 1200, v_vid)), 1260, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A9 規格價下單成立');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 1260::numeric, 'A9 金額用 variant_price 1200');
+  PERFORM pg_temp.assert_eq((SELECT stock FROM public.product_variants WHERE id = v_vid), 49, 'A9 規格庫存扣 1');
+END $$;
+
+-- A10 規格價差（variant_price 為 NULL 時 shop_price + price_adjustment）
+DO $$
+DECLARE v_pid bigint; v_vid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST價差', 0, 500);
+  v_vid := pg_temp.mk_variant(v_pid, 50, NULL, NULL, 50);
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 550, v_vid)), 610, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A10 規格價差下單成立');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 610::numeric, 'A10 金額＝500＋50 價差＋運費60');
+END $$;
+
+-- A11 規格特價蓋掉商品層特價
+DO $$
+DECLARE v_pid bigint; v_vid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST規格特價', 0, 1000, true, 800,
+                                   now() - interval '1 day', now() + interval '1 day');
+  v_vid := pg_temp.mk_variant(v_pid, 50, 1200, 900);
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 900, v_vid)), 960, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A11 規格特價下單成立');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 960::numeric,
+                            'A11 規格特價 900 蓋掉商品特價 800');
+END $$;
+
+-- A12 規格沒特價 → 回退商品層特價（與規格原價比大小）
+DO $$
+DECLARE v_pid bigint; v_vid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST規格回退特價', 0, 1000, true, 800,
+                                   now() - interval '1 day', now() + interval '1 day');
+  v_vid := pg_temp.mk_variant(v_pid, 50, 1200);
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 800, v_vid)), 860, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A12 規格回退商品特價下單成立');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 860::numeric,
+                            'A12 規格無特價時用商品層特價 800');
+END $$;
+
+-- A13 收單／預購商品（skip_stock_check）照樣正常計價
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST預購', 0, 700, false, NULL, NULL, NULL, true);
+  v_r := pg_temp.po(
+    jsonb_build_array(pg_temp.line(v_pid, 3, 700, NULL, NULL, '{"isCollection": true}'::jsonb)),
+    2160, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A13 預購商品（isCollection）下單成立');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 2160::numeric,
+                            'A13 預購品項照樣計入小計＝700×3＋運費60');
+  PERFORM pg_temp.assert_eq((SELECT quantity FROM public.products WHERE id = v_pid), -3,
+                            'A13 預購商品庫存可為負');
+END $$;
+
+-- A14 限時收單商品（collection_end）計價與免運門檻
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST限時單', 0, 2000, false, NULL, NULL, NULL, false,
+                                   now() + interval '7 days');
+  v_r := pg_temp.po(
+    jsonb_build_array(pg_temp.line(v_pid, 2, 2000, NULL, NULL, '{"isCollection": true}'::jsonb)),
+    4000, 0);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A14 限時收單商品下單成立');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 4000::numeric,
+                            'A14 限時單品項計入小計並達免運門檻');
+END $$;
+
+-- A15 組合商品折扣
+DO $$
+DECLARE v_a bigint; v_b bigint; v_bid bigint; v_r jsonb;
+BEGIN
+  v_a := pg_temp.mk_shop_product('TEST組合A', 100, 1000);
+  v_b := pg_temp.mk_shop_product('TEST組合B', 100, 1000);
+  v_bid := pg_temp.mk_bundle(1500, v_a, v_b);
+
+  v_r := pg_temp.po(jsonb_build_array(
+           pg_temp.line(v_a, 1, 1000, NULL, v_bid),
+           pg_temp.line(v_b, 1, 1000, NULL, v_bid)), 2060, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A15 組合商品下單成立');
+  PERFORM pg_temp.assert_eq((v_r->>'bundle_discount')::numeric, 500::numeric,
+                            'A15 套裝折扣＝2000－1500');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 1560::numeric,
+                            'A15 金額＝2000＋運費60－折扣500');
+END $$;
+
+-- A16 組合不齊 → 折扣不成立，各件原價
+DO $$
+DECLARE v_a bigint; v_b bigint; v_bid bigint; v_r jsonb;
+BEGIN
+  v_a := pg_temp.mk_shop_product('TEST缺件A', 100, 1000);
+  v_b := pg_temp.mk_shop_product('TEST缺件B', 100, 1000);
+  v_bid := pg_temp.mk_bundle(1500, v_a, v_b);
+
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_a, 1, 1000, NULL, v_bid)), 1060, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A16 組合不齊仍可下單');
+  PERFORM pg_temp.assert_eq((v_r->>'bundle_discount')::numeric, 0::numeric, 'A16 組合不齊不給折扣');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 1060::numeric, 'A16 金額為原價＋運費');
+END $$;
+
+-- A17 組合＋特價：折扣基準用當下有效價
+DO $$
+DECLARE v_a bigint; v_b bigint; v_bid bigint; v_r jsonb;
+BEGIN
+  v_a := pg_temp.mk_shop_product('TEST組合特價A', 100, 1000, true, 800,
+                                 now() - interval '1 day', now() + interval '1 day');
+  v_b := pg_temp.mk_shop_product('TEST組合特價B', 100, 1000);
+  v_bid := pg_temp.mk_bundle(1500, v_a, v_b);
+
+  v_r := pg_temp.po(jsonb_build_array(
+           pg_temp.line(v_a, 1, 800, NULL, v_bid),
+           pg_temp.line(v_b, 1, 1000, NULL, v_bid)), 1860, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A17 組合含特價品下單成立');
+  PERFORM pg_temp.assert_eq((v_r->>'bundle_discount')::numeric, 300::numeric,
+                            'A17 折扣＝(800＋1000)－1500');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 1560::numeric,
+                            'A17 金額＝1800＋運費60－折扣300');
+END $$;
+
+-- A18 優惠券：固定額
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST券固定額', 100, 1000);
+  PERFORM pg_temp.mk_coupon('TESTFIX100', 'fixed', 100);
+
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 1000)), 1060, 60, 'TESTFIX100', 1000);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A18 固定額券下單成立');
+  PERFORM pg_temp.assert_eq((v_r->>'discount_amount')::numeric, 100::numeric, 'A18 折抵 100');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 960::numeric,
+                            'A18 金額＝1000＋運費60－券100');
+END $$;
+
+-- A19 優惠券：百分比
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST券百分比', 100, 1000);
+  PERFORM pg_temp.mk_coupon('TESTPCT10', 'percentage', 10);
+
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 1000)), 1060, 60, 'TESTPCT10', 1000);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A19 百分比券下單成立');
+  PERFORM pg_temp.assert_eq((v_r->>'discount_amount')::numeric, 100::numeric, 'A19 折抵 10%＝100');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 960::numeric, 'A19 金額＝1060－100');
+END $$;
+
+-- A20 優惠券：百分比撞到 max_discount 上限
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST券上限', 100, 2000);
+  PERFORM pg_temp.mk_coupon('TESTPCT50CAP', 'percentage', 50, 0, 300);
+
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 2000)), 2060, 60, 'TESTPCT50CAP', 2000);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A20 帶上限的百分比券下單成立');
+  PERFORM pg_temp.assert_eq((v_r->>'discount_amount')::numeric, 300::numeric, 'A20 折抵封頂在 300');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 1760::numeric, 'A20 金額＝2060－300');
+END $$;
+
+-- A21 優惠券：未達最低消費 → 擋下
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST券門檻', 100, 500);
+  PERFORM pg_temp.mk_coupon('TESTMIN1000', 'fixed', 100, 1000);
+
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 500)), 560, 60, 'TESTMIN1000', 500);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'false', 'A21 未達最低消費被擋下');
+  PERFORM pg_temp.assert_eq(v_r->>'error' LIKE '%最低消費%', true, 'A21 錯誤訊息講得出原因');
+END $$;
+
+-- A22 優惠券：唯一碼
+DO $$
+DECLARE v_pid bigint; v_cid bigint; v_r jsonb; v_used boolean;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST唯一碼', 100, 1000);
+  INSERT INTO public.coupons (store_id, name, type, code, discount_type, discount_value,
+                              min_amount, per_consumer_limit, is_active, starts_at)
+  VALUES (1, 'TEST唯一券', 'unique', NULL, 'fixed', 200, 0, NULL, true, now() - interval '1 day')
+  RETURNING id INTO v_cid;
+  INSERT INTO public.coupon_codes (coupon_id, code) VALUES (v_cid, 'TESTUNIQ900');
+
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 1000)), 1060, 60, 'TESTUNIQ900', 1000);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A22 唯一碼下單成立');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 860::numeric, 'A22 金額＝1060－券200');
+  SELECT is_used INTO v_used FROM public.coupon_codes WHERE code = 'TESTUNIQ900';
+  PERFORM pg_temp.assert_eq(v_used, true, 'A22 唯一碼被標記為已使用');
+END $$;
+
+-- A23 套裝價與優惠券互斥
+DO $$
+DECLARE v_a bigint; v_b bigint; v_bid bigint; v_r jsonb;
+BEGIN
+  v_a := pg_temp.mk_shop_product('TEST互斥A', 100, 1000);
+  v_b := pg_temp.mk_shop_product('TEST互斥B', 100, 1000);
+  v_bid := pg_temp.mk_bundle(1500, v_a, v_b);
+  PERFORM pg_temp.mk_coupon('TESTCOMBO', 'fixed', 100);
+
+  v_r := pg_temp.po(jsonb_build_array(
+           pg_temp.line(v_a, 1, 1000, NULL, v_bid),
+           pg_temp.line(v_b, 1, 1000, NULL, v_bid)), 2060, 60, 'TESTCOMBO', 2000);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'false', 'A23 套裝價不可與優惠券併用');
+  PERFORM pg_temp.assert_eq(v_r->>'error' LIKE '%套裝價不能與優惠券併用%', true,
+                            'A23 錯誤訊息講得出原因');
+END $$;
+
+-- A24 多品項混合（特價 + 規格 + 一般），剛好跨過免運門檻
+DO $$
+DECLARE v_a bigint; v_b bigint; v_c bigint; v_vid bigint; v_r jsonb;
+BEGIN
+  v_a := pg_temp.mk_shop_product('TEST混合一般', 100, 1200);
+  v_b := pg_temp.mk_shop_product('TEST混合特價', 100, 1500, true, 1300,
+                                 now() - interval '1 day', now() + interval '1 day');
+  v_c := pg_temp.mk_shop_product('TEST混合規格', 0, 500);
+  v_vid := pg_temp.mk_variant(v_c, 50, 1400);
+
+  -- 1200 + 1300 + 1400 = 3900 >= 3800 → 免運
+  v_r := pg_temp.po(jsonb_build_array(
+           pg_temp.line(v_a, 1, 1200),
+           pg_temp.line(v_b, 1, 1300),
+           pg_temp.line(v_c, 1, 1400, v_vid)), 3900, 0);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A24 多品項混合下單成立');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 3900::numeric,
+                            'A24 金額＝1200＋1300＋1400，達門檻免運');
+END $$;
+
+-- A25 商品不在 storefront_products（後台自建訂單的品項）→ 放行
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_offshelf_product('TEST未上架', 100);
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 777)), 837, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A25 未上架商品仍可建單（不可擋死店家）');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 837::numeric, 'A25 沿用傳入價格 777');
+END $$;
+
+-- A26 上架商品與未上架商品混在同一張單
+DO $$
+DECLARE v_on bigint; v_off bigint; v_r jsonb;
+BEGIN
+  v_on  := pg_temp.mk_shop_product('TEST混合上架', 100, 1000);
+  v_off := pg_temp.mk_offshelf_product('TEST混合未上架', 100);
+
+  v_r := pg_temp.po(jsonb_build_array(
+           pg_temp.line(v_on, 1, 1000),
+           pg_temp.line(v_off, 1, 300)), 1360, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'A26 混合單成立');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 1360::numeric,
+                            'A26 上架品用 DB 價、未上架品沿用傳入價');
+END $$;
+
+
+-- ══════════════════════════════════════════════════════════════
+-- B 組：攻擊面。p_total_amount／p_subtotal／p_shipping_fee 都是不可信輸入。
+-- ══════════════════════════════════════════════════════════════
+
+-- B1 p_total_amount 傳 1（審查者重現的那一招）
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST攻擊1元', 100, 3800);
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 3800)), 1, 0);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'false', 'B1 3800 元商品傳 p_total_amount=1 被擋下');
+  PERFORM pg_temp.assert_eq(v_r->>'error' LIKE '%價格%', true, 'B1 錯誤訊息是人話');
+  PERFORM pg_temp.assert_eq((SELECT quantity FROM public.products WHERE id = v_pid), 100,
+                            'B1 被擋下時庫存沒有被佔走');
+END $$;
+
+-- B2 p_total_amount 傳 0
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST攻擊0元', 100, 3800);
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 3800)), 0, 0);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'false', 'B2 p_total_amount=0 被擋下');
+END $$;
+
+-- B3 p_total_amount 傳負數
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST攻擊負數', 100, 3800);
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 3800)), -5000, 0);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'false', 'B3 p_total_amount 為負被擋下');
+END $$;
+
+-- B4 只改單一品項的價格（其餘照實）
+DO $$
+DECLARE v_a bigint; v_b bigint; v_r jsonb;
+BEGIN
+  v_a := pg_temp.mk_shop_product('TEST攻擊多品A', 100, 1000);
+  v_b := pg_temp.mk_shop_product('TEST攻擊多品B', 100, 3800);
+
+  -- B 的價格被改成 1，總額跟著改
+  v_r := pg_temp.po(jsonb_build_array(
+           pg_temp.line(v_a, 1, 1000),
+           pg_temp.line(v_b, 1, 1)), 1061, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'false', 'B4 只改一個品項的價格也被擋下');
+END $$;
+
+-- B5 數量灌大但金額只算一件
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST攻擊數量', 100, 1000);
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 10, 1000)), 1060, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'false', 'B5 買 10 件只付 1 件的錢被擋下');
+END $$;
+
+-- B6 灌大套裝折扣：把 items_json 的 price 改高，讓 bundle 折扣暴衝
+DO $$
+DECLARE v_a bigint; v_b bigint; v_bid bigint; v_r jsonb;
+BEGIN
+  v_a := pg_temp.mk_shop_product('TEST灌折A', 100, 1000);
+  v_b := pg_temp.mk_shop_product('TEST灌折B', 100, 1000);
+  v_bid := pg_temp.mk_bundle(1500, v_a, v_b);
+
+  -- 誠實的 p_total_amount（2000＋60），但 items_json 裡的 price 灌到 99999
+  v_r := pg_temp.po(jsonb_build_array(
+           pg_temp.line(v_a, 1, 99999, NULL, v_bid),
+           pg_temp.line(v_b, 1, 99999, NULL, v_bid)), 2060, 60);
+
+  IF (v_r->>'ok')::boolean THEN
+    -- 沒被擋下就至少不可以折出便宜：折扣只能是真實的 500
+    PERFORM pg_temp.assert_eq((v_r->>'bundle_discount')::numeric, 500::numeric,
+                              'B6 套裝折扣不隨 items_json 的 price 灌大');
+    PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 1560::numeric,
+                              'B6 灌大 price 後金額仍是真實金額');
+  ELSE
+    PERFORM pg_temp.assert_eq(v_r->>'ok', 'false', 'B6 灌大套裝折扣被擋下');
+    PERFORM pg_temp.assert_eq((SELECT quantity FROM public.products WHERE id = v_a), 100,
+                              'B6 被擋下時庫存沒有被佔走');
+  END IF;
+END $$;
+
+-- B7 灌大 p_subtotal 讓百分比券折更多
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST灌券', 100, 1000);
+  PERFORM pg_temp.mk_coupon('TESTATTACKPCT', 'percentage', 50);
+
+  -- p_total_amount 誠實（1000＋60），但 p_subtotal 灌成 100000 → 折扣應該只有 500
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 1000)), 1060, 60,
+                    'TESTATTACKPCT', 100000);
+
+  PERFORM pg_temp.assert_eq((v_r->>'discount_amount')::numeric IS DISTINCT FROM 50000::numeric,
+                            true, 'B7 折扣沒有隨 p_subtotal 灌大');
+  IF (v_r->>'ok')::boolean THEN
+    PERFORM pg_temp.assert_eq((v_r->>'discount_amount')::numeric, 500::numeric,
+                              'B7 折扣以伺服器算出的小計為準＝500');
+    PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 560::numeric,
+                              'B7 金額＝1060－500，不可能是負數');
+  END IF;
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric IS NULL
+                            OR (v_r->>'final_total')::numeric >= 0, true,
+                            'B7 最終金額不可為負');
+END $$;
+
+-- B8 灌大 p_subtotal 繞過最低消費門檻
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST繞門檻', 100, 500);
+  PERFORM pg_temp.mk_coupon('TESTBYPASSMIN', 'fixed', 300, 5000);
+
+  -- 實際只買 500，卻宣稱小計 9999 來過門檻
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 500)), 560, 60,
+                    'TESTBYPASSMIN', 9999);
+
+  PERFORM pg_temp.assert_eq((v_r->>'discount_amount')::numeric IS DISTINCT FROM 300::numeric,
+                            true, 'B8 灌大 p_subtotal 不能繞過最低消費門檻');
+END $$;
+
+-- B9 運費灌成負數（拿運費當折扣用）→ 必須擋下
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST負運費', 100, 3800);
+  -- 小計 3800、運費 -3700 → 表面上「總額 100 = 小計 + 運費」自洽
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 3800)), 100, -3700);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'false', 'B9 負運費折抵商品金額被擋下');
+  PERFORM pg_temp.assert_eq((SELECT quantity FROM public.products WHERE id = v_pid), 100,
+                            'B9 被擋下時庫存沒有被佔走');
+END $$;
+
+-- B9b 運費灌高（達免運門檻卻仍收運費）→ 擋下，多收錢一樣是 bug
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST多收運費', 100, 4000);
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 4000)), 4060, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'false', 'B9b 達免運門檻卻收運費被擋下');
+END $$;
+
+-- B9c 已知缺口：少付運費目前放行（運費只驗上界）
+--
+-- 這則測試鎖住的是「還沒關的洞」，不是想要的行為。運費之所以不驗等值，
+-- 是因為 supabase/tests/stock_reconcile.sql:65 的 fixture 用 1000 元的小計
+-- 傳 p_shipping_fee = 0，而本輪不得修改該檔（見 migration 檔頭）。
+-- 修法：把那則 fixture 改成 p_shipping_fee = 60，再把 place_order 的上界檢查
+-- 換成等值比對，然後把這則測試翻成「被擋下」。屆時這裡會紅，那是正確的訊號。
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST逃運費', 100, 1000);
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 1000)), 1000, 0);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true',
+    'B9c 少付運費目前仍放行（已知缺口，曝險 = 每單一次運費；修法見註解）');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 1000::numeric,
+    'B9c 商品金額本身沒有被動到');
+END $$;
+
+-- B10 前端金額比較高也要擋（多收錢同樣是 bug，不可靜靜通過）
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST多收', 100, 1000);
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 1000)), 5060, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'false', 'B10 金額比伺服器算的高也被擋下');
+END $$;
+
+-- B11 一元以內的四捨五入誤差要放行
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_shop_product('TEST零頭', 100, 999.5);
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 999.5)), 1060, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'B11 一元以內的零頭差異放行（伺服器算 1059.5）');
+END $$;
+
+-- B12 已取消的品項不必付錢
+DO $$
+DECLARE v_a bigint; v_b bigint; v_r jsonb;
+BEGIN
+  v_a := pg_temp.mk_shop_product('TEST取消保留', 100, 1000);
+  v_b := pg_temp.mk_shop_product('TEST取消排除', 100, 3800);
+
+  v_r := pg_temp.po(jsonb_build_array(
+           pg_temp.line(v_a, 1, 1000),
+           pg_temp.line(v_b, 1, 3800, NULL, NULL, '{"status": "cancelled"}'::jsonb)), 1060, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true', 'B12 已取消品項排除在小計外');
+  PERFORM pg_temp.assert_eq((v_r->>'final_total')::numeric, 1060::numeric,
+                            'B12 金額只算未取消的品項');
+END $$;
+
+-- B13 用未上架商品的 id 借道（現行放行行為的代價，明文鎖住以免無聲改變）
+DO $$
+DECLARE v_pid bigint; v_r jsonb;
+BEGIN
+  v_pid := pg_temp.mk_offshelf_product('TEST未上架借道', 100);
+  v_r := pg_temp.po(jsonb_build_array(pg_temp.line(v_pid, 1, 1)), 61, 60);
+
+  PERFORM pg_temp.assert_eq(v_r->>'ok', 'true',
+                            'B13 未上架商品仍沿用傳入價（保留後台建單路徑，殘留風險見報告）');
+END $$;
+
 ROLLBACK;
