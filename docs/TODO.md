@@ -102,16 +102,56 @@ vitest 429 個、後台 build。含跨兩支 migration 的整合點（預購扣�
 
 四個分支有未合併的工作。這是目前最大的一塊 —— 程式碼已經存在，價值卡在合併這一步。
 
-### 1. 綠界金物流 — 改走重做，計畫見 `docs/superpowers/plans/2026-08-12-ecpay-multitenant.md`
+### 1. 綠界金物流 — 程式碼完成，卡在需要真實環境的三步
 
-**不合併 `feature/ecpay-integration`**。實測 `git merge-tree` 只有 6 個檔衝突，但分支落後 main
-123 個 commit，其中 3 個 commit（快取失效、售罄看真實庫存）已被 main 用別的方式做掉，
-且分支是單租戶設計（`ECPAY_*` 讀 env），與「部分客戶已申請綠界、部分還沒」的需求不相容。
+分支 `worktree-ecpay-multitenant`，計畫與逐項任務在
+`docs/superpowers/plans/2026-08-12-ecpay-multitenant.md`。**沒有合併 `feature/ecpay-integration`**
+（單租戶設計，與「部分客戶申請了、部分還沒」不相容），改從 main 重做並保留舊分支當參考。
 
-做法改成：從 main 開分支，15 個 main 沒動過的檔案直接搬、6 個衝突檔在現行版本上重接，
-金鑰改成每店存 `store_ecpay_secrets`。舊分支保留當參考來源，上線後才刪。
+範圍：信用卡金流 ＋ 超商 C2C 物流（取貨付款／取貨不付款）。先上 Daigogo（store_id 1）。
+每店金鑰存 `store_ecpay_secrets`（RLS 開、零 policy），後台「設定 → 綠界金物流」填寫。
 
-在 worktree `worktree-ecpay-multitenant` 進行中。範圍、決策與逐項任務全在上面那份計畫。
+**接下來的三步需要你的環境與真實金鑰，程式碼這邊已經沒有待辦：**
+
+1. **套 migration 到 remote** —— 12 支，走 MCP `apply_migration` 逐支套，**絕不可 `db push`**。
+   套完必須驗 pg_cron：`cancel_abandoned_credit_orders` 已 `revoke from authenticated`，
+   若 migration 不是由函式 owner 套的，排程會 `permission denied` 靜默失效 → 棄單永不清理、
+   庫存被永久壓住。查 `cron.job.username`、`pg_proc.proacl`、`cron.job_run_details`。
+2. **Vercel 加環境變數** `ECPAY_CALLBACK_BASE_URL=https://daigogotw.com`，確認 `SUPABASE_SECRET_KEY` 已設。
+   部署前跑一次 `next build`（本機因為 dev server 佔用 port 3000，全程沒跑過）。
+3. **stage 跑通後換正式金鑰** —— 測試金鑰是綠界公開的 2000132／物流 2000933。
+   正式金鑰只在瀏覽器與 DB 之間流動，不要貼進任何檔案或對話。
+
+**stage 實測必測項**（happy path 測不出來的）：棄單 30 分鐘後被清、清完再從訂單頁重新付款、
+重複通知不重複加錢、**用 daigoking 或 spirit 的網址確認完全看不到綠界選項且手填門市＋匯款照常可用**。
+
+### 1b. 綠界這輪順手修掉的既有安全問題（與綠界無關，但都在同一支分支上）
+
+這些是做綠界時審查出來的，**都不是這次改出來的**，但綠界上線會讓它們從理論問題變成可自動化的損失：
+
+- `place_order` 完全信任前端傳來的 `p_total_amount` —— 傳 1 就能用 1 元買走 3800 元商品。
+  已改成從 `storefront_products` 回算（含特價、規格價、組合折扣、優惠券、運費）。
+  `append_to_order` 同樣的洞而且更寬（能改寫整張單金額），一併修掉。
+- `consumer_orders` 的 UPDATE policy 讓消費者能改自己訂單的**任意欄位**，包含 `paid_amount`
+  —— 一行 console 就能把訂單推成「已付清」。已加 `guard_consumer_order_update` trigger，
+  非店員只能把 `status` 改成「已取消」。**這條 policy 現在就在 remote 上**。
+- `cancel_abandoned_credit_orders` 零授權卻 grant 給 `authenticated` —— 任何會員傳負數
+  可取消全平台未付訂單。已收回權限並加授權檢查。
+- `refund_coupon` 在無 JWT 的內部呼叫（pg_cron）會被自己的授權擋下 —— 棄單客人的優惠券
+  會靜默消失。已比照 `batch_inventory_rpcs.sql` 的慣例放行。
+
+### 1c. 綠界的已知限制與待辦
+
+- **萊爾富與 OK 超商的物流狀態代碼未知**。7-11 與全家有官方代碼，另兩家靠 `RtnMsg` 中文
+  關鍵字猜。目前的處理是：只有官方代碼才自動記帳貨到付款的錢，猜測命中一律改成在後台
+  留一句「請確認是否已代收」。要真正修好得先拿到綠界的物流狀態代碼一覽表。
+- **綠界官方文件的 CheckMacValue 範例值沒有對拍成功**。演算法的中間產物（排序、金鑰包夾、
+  encode 規則）逐項核對過都正確，但那則測試現在是「實作快照」而非官方值。
+  **stage 第一筆交易就是這件事的真正驗證**，若被綠界回 `CheckMacValue Error` 先查這裡。
+- 本輪只做信用卡。ATM 虛擬帳號（能讓匯款自動對帳）與超商代碼繳費留待下一輪 ——
+  ATM 的繳費期限與「棄單 30 分鐘釋放庫存」直接衝突，需要另定策略。
+- `20250039` 兩支 migration 撞號（`line_conversation_memory` 與 `variant_cost_anon_revoke`），
+  `origin/main` 就存在，與這次無關但值得獨立處理。
 
 ### 2. `feat/threads-line-integration` — Threads 收單串接（2 commits，最後 2026-07-14）
 
