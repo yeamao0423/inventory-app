@@ -8,14 +8,12 @@
 
 ---
 
-## 行程費用代墊（2026-08-13）：migration 只套 local，UI 未驗收
+## 行程費用代墊（2026-08-13）：程式碼與 migration 都已上 local+remote，UI 未驗收
 
 `trip_expenses` 補上 `paid_by`／`settled`，員工代墊機票、住宿等費用比照進貨代墊
 （`procurement_items.paid_by`），拆賬時一併算進「代墊返還」。`settle_trip` /
 `void_trip_settlement` 已同步改（結清時標記 `settled=true`，作廢時還原）。
 
-- `supabase/migrations/20260813120000_trip_expense_paid_by.sql` 已套 local，還要上 remote
-  （MCP `apply_migration`，**絕不可 `supabase db push`**）
 - UI 沒有人眼驗過：`TripSheet` 固定費用／其他支出的代墊人選單、已結清費用鎖住不可編輯、
   拆賬摘要的「待還代墊」是否正確併入行程費用
 - 編輯行程時只刪重建「未結清」的費用列，已結清的原樣保留 —— 這是刻意避開既有的
@@ -115,32 +113,30 @@ vitest 429 個、後台 build。含跨兩支 migration 的整合點（預購扣�
 
 ## 一、做完但沒上線的分支
 
-四個分支有未合併的工作。這是目前最大的一塊 —— 程式碼已經存在，價值卡在合併這一步。
+三個分支還有未合併的工作。
 
-### 1. 綠界金物流 — 程式碼完成，卡在需要真實環境的三步
+### 1. 綠界金物流 — 已合併進 main＋16 支 migration 已上 remote，卡在需要真實環境的兩步
 
-分支 `worktree-ecpay-multitenant`，計畫與逐項任務在
+2026-08-13 把 `worktree-ecpay-multitenant`（29 commits）合併進 main、push 到 GitHub，
+16 支 migration 全部用 MCP `apply_migration` 套上 remote（pg_cron owner 驗過一致，
+`ecpay-abandon-sweep` 排程確認正常執行，不是靜默失效）。計畫與逐項任務在
 `docs/superpowers/plans/2026-08-12-ecpay-multitenant.md`。**沒有合併 `feature/ecpay-integration`**
-（單租戶設計，與「部分客戶申請了、部分還沒」不相容），改從 main 重做並保留舊分支當參考。
+（單租戶設計，與「部分客戶申請了、部分還沒」不相容），舊分支保留當參考。
 
 範圍：信用卡金流 ＋ 超商 C2C 物流（取貨付款／取貨不付款）。先上 Daigogo（store_id 1）。
 每店金鑰存 `store_ecpay_secrets`（RLS 開、零 policy），後台「設定 → 綠界金物流」填寫。
 
-**接下來的三步需要你的環境與真實金鑰，程式碼這邊已經沒有待辦：**
+**接下來的兩步需要你的環境與真實金鑰，程式碼與 migration 都已就緒：**
 
-1. **套 migration 到 remote** —— 16 支，走 MCP `apply_migration` 逐支套，**絕不可 `db push`**。
-   套完必須驗 pg_cron：`cancel_abandoned_credit_orders` 已 `revoke from authenticated`，
-   若 migration 不是由函式 owner 套的，排程會 `permission denied` 靜默失效 → 棄單永不清理、
-   庫存被永久壓住。查 `cron.job.username`、`pg_proc.proacl`、`cron.job_run_details`。
-2. **Vercel 加環境變數** `ECPAY_CALLBACK_BASE_URL=https://daigogotw.com`，確認 `SUPABASE_SECRET_KEY` 已設。
+1. **Vercel 加環境變數** `ECPAY_CALLBACK_BASE_URL=https://daigogotw.com`，確認 `SUPABASE_SECRET_KEY` 已設。
    部署前跑一次 `next build`（本機因為 dev server 佔用 port 3000，全程沒跑過）。
-3. **stage 跑通後換正式金鑰** —— 測試金鑰是綠界公開的 2000132／物流 2000933。
+2. **stage 跑通後換正式金鑰** —— 測試金鑰是綠界公開的 2000132／物流 2000933。
    正式金鑰只在瀏覽器與 DB 之間流動，不要貼進任何檔案或對話。
 
 **stage 實測必測項**（happy path 測不出來的）：棄單 30 分鐘後被清、清完再從訂單頁重新付款、
 重複通知不重複加錢、**用 daigoking 或 spirit 的網址確認完全看不到綠界選項且手填門市＋匯款照常可用**。
 
-### 1b. 綠界這輪順手修掉的既有安全問題（與綠界無關，但都在同一支分支上）
+### 1b. 綠界這輪順手修掉的既有安全問題（與綠界無關，但都在同一批工作裡）
 
 這些是做綠界時審查出來的，**都不是這次改出來的**，但綠界上線會讓它們從理論問題變成可自動化的損失：
 
