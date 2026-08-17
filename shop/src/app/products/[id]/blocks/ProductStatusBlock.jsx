@@ -1,9 +1,9 @@
 'use client'
-// 收單／缺貨提示。三種狀態互斥，三種都不成立時整塊不出現（正常在賣的商品不需要提示框）。
+// 收單／缺貨／預購提示。四種狀態互斥，都不成立時整塊不出現（正常在賣的商品不需要提示框）。
 import { useProductState } from '../ProductStateProvider'
 
 export default function ProductStatusBlock() {
-  const { sp, zh, isCollection, collectionExpired, markedSoldOut } = useProductState()
+  const { sp, zh, isCollection, isPreorder, collectionExpired, markedSoldOut } = useProductState()
 
   // 缺貨的優先序最高：已標記缺貨時不必再告訴客人收單什麼時候截止
   if (markedSoldOut) {
@@ -29,6 +29,16 @@ export default function ProductStatusBlock() {
           {new Date(sp.collection_end).toLocaleString(zh ? 'zh-TW' : 'en-US', {
             month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
           })}
+        </div>
+      </div>
+    )
+  }
+  if (isPreorder) {
+    return (
+      <div className="pp-status pp-status-green">
+        <div className="pp-status-title">{zh ? '預購商品' : 'Preorder'}</div>
+        <div className="pp-status-detail">
+          {zh ? '下單成立，將盡快為您安排採購' : 'Order confirmed — we will arrange procurement as soon as possible'}
         </div>
       </div>
     )

@@ -40,6 +40,7 @@ export default function ProductStateProvider({
   // 收單／預購狀態要在初始選擇之前算好 —— 挑「第一個還有貨的值」需要 skipStock，
   // 晚一步算會拿到 undefined，預購商品的初始選擇會被誤判成缺貨。
   const isCollection = !!sp.collection_end
+  const isPreorder = !isCollection && !!sp.skip_stock_check
   const collectionExpired = isCollection && new Date(sp.collection_end) < new Date()
   const markedSoldOut = sp.sold_out
   const skipStock = sp.skip_stock_check || isCollection
@@ -195,7 +196,7 @@ export default function ProductStateProvider({
     // 庫存補正的兩則對客人的交代（見 ProductOptionsBlock / ProductCtaBlock）
     autoSwitched, addError,
     // 衍生
-    activeTypes, currentVariant, stock, skipStock, isCollection, collectionExpired,
+    activeTypes, currentVariant, stock, skipStock, isCollection, isPreorder, collectionExpired,
     markedSoldOut, stockSoldOut, isSoldOut, isUnavailable,
     // context 的 key 維持 visibleImages（ProductGalleryBlock 在讀它），值換成本地的 visible
     price, sale, variantLabel, sortedImages, visibleImages: visible, ctaLabel,

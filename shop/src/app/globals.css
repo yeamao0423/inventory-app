@@ -186,6 +186,7 @@ input, textarea, select { font-family: inherit; }
 .product-badge-soldout { background: var(--red-bg); color: var(--red); }
 .product-badge-expired { background: var(--border-light); color: var(--text-3); }
 .product-badge-collection { background: var(--amber-bg); color: var(--amber); }
+.product-badge-preorder { background: var(--green-bg); color: var(--green); }
 .product-badge-sale { background: var(--red); color: #fff; }
 .product-tag { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 12px; background: #f0f6ff; color: #2563eb; border: 1px solid #c5d9f7; line-height: 1.4; }
 @media (max-width: 600px) { .product-tag { font-size: 10px; padding: 1px 6px; } }

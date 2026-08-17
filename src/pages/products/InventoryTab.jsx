@@ -316,7 +316,7 @@ function ProductRow({ product: p, onTap, exchangeRates = {}, canDelete = false, 
 
   // 右側徽章
   let badge
-  if (!tracked) badge = <span className="badge badge-warn">{sf?.collection_end ? '限時單' : '不追蹤'}</span>
+  if (!tracked) badge = <span className="badge badge-warn">{sf?.collection_end ? '限時單' : '預購'}</span>
   else if (out) badge = <span className="badge badge-low">缺貨</span>
   else if (low) badge = <span className="badge badge-low">低庫存</span>
   else badge = <span className="badge badge-ok">正常</span>
@@ -558,7 +558,7 @@ function StorefrontInfo({ product, exchangeRates }) {
   const parts = []
   if (sf.shop_price != null) parts.push(`售價 ${fmtRange(priceRange, { prefix: 'NT$' })}`)
   if (marginRange) parts.push(`毛利 ${fmtMarginAmount(marginRange)}（${fmtMarginRate(marginRange)}）`)
-  parts.push(sf.collection_end ? '限時收單' : (sf.skip_stock_check ? '不追蹤庫存' : '現貨'))
+  parts.push(sf.collection_end ? '限時收單' : (sf.skip_stock_check ? '預購' : '現貨'))
   parts.push(sf.published ? '上架中' : '已下架')
   return (
     <div style={{ background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 10, padding: '8px 12px', marginBottom: 12 }}>

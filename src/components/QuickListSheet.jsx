@@ -5,6 +5,8 @@ import { useAuth } from '../hooks/useAuth'
 import { uploadImages, compressImage, reencodeImage } from '../lib/imageUtils'
 import CustomSelect from './CustomSelect'
 import VariantEditor, { resolveVariantLabel } from './VariantEditor'
+import { clampStock } from '../lib/sellingMode'
+import { useStockZeroGuard } from '../hooks/useStockZeroGuard'
 
 const STEPS = ['拍照', '商品資料', '確認上架']
 
@@ -87,6 +89,19 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
   const [selectedValues, setSelectedValues] = useState({})
   const [localVariants, setLocalVariants] = useState([])
   const [recentEnds, setRecentEnds] = useState([])
+
+  const totalQuickListStock = hasVariants && localVariants.length > 0
+    ? localVariants.reduce((sum, v) => sum + (v.stock || 0), 0)
+    : (Number(quantity) || 0)
+
+  const { guard: guardStockZero, modal: stockZeroModal } = useStockZeroGuard({
+    totalStock: totalQuickListStock,
+    skipStockCheck,
+    onZero: () => {
+      setLocalVariants(prev => prev.map(v => ({ ...v, stock: 0 })))
+      setQuantity('0')
+    },
+  })
 
   // AI 補齊
   const [aiSelected, setAiSelected] = useState([0])   // 要送 AI 的照片 index（最多 3 張）
@@ -340,7 +355,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
           localVariants.map(v => ({
             product_id: productId,
             options: v.options,
-            stock: v.stock || 0,
+            stock: clampStock(v.stock, skipStockCheck),
             variant_price: v.variant_price,
             sale_price: onSale ? v.sale_price : null,
             variant_cost: v.variant_cost ?? null,
@@ -666,7 +681,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
             <div className="form-label" style={{ marginBottom: 8 }}>販售模式 *</div>
             <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
               <button
-                onClick={() => { setSellingMode('stock'); setSkipStockCheck(false) }}
+                onClick={() => guardStockZero(false, () => { setSellingMode('stock'); setSkipStockCheck(false) })}
                 style={{
                   flex: 1, padding: '14px 8px', borderRadius: 12, fontSize: 14, fontWeight: 600,
                   cursor: 'pointer', transition: 'all .15s', textAlign: 'center',
@@ -679,7 +694,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
                 <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2, opacity: 0.8 }}>有庫存，直接銷售</div>
               </button>
               <button
-                onClick={() => {
+                onClick={() => guardStockZero(true, () => {
                   setSellingMode('collection')
                   setSkipStockCheck(true)
                   if (!collectionEnd) {
@@ -687,7 +702,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
                     const pad = n => String(n).padStart(2, '0')
                     setCollectionEnd(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`)
                   }
-                }}
+                })}
                 style={{
                   flex: 1, padding: '14px 8px', borderRadius: 12, fontSize: 14, fontWeight: 600,
                   cursor: 'pointer', transition: 'all .15s', textAlign: 'center',
@@ -698,6 +713,23 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
               >
                 🛒 限時單
                 <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2, opacity: 0.8 }}>限時收單，截止後叫貨</div>
+              </button>
+              <button
+                onClick={() => guardStockZero(true, () => {
+                  setSellingMode('preorder')
+                  setSkipStockCheck(true)
+                  setCollectionEnd('')
+                })}
+                style={{
+                  flex: 1, padding: '14px 8px', borderRadius: 12, fontSize: 14, fontWeight: 600,
+                  cursor: 'pointer', transition: 'all .15s', textAlign: 'center',
+                  background: sellingMode === 'preorder' ? 'var(--text)' : 'var(--surface)',
+                  color: sellingMode === 'preorder' ? '#fff' : 'var(--text-3)',
+                  border: `0.5px solid ${sellingMode === 'preorder' ? 'var(--text)' : 'var(--border)'}`,
+                }}
+              >
+                🔮 預購單
+                <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2, opacity: 0.8 }}>沒有庫存，永遠開放下訂</div>
               </button>
             </div>
 
@@ -734,7 +766,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
                   <label className="form-label fs13" style={{ margin: 0 }}>跳過庫存檢查</label>
                   <div
-                    onClick={() => setSkipStockCheck(v => !v)}
+                    onClick={() => guardStockZero(!skipStockCheck, () => setSkipStockCheck(v => !v))}
                     style={{
                       width: 44, height: 26, borderRadius: 13, cursor: 'pointer', transition: 'background .2s',
                       background: skipStockCheck ? 'var(--blue, #3b82f6)' : 'var(--border)',
@@ -928,7 +960,9 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
                 ? hasVariants && localVariants.length > 0
                   ? `現貨（${localVariants.length} 種規格）`
                   : `現貨（庫存 ${quantity}）`
-                : `限時單（截止 ${formatDateTime(collectionEnd)}）`
+                : sellingMode === 'collection'
+                  ? `限時單（截止 ${formatDateTime(collectionEnd)}）`
+                  : '預購單（永遠開放下訂）'
             } />
             {sellingMode === 'collection' && (
               <ConfirmRow label="庫存檢查" value={skipStockCheck ? '跳過（不檢查庫存）' : '啟用'} />
@@ -994,6 +1028,7 @@ export default function QuickListSheet({ onClose, onSaved, existingSources = [] 
           )}
         </div>
       </div>
+      {stockZeroModal}
     </div>
   )
 }

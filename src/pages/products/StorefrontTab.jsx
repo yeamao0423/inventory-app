@@ -17,6 +17,8 @@ import { utcToLocal, localToISO } from '../../lib/datetime'
 import { Pill } from '../../components/MenuPopover'
 import { blockCount } from '../../lib/contentBlocks'
 import ListToolbar from '../../components/ListToolbar'
+import { clampStock, deriveSellingMode } from '../../lib/sellingMode'
+import { useStockZeroGuard } from '../../hooks/useStockZeroGuard'
 
 // 商城排序選項（預設＝第一項：上架 新→舊）
 const STORE_SORT = [
@@ -731,6 +733,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
     sale_end: utcToLocal(item?.sale_end),
   })
   const [variants, setVariants] = useState([])
+  const [pendingStockZero, setPendingStockZero] = useState(false) // 編輯既有上架時，歸零延後到 save() 才真的寫入
   const [optionTypes, setOptionTypes] = useState([])
   const [saving, setSaving] = useState(false)
   const [createdItem, setCreatedItem] = useState(null)
@@ -827,6 +830,9 @@ function ListingSheet({ item, products, onClose, onSaved }) {
     }
 
     if (isEditing) {
+      if (pendingStockZero && variants.length > 0) {
+        await supabase.from('product_variants').update({ stock: 0 }).in('id', variants.map(v => v.id))
+      }
       await supabase.from('storefront_products').update(payload).eq('id', editingItem.id)
       revalidateShop({ storeId, productIds: [activeProductId] })
       setSaving(false)
@@ -852,7 +858,37 @@ function ListingSheet({ item, products, onClose, onSaved }) {
   }
 
   // Selling mode: 'stock' (現貨) or 'collection' (收單)
-  const sellingMode = form.collection_end ? 'collection' : 'stock'
+  const sellingMode = deriveSellingMode({ collectionEnd: form.collection_end, skipStockCheck: form.skip_stock_check })
+
+  const totalStorefrontStock = variants.length > 0
+    ? variants.reduce((sum, v) => sum + (v.stock || 0), 0)
+    : (Number(form.base_stock) || 0)
+
+  // 編輯既有上架時，庫存欄位在這張表單全程唯讀（見 readOnlyStock）、表單本身也沒有自動存檔——
+  // 歸零如果立刻打 DB，使用者切完模式後不按「儲存」直接關掉，其他變更都會如預期消失，
+  // 唯獨庫存已經被真的清空，跟這張表單的行為不一致。所以編輯模式下先只改本地狀態，
+  // 真正的寫入延後到 save() 裡跟其他變更一起套用；只有「新增上架」（庫存本來就不是唯讀、
+  // 逐欄位即改即存）才維持原本的立即寫入。
+  async function zeroCurrentStock() {
+    if (variants.length > 0) {
+      if (isEditing) {
+        setVariants(prev => prev.map(v => ({ ...v, stock: 0 })))
+        setPendingStockZero(true)
+      } else {
+        const ids = variants.map(v => v.id)
+        await supabase.from('product_variants').update({ stock: 0 }).in('id', ids)
+        setVariants(prev => prev.map(v => ({ ...v, stock: 0 })))
+      }
+    } else {
+      set('base_stock', '0')
+    }
+  }
+
+  const { guard: guardStockZero, modal: stockZeroModal } = useStockZeroGuard({
+    totalStock: totalStorefrontStock,
+    skipStockCheck: form.skip_stock_check,
+    onZero: zeroCurrentStock,
+  })
 
   // ── 商品頁編排入口 ──
   // page_blocks 是「已自訂」的唯一判準：null 代表跟隨全店範本，不是空版面（見 migration 20250082）
@@ -1046,6 +1082,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
                 shopPrice={Number(form.shop_price) || 0}
                 resolveVariantLabel={resolveVariantLabel}
                 readOnlyStock={isEditing}
+                stockDisabled={sellingMode !== 'stock'}
                 onSale={form.on_sale}
                 salePrice={form.sale_price}
                 productCost={(() => {
@@ -1061,7 +1098,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
             )}
 
             {/* 無規格 + 需要庫存 → 顯示庫存欄位（編輯既有上架時唯讀，請至庫存頁調整）*/}
-            {variants.length === 0 && !showVariants && (sellingMode === 'stock' || !form.skip_stock_check) && (
+            {variants.length === 0 && !showVariants && sellingMode === 'stock' && (
               <div className="form-group" style={{ marginTop: 12 }}>
                 <label className="form-label">庫存數量</label>
                 {isEditing ? (
@@ -1088,7 +1125,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
         <div className="sec" style={{ marginTop: 16 }}>銷售模式</div>
         <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
           <button
-            onClick={() => { set('collection_end', ''); set('skip_stock_check', false) }}
+            onClick={() => guardStockZero(false, () => { set('collection_end', ''); set('skip_stock_check', false) })}
             style={{
               flex: 1, padding: '12px 8px', borderRadius: 10, fontSize: 13, fontWeight: 600,
               cursor: 'pointer', transition: 'all .15s', textAlign: 'center',
@@ -1103,11 +1140,13 @@ function ListingSheet({ item, products, onClose, onSaved }) {
           <button
             onClick={() => {
               if (sellingMode !== 'collection') {
-                const d = new Date(); d.setDate(d.getDate() + 7)
-                const pad = n => String(n).padStart(2, '0')
-                const val = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
-                set('collection_end', val)
-                set('skip_stock_check', true)
+                guardStockZero(true, () => {
+                  const d = new Date(); d.setDate(d.getDate() + 7)
+                  const pad = n => String(n).padStart(2, '0')
+                  const val = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+                  set('collection_end', val)
+                  set('skip_stock_check', true)
+                })
               }
             }}
             style={{
@@ -1120,6 +1159,19 @@ function ListingSheet({ item, products, onClose, onSaved }) {
           >
             🛒 收單模式
             <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2, opacity: 0.8 }}>限時收單，截止後叫貨</div>
+          </button>
+          <button
+            onClick={() => guardStockZero(true, () => { set('collection_end', ''); set('skip_stock_check', true) })}
+            style={{
+              flex: 1, padding: '12px 8px', borderRadius: 10, fontSize: 13, fontWeight: 600,
+              cursor: 'pointer', transition: 'all .15s', textAlign: 'center',
+              background: sellingMode === 'preorder' ? 'var(--text)' : 'var(--surface)',
+              color: sellingMode === 'preorder' ? '#fff' : 'var(--text-3)',
+              border: `0.5px solid ${sellingMode === 'preorder' ? 'var(--text)' : 'var(--border)'}`,
+            }}
+          >
+            🔮 預購模式
+            <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2, opacity: 0.8 }}>沒有庫存，永遠開放下訂</div>
           </button>
         </div>
 
@@ -1149,7 +1201,7 @@ function ListingSheet({ item, products, onClose, onSaved }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
               <label className="form-label fs13" style={{ margin: 0 }}>跳過庫存檢查</label>
               <div
-                onClick={() => set('skip_stock_check', !form.skip_stock_check)}
+                onClick={() => guardStockZero(!form.skip_stock_check, () => set('skip_stock_check', !form.skip_stock_check))}
                 style={{
                   width: 44, height: 26, borderRadius: 13, cursor: 'pointer', transition: 'background .2s',
                   background: form.skip_stock_check ? 'var(--blue, #3b82f6)' : 'var(--border)',
@@ -1258,11 +1310,12 @@ function ListingSheet({ item, products, onClose, onSaved }) {
           {saving ? '儲存中…' : isEditing ? '儲存變更' : '新增上架'}
         </button>
       </div>
+      {stockZeroModal}
     </div>
   )
 }
 
-function VariantManager({ variants, setVariants, optionTypes, productId, productName, shopPrice, resolveVariantLabel, readOnlyStock = false, onSale = false, salePrice = '', productCost = null, costCurrency = 'TWD', exchangeRates = {} }) {
+function VariantManager({ variants, setVariants, optionTypes, productId, productName, shopPrice, resolveVariantLabel, readOnlyStock = false, stockDisabled = false, onSale = false, salePrice = '', productCost = null, costCurrency = 'TWD', exchangeRates = {} }) {
   // Step 1 state: which types and values are selected for this product
   const [selectedTypes, setSelectedTypes] = useState({})   // { typeId: true/false }
   const [selectedValues, setSelectedValues] = useState({})  // { typeId: Set of valueIds }
@@ -1366,6 +1419,7 @@ function VariantManager({ variants, setVariants, optionTypes, productId, product
   }
 
   async function updateVariantField(id, field, value) {
+    if (field === 'stock' && stockDisabled) return
     const numVal = value === '' || value === null ? null : Number(value)
     await supabase.from('product_variants').update({ [field]: field === 'stock' ? (numVal ?? 0) : numVal }).eq('id', id)
     setVariants(prev => prev.map(v => v.id === id ? { ...v, [field]: field === 'stock' ? (numVal ?? 0) : numVal } : v))
@@ -1377,7 +1431,7 @@ function VariantManager({ variants, setVariants, optionTypes, productId, product
   }
 
   async function applyBatchStock() {
-    if (batchStock === '') return
+    if (batchStock === '' || stockDisabled) return
     const val = Number(batchStock)
     const ids = variants.map(v => v.id)
     await supabase.from('product_variants').update({ stock: val }).in('id', ids)
@@ -1497,7 +1551,7 @@ function VariantManager({ variants, setVariants, optionTypes, productId, product
 
               {/* Batch controls */}
               <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-                {!readOnlyStock && (
+                {!readOnlyStock && !stockDisabled && (
                   <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                     <span className="muted fs12">批次庫存:</span>
                     <input
@@ -1574,6 +1628,8 @@ function VariantManager({ variants, setVariants, optionTypes, productId, product
                         <td style={{ ...tdStyle, textAlign: 'center' }}>
                           {readOnlyStock ? (
                             <span className="fw600" style={{ color: (v.stock || 0) === 0 ? 'var(--red)' : 'var(--text)' }} title="庫存請至庫存頁調整">{v.stock || 0}</span>
+                          ) : stockDisabled ? (
+                            <span className="muted fs12">略過</span>
                           ) : (
                             <input
                               type="number"

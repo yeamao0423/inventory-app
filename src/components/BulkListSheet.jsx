@@ -5,6 +5,8 @@ import { uploadImages, compressImage, reencodeImage } from '../lib/imageUtils'
 import { SUPPORTED_CURRENCIES } from '../constants/currency'
 import CustomSelect from './CustomSelect'
 import VariantEditor from './VariantEditor'
+import { clampStock } from '../lib/sellingMode'
+import { useStockZeroGuard } from '../hooks/useStockZeroGuard'
 
 const AI_MEDIA_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
 
@@ -84,6 +86,25 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
 
   const [reviewGroups, setReviewGroups] = useState([])
   const [drafts, setDrafts] = useState([])
+
+  const totalDraftStock = drafts.reduce((sum, d) => {
+    if (d.hasVariants && d.variants.length > 0) {
+      return sum + d.variants.reduce((s, v) => s + (v.stock || 0), 0)
+    }
+    return sum + (Number(d.quantity) || 0)
+  }, 0)
+
+  const { guard: guardStockZero, modal: stockZeroModal } = useStockZeroGuard({
+    totalStock: totalDraftStock,
+    skipStockCheck: sellingMode !== 'stock',
+    onZero: () => {
+      setDrafts(prev => prev.map(d => ({
+        ...d,
+        quantity: '0',
+        variants: d.variants.map(v => ({ ...v, stock: 0 })),
+      })))
+    },
+  })
 
   const [categories, setCategories] = useState([])
   const [allTags, setAllTags] = useState([])
@@ -323,8 +344,8 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
         const hasVariants = draft.hasVariants && draft.variants.length > 0
         // 有規格時 quantity = 各規格庫存加總（與快速上架一致）
         const baseQty = hasVariants
-          ? (sellingMode === 'stock' ? draft.variants.reduce((s, v) => s + (v.stock || 0), 0) : 0)
-          : (sellingMode === 'stock' && draft.quantity ? Number(draft.quantity) : 0)
+          ? clampStock(draft.variants.reduce((s, v) => s + (v.stock || 0), 0), sellingMode !== 'stock')
+          : clampStock(draft.quantity, sellingMode !== 'stock')
         const { data: inserted, error: prodErr } = await supabase.from('products').insert({
           name: draft.name.trim(),
           quantity: baseQty,
@@ -355,7 +376,7 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
             draft.variants.map(v => ({
               product_id: productId,
               options: v.options,
-              stock: sellingMode === 'stock' ? (v.stock || 0) : 0,
+              stock: clampStock(v.stock, sellingMode !== 'stock'),
               variant_price: v.variant_price,
               sale_price: null,
               variant_cost: v.variant_cost ?? null,
@@ -368,7 +389,7 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
           desc_zh: draft.descZh.trim() || null,
           published: true,
           sold_out: false,
-          skip_stock_check: sellingMode === 'collection',
+          skip_stock_check: sellingMode !== 'stock',
           collection_end: sellingMode === 'collection' ? collectionEnd || null : null,
           store_id: storeId,
         })
@@ -562,7 +583,7 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
               <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 8 }}>販售模式（批量套用）</div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button
-                  onClick={() => setSellingMode('stock')}
+                  onClick={() => guardStockZero(false, () => setSellingMode('stock'))}
                   style={{
                     flex: 1, padding: '12px 8px', borderRadius: 12, fontSize: 13, fontWeight: 600,
                     cursor: 'pointer', transition: 'all .15s', textAlign: 'center',
@@ -575,14 +596,14 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
                   <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2, opacity: 0.8 }}>有庫存，直接銷售</div>
                 </button>
                 <button
-                  onClick={() => {
+                  onClick={() => guardStockZero(true, () => {
                     setSellingMode('collection')
                     if (!collectionEnd) {
                       const d = new Date(); d.setDate(d.getDate() + 7)
                       const pad = n => String(n).padStart(2, '0')
                       setCollectionEnd(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`)
                     }
-                  }}
+                  })}
                   style={{
                     flex: 1, padding: '12px 8px', borderRadius: 12, fontSize: 13, fontWeight: 600,
                     cursor: 'pointer', transition: 'all .15s', textAlign: 'center',
@@ -593,6 +614,19 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
                 >
                   🛒 限時單
                   <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2, opacity: 0.8 }}>限時收單，截止後叫貨</div>
+                </button>
+                <button
+                  onClick={() => guardStockZero(true, () => { setSellingMode('preorder'); setCollectionEnd('') })}
+                  style={{
+                    flex: 1, padding: '12px 8px', borderRadius: 12, fontSize: 13, fontWeight: 600,
+                    cursor: 'pointer', transition: 'all .15s', textAlign: 'center',
+                    background: sellingMode === 'preorder' ? 'var(--text)' : 'var(--surface)',
+                    color: sellingMode === 'preorder' ? '#fff' : 'var(--text-3)',
+                    border: `0.5px solid ${sellingMode === 'preorder' ? 'var(--text)' : 'var(--border)'}`,
+                  }}
+                >
+                  🔮 預購單
+                  <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2, opacity: 0.8 }}>沒有庫存，永遠開放下訂</div>
                 </button>
               </div>
 
@@ -738,7 +772,7 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
                 fontSize: 12, padding: '3px 10px', borderRadius: 12,
                 background: 'var(--surface)', border: '0.5px solid var(--border)', color: 'var(--text-2)',
               }}>
-                {sellingMode === 'collection' ? '🛒 限時單' : '📦 現貨單'}
+                {sellingMode === 'collection' ? '🛒 限時單' : sellingMode === 'preorder' ? '🔮 預購單' : '📦 現貨單'}
               </span>
             </div>
 
@@ -868,6 +902,8 @@ export default function BulkListSheet({ onClose, onSaved, existingSources = [] }
           </div>
         </>}
       </div>
+
+      {stockZeroModal}
 
       {/* 拖曳中跟隨指標的浮動縮圖 */}
       {ghost && (

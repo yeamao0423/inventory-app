@@ -11,13 +11,14 @@ import { getMenuItems, groupEnabled, resolvePin } from '../../lib/menu'
 // 多規格只要任一規格有庫存即算有貨。篩選、排序、卡片三處共用，勿各自複製。
 function getAvailability(sp) {
   const isCollection = !!sp.collection_end
+  const isPreorder = !isCollection && !!sp.skip_stock_check
   const collectionExpired = isCollection && new Date(sp.collection_end) < new Date()
   const variants = sp.products?.product_variants || []
   const allVariantsSoldOut = variants.length > 0
     ? variants.every(v => (v.stock ?? 0) <= 0)
     : (sp.products?.quantity ?? 0) <= 0
   const outOfStock = !!sp.sold_out || (!isCollection && !sp.skip_stock_check && allVariantsSoldOut)
-  return { isCollection, collectionExpired, outOfStock, canOrder: !outOfStock && !collectionExpired }
+  return { isCollection, isPreorder, collectionExpired, outOfStock, canOrder: !outOfStock && !collectionExpired }
 }
 
 // 資料由 server component（page.jsx）以 props 帶入。分頁狀態走 URL ?page=N。
@@ -517,7 +518,7 @@ function ProductCard({ sp, t, lang, allTags }) {
   const productTags = (allTags || []).filter(tg => productTagIds.includes(tg.id))
 
   // Status logic（含庫存歸零；規則見 getAvailability）
-  const { isCollection, collectionExpired, outOfStock, canOrder } = getAvailability(sp)
+  const { isCollection, isPreorder, collectionExpired, outOfStock, canOrder } = getAvailability(sp)
   const unavailable = !canOrder
 
   let statusBadge = null
@@ -529,6 +530,8 @@ function ProductCard({ sp, t, lang, allTags }) {
     const end = new Date(sp.collection_end)
     const dateStr = end.toLocaleDateString(zh ? 'zh-TW' : 'en-US', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
     statusBadge = <span className="product-badge product-badge-collection">{zh ? `收單至 ${dateStr}` : `Until ${dateStr}`}</span>
+  } else if (isPreorder) {
+    statusBadge = <span className="product-badge product-badge-preorder">{zh ? '預購中' : 'Preorder'}</span>
   }
 
   return (

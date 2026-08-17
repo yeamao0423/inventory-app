@@ -72,8 +72,8 @@ function NameDialog({ title, initName = '', initNameEn = '', showEn = true, name
   const [nameEn, setNameEn] = useState(initNameEn)
   const save = () => { if (name.trim()) onSave(name.trim(), nameEn.trim()) }
   return (
-    <div className="tx-modal-overlay" onClick={onCancel}>
-      <div className="tx-modal" onClick={e => e.stopPropagation()}>
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
         <div className="fw600 fs15" style={{ marginBottom: 14 }}>{title}</div>
         <label className="form-label fs12">{nameLabel} *</label>
         <input autoFocus className="form-input" style={{ width: '100%', marginBottom: 12 }} placeholder={placeholder}
@@ -98,8 +98,8 @@ function NameDialog({ title, initName = '', initNameEn = '', showEn = true, name
 
 function ConfirmDialog({ title, body, onConfirm, onCancel }) {
   return (
-    <div className="tx-modal-overlay" onClick={onCancel}>
-      <div className="tx-modal" onClick={e => e.stopPropagation()}>
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
         <div className="fw600 fs15" style={{ marginBottom: 10 }}>{title}</div>
         <div className="fs13" style={{ color: 'var(--text-2)', lineHeight: 1.6, marginBottom: 16 }}>{body}</div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
@@ -131,8 +131,8 @@ function PinDialog({ categories, brands, tags, existing, onSave, onCancel }) {
     onSave(item)
   }
   return (
-    <div className="tx-modal-overlay" onClick={onCancel}>
-      <div className="tx-modal" onClick={e => e.stopPropagation()}>
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
         <div className="fw600 fs15" style={{ marginBottom: 14 }}>新增置頂項目</div>
         <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
           {Object.entries(PIN_TYPE_LABELS).map(([k, label]) => (

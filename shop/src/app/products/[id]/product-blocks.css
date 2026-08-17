@@ -148,6 +148,10 @@
 .pp-status-amber .pp-status-title,
 .pp-status-amber .pp-status-detail { color: var(--brand-text, var(--amber)); }
 .pp-status-amber .pp-status-title { font-size: 13px; }
+.pp-status-green { background: var(--green-bg); }
+.pp-status-green .pp-status-title,
+.pp-status-green .pp-status-detail { color: var(--green); }
+.pp-status-green .pp-status-title { font-size: 13px; }
 .pp-status-red { background: var(--red-bg); }
 .pp-status-red .pp-status-title { color: var(--red); }
 .pp-status-muted { background: var(--border-light); }
