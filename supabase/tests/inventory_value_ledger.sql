@@ -96,4 +96,37 @@ SELECT pg_temp.assert_eq(
   (SELECT count(*)::integer FROM public.history WHERE product_id = -30), 2,
   'L9 anon 角色觸發的庫存變動一樣寫進 history（SECURITY DEFINER 生效）');
 
+-- L10 receive_batch_inventory 觸發一次 → history 只多「一筆」帶成本的列
+-- （不是舊格式一筆 + trigger 新格式一筆）。用 id 水位線鎖定「這次呼叫新增的列」，
+-- 不能用 created_at（同一個交易內 now() 是凍結的，篩不出東西）。
+INSERT INTO public.procurement_batches (id, store_id, batch_date, source, status, inventory_synced)
+VALUES (-1, -1, '2026-08-18', '採購彙整', 'done', false);
+INSERT INTO public.procurement_items (id, batch_id, product_id, variant_id, quantity, actual_qty, unit_cost, status)
+VALUES (-1, -1, -10, NULL, 3, 3, 90, 'bought');
+
+SELECT max(id) AS v FROM public.history \gset l10_before_
+SELECT public.receive_batch_inventory(-1);
+SELECT pg_temp.assert_eq(
+  (SELECT count(*)::integer FROM public.history
+    WHERE id > :l10_before_v AND product_id = -10 AND variant_id IS NULL), 1,
+  'L10 批次入庫只多一筆 history（trigger 產生，不是新舊格式各一筆）');
+-- 入庫前：stock=7, avg=1750/15（L2 併算後的值）。入庫 +3 件，這批成本讀
+-- products.cost（此時是 150，L2 設的，不是 procurement_items.unit_cost=90——trigger 不讀那欄）。
+-- 新平均 = (7×(1750/15) + 3×150) / 10
+SELECT pg_temp.assert_eq(round(pg_temp.latest_avg(-10, NULL), 2),
+  round((7 * (1750.0/15) + 3 * 150) / 10, 2), 'L10b 入庫後平均成本正確併算');
+SELECT pg_temp.assert_eq(pg_temp.latest_value(-10, NULL), 10::numeric * pg_temp.latest_avg(-10, NULL),
+  'L10c 入庫後價值 = 新庫存(10) × 新平均');
+
+-- L11 delete_batch 退庫 → 同上，且退庫後庫存/平均成本正確回到入庫前的狀態
+SELECT max(id) AS v FROM public.history \gset l11_before_
+SELECT public.delete_batch(-1);
+SELECT pg_temp.assert_eq(
+  (SELECT count(*)::integer FROM public.history
+    WHERE id > :l11_before_v AND product_id = -10 AND variant_id IS NULL AND change < 0), 1,
+  'L11 退庫只多一筆 history');
+SELECT pg_temp.assert_eq(
+  (SELECT resulting_stock FROM public.history WHERE product_id = -10 AND variant_id IS NULL ORDER BY id DESC LIMIT 1),
+  7, 'L11b 退庫後庫存回到入庫前的 7 件');
+
 ROLLBACK;

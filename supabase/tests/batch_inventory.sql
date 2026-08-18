@@ -43,7 +43,8 @@ SELECT pg_temp.assert_eq(pg_temp.stock_of(-20, NULL), 2, 'B1 partial 用 actual_
 SELECT pg_temp.assert_eq(
   (SELECT inventory_synced FROM public.procurement_batches WHERE id = -1), true, 'B1 標記已入庫');
 SELECT pg_temp.assert_eq(
-  (SELECT count(*)::integer FROM public.history WHERE reason LIKE '採購入庫（批次 #-1）%'), 2, 'B1 寫 2 筆 history');
+  (SELECT count(*)::integer FROM public.history WHERE product_id IN (-10, -20)
+     AND resulting_stock IS NOT NULL), 2, 'B1 寫 2 筆 trigger 產生的 history（這批測試資料沒填成本，resulting_value_twd 會是 null，改用 resulting_stock 判斷）');
 
 -- B2 重複呼叫 → 只加一次
 SELECT public.receive_batch_inventory(-1);
@@ -57,7 +58,7 @@ SELECT pg_temp.assert_eq(
   (SELECT count(*)::integer FROM public.procurement_batches WHERE id = -1), 0, 'B3 批次已刪');
 SELECT pg_temp.assert_eq(
   (SELECT count(*)::integer FROM public.history
-    WHERE change < 0 AND reason LIKE '取消批次退庫（批次 #-1）%'), 2, 'B3 寫 2 筆退庫 history');
+    WHERE change < 0 AND product_id IN (-10, -20) AND resulting_stock IS NOT NULL), 2, 'B3 寫 2 筆退庫 history');
 
 -- B4 刪除未入庫批次 → 庫存不動
 INSERT INTO public.procurement_batches (id, store_id, batch_date, status, inventory_synced)
