@@ -124,6 +124,18 @@ export function calcMarginRange(pricesTwd, costTwd) {
   return { min, max }
 }
 
+// 單一商品逐庫存單位拆解成 { stock（負庫存夾成 0）, twd（換算後單位成本，缺成本/匯率為 null） }。
+// calcInventoryValue 與 productContributesInventoryValue 共用同一份拆解邏輯，不重複實作兩次。
+function inventoryValueRows(p, rates) {
+  const variants = p.product_variants || []
+  const rows = variants.length ? variants : [{ stock: p.quantity, variant_cost: null }]
+  return rows.map(v => {
+    const stock = Math.max(Number(v.stock) || 0, 0)
+    const cost = v.variant_cost != null ? v.variant_cost : p.cost
+    return { stock, twd: toTwdCost(cost, p.currency, rates) }
+  })
+}
+
 // 庫存總值：現在庫存 × 現在成本，即時算——不讀異動帳本（帳本是稽核用，這裡是給人看的
 // 當下數字，兩者故意脫鉤，見 docs/superpowers/specs/2026-08-18-inventory-value-ledger-design.md §6）。
 // products 需帶 product_variants(stock, variant_cost)；無規格商品用商品層 quantity/cost。
@@ -133,16 +145,18 @@ export function calcInventoryValue(products, rates = {}) {
   let totalTwd = 0
   let excludedCount = 0
   ;(products || []).forEach(p => {
-    const variants = p.product_variants || []
-    const rows = variants.length ? variants : [{ stock: p.quantity, variant_cost: null }]
-    rows.forEach(v => {
-      const stock = Math.max(Number(v.stock) || 0, 0)
+    inventoryValueRows(p, rates).forEach(({ stock, twd }) => {
       if (stock === 0) return
-      const cost = v.variant_cost != null ? v.variant_cost : p.cost
-      const twd = toTwdCost(cost, p.currency, rates)
       if (twd == null) { excludedCount += 1; return }
       totalTwd += stock * twd
     })
   })
   return { totalTwd, excludedCount }
+}
+
+// 這個商品有沒有任何庫存單位「真的」被算進庫存總值（庫存 > 0 且成本/匯率都在）。
+// 用來讓「庫存總值」卡片可以點擊篩選出實際貢獻金額的商品——庫存 > 0 但缺成本/匯率的
+// 商品不算貢獻（那些算在 excludedCount，是另一種「未列入」，不是這裡要篩的對象）。
+export function productContributesInventoryValue(p, rates = {}) {
+  return inventoryValueRows(p, rates).some(({ stock, twd }) => stock > 0 && twd != null)
 }

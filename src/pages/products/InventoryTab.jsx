@@ -8,7 +8,7 @@ import CustomSelect from '../../components/CustomSelect'
 import { buildCatOptions } from '../../lib/catOptions'
 import { compressImage, uploadImages, deleteProductStorage, removeImageByUrl } from '../../lib/imageUtils'
 import { revalidateShop } from '../../lib/revalidateShop'
-import { toTwdCost, getEffectivePrices, getEffectiveCosts, getRawCosts, calcMarginRange, fmtRange, fmtMarginRate, fmtMarginAmount, calcInventoryValue } from '../../lib/pricing'
+import { toTwdCost, getEffectivePrices, getEffectiveCosts, getRawCosts, calcMarginRange, fmtRange, fmtMarginRate, fmtMarginAmount, calcInventoryValue, productContributesInventoryValue } from '../../lib/pricing'
 import { cmpNum, cmpStr, cmpDate } from '../../lib/sortUtils'
 import { Pill } from '../../components/MenuPopover'
 import ListToolbar from '../../components/ListToolbar'
@@ -104,6 +104,7 @@ export default function InventoryTab() {
   const [filterCategory, setFilterCategory] = useState('')
   const [filterNoCost, setFilterNoCost] = useState(false)
   const [filterLowStock, setFilterLowStock] = useState(false)
+  const [filterHasValue, setFilterHasValue] = useState(false)
   const [sort, setSort] = useState('created_desc')
   const [categories, setCategories] = useState([])
   const [optionTypes, setOptionTypes] = useState([])
@@ -166,9 +167,10 @@ export default function InventoryTab() {
     const matchCategory = !filterCategory || String(p.category_id || '') === filterCategory
     const matchNoCost = !filterNoCost || p.cost == null
     const matchLowStock = !filterLowStock || isLowStock(p)
-    return matchSearch && matchSource && matchCategory && matchNoCost && matchLowStock
+    const matchHasValue = !filterHasValue || productContributesInventoryValue(p, exchangeRates)
+    return matchSearch && matchSource && matchCategory && matchNoCost && matchLowStock && matchHasValue
   })
-  // 整份列表依使用者選的排序；低庫存改由統計卡點擊篩選（不再常駐置頂）
+  // 整份列表依使用者選的排序；低庫存/庫存總值改由統計卡點擊篩選（不再常駐置頂）
   const allFiltered = [...filtered].sort(sortComparator(sort, exchangeRates))
   const totalPages = Math.max(1, Math.ceil(allFiltered.length / PAGE_SIZE))
   const safePage = Math.min(page, totalPages)
@@ -191,9 +193,16 @@ export default function InventoryTab() {
           <div className="stat-val text-red">{products.filter(isLowStock).length}</div>
           <div className="stat-lbl"><span className="dot" style={{background:'var(--red)'}} />低庫存{filterLowStock ? '（點擊取消篩選）' : ''}</div>
         </div>
-        <div className="stat">
+        <div
+          className="stat"
+          onClick={() => { setFilterHasValue(v => !v); setPage(1) }}
+          style={{ cursor: 'pointer', borderColor: filterHasValue ? 'var(--text)' : undefined }}
+        >
           <div className="stat-val">NT$ {inventoryValueTwd.toLocaleString()}</div>
-          <div className="stat-lbl">庫存總值{inventoryValueExcluded > 0 ? `（${inventoryValueExcluded} 項未列入，缺成本／匯率）` : ''}</div>
+          <div className="stat-lbl">
+            庫存總值{filterHasValue ? '（點擊取消篩選）' : ''}
+            {inventoryValueExcluded > 0 ? `（${inventoryValueExcluded} 項未列入，缺成本／匯率）` : ''}
+          </div>
         </div>
       </div>
 
@@ -236,7 +245,9 @@ export default function InventoryTab() {
 
       {pagedProducts.length > 0 && (
         <>
-          <div className="sec">{filterLowStock ? '⚠ 低庫存商品' : '所有商品'}</div>
+          <div className="sec">
+            {[filterLowStock && '⚠ 低庫存', filterHasValue && '💰 有計入庫存總值'].filter(Boolean).join(' + ') || '所有商品'}
+          </div>
           <div className="card-grid">
             {pagedProducts.map(p => (
               <ProductRow key={p.id} product={p} onTap={() => setSheet(p)} exchangeRates={exchangeRates}
