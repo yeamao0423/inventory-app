@@ -498,6 +498,28 @@ export default function SettingsPage() {
           </div>
         </div>
 
+        <div className="sec">智慧客服（AI 自動回覆）</div>
+        <div className="card" style={{ padding: 16 }}>
+          <label style={{
+            display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer',
+            padding: 12, borderRadius: 10,
+            background: form.ai_reply ? 'var(--green-bg, #e8f7ee)' : 'var(--bg, #f7f7f5)',
+          }}>
+            <input type="checkbox"
+              checked={!!form.ai_reply}
+              onChange={e => { setForm(prev => ({ ...prev, ai_reply: e.target.checked })); setSaved(false) }}
+              style={{ marginTop: 2 }} />
+            <span>
+              <b style={{ fontSize: 14 }}>開啟 AI 客服自動回覆</b>
+              <span style={{ display: 'block', fontSize: 12, color: 'var(--text-3)', marginTop: 3, lineHeight: 1.6 }}>
+                開啟後，商城站內客服與 LINE 客服在真人接手前，會由 AI 助理即時回答庫存、訂單進度等問題，
+                答不出來或問題超出範圍會自動轉真人；關閉時（預設）每則客服訊息一律直接進「等真人」，
+                全部由店員手動回覆。存檔後立即生效。
+              </span>
+            </span>
+          </label>
+        </div>
+
         <div className="sec">社群分享</div>
         <div className="card" style={{ padding: 16 }}>
           <div className="form-group" style={{ marginBottom: 10 }}>
