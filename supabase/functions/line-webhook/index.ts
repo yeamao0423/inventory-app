@@ -188,6 +188,13 @@ async function lastStaffAt(conversationId: number): Promise<string | null> {
 const FALLBACK_BOUND = "目前暫時無法回答這個問題，已經幫你通知客服，會盡快回覆你 🙏";
 const FALLBACK_UNBOUND = "這個問題我這邊沒辦法直接查詢，建議你先登入會員綁定 LINE，或透過網站客服聯絡我們 🙏";
 
+// 2026-08-19 臨時停用：AI 回覆內容異常，先整個關掉 tool-use 回答，只保留「寫入＋轉真人」。
+// 對應 web 客服的 ASSISTANT_KILL_SWITCH，同樣不用改程式碼、不用等快取，設 remote secret 即生效。
+// 問題排除後把 LINE_AI_PAUSED 這個 secret 刪掉或設回非 "1" 即可恢復，不用重新部署。
+const AI_PAUSED = Deno.env.get("LINE_AI_PAUSED") === "1";
+const PAUSED_BOUND = "客服助理目前維護中，已經幫你通知客服，會盡快回覆你 🙏";
+const PAUSED_UNBOUND = "客服助理目前維護中，建議稍後再問，或透過網站客服聯絡我們 🙏";
+
 // 處理一則文字訊息：找/建對話（已綁定才建）→ 共用引擎 → 回覆 → 寫回訊息（已綁定才寫）
 async function handleTextMessage(userId: string, text: string, replyToken: string) {
   const consumer = await resolveConsumer(userId);
@@ -208,6 +215,20 @@ async function handleTextMessage(userId: string, text: string, replyToken: strin
     }).eq("id", conv.id);
     conv.status = status;
 
+    if (AI_PAUSED) {
+      await admin.from("conversations")
+        .update({ status: nextStatusOnRequestHuman(conv.status) }).eq("id", conv.id);
+      await notifyStore(admin, {
+        storeId: STORE_ID,
+        title: `${STORE_NAME}｜LINE 客服訊息（AI 暫停中）`,
+        body: text,
+        conversationId: conv.id,
+      });
+      await lineReply(replyToken, PAUSED_BOUND);
+      await insertMessage(conv, "assistant", PAUSED_BOUND);
+      return;
+    }
+
     if (!shouldRunAssistant(status, { aiEnabled: true })) {
       // 真人已在處理／正在等真人：訊息已寫入，回覆管道是 LINE 官方帳號後台，不是這裡。
       // 不回 LINE（reply token 過期即可，無副作用），只通知店主有新訊息。
@@ -222,6 +243,11 @@ async function handleTextMessage(userId: string, text: string, replyToken: strin
 
     history = await loadMemory(admin, { storeId: STORE_ID, consumerId: consumer.id, limit: MEMORY_LIMIT });
   } else {
+    // 未綁定：AI 暫停中就直接回固定文案，不落地也不用進共用引擎
+    if (AI_PAUSED) {
+      await lineReply(replyToken, PAUSED_UNBOUND);
+      return;
+    }
     // 未綁定：不落地儲存，單輪即時回答
     history = [{ role: "user", content: text }];
   }

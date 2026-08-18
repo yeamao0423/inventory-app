@@ -500,21 +500,19 @@ export default function SettingsPage() {
 
         <div className="sec">智慧客服（AI 自動回覆）</div>
         <div className="card" style={{ padding: 16 }}>
+          {/* 2026-08-19 臨時鎖住：AI 回覆內容異常，平台端 ASSISTANT_KILL_SWITCH 已開、
+              各店 ai_reply 已強制關閉，這裡先鎖死不讓店主自己點開，避免又被打開。
+              問題排除後記得把這個 disabled 拿掉、告知已修復。 */}
           <label style={{
-            display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer',
-            padding: 12, borderRadius: 10,
-            background: form.ai_reply ? 'var(--green-bg, #e8f7ee)' : 'var(--bg, #f7f7f5)',
+            display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'not-allowed',
+            padding: 12, borderRadius: 10, background: 'var(--bg, #f7f7f5)', opacity: .55,
           }}>
-            <input type="checkbox"
-              checked={!!form.ai_reply}
-              onChange={e => { setForm(prev => ({ ...prev, ai_reply: e.target.checked })); setSaved(false) }}
-              style={{ marginTop: 2 }} />
+            <input type="checkbox" checked={false} disabled style={{ marginTop: 2 }} />
             <span>
               <b style={{ fontSize: 14 }}>開啟 AI 客服自動回覆</b>
               <span style={{ display: 'block', fontSize: 12, color: 'var(--text-3)', marginTop: 3, lineHeight: 1.6 }}>
-                開啟後，商城站內客服與 LINE 客服在真人接手前，會由 AI 助理即時回答庫存、訂單進度等問題，
-                答不出來或問題超出範圍會自動轉真人；關閉時（預設）每則客服訊息一律直接進「等真人」，
-                全部由店員手動回覆。存檔後立即生效。
+                目前暫時停用維護中，排除問題後會再開放。這段期間所有客服訊息一律直接進「等真人」，
+                由店員手動回覆。
               </span>
             </span>
           </label>
