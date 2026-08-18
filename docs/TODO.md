@@ -8,7 +8,7 @@
 
 ---
 
-## 庫存價值總覽（2026-08-18）：程式碼與 migration 只套 local，UI 未驗收
+## 庫存價值總覽（2026-08-18）：程式碼與 migration 都已上 local+remote，UI 未驗收
 
 設計見 `docs/superpowers/specs/2026-08-18-inventory-value-ledger-design.md`。
 
@@ -17,17 +17,21 @@
 （`history_archive`＋pg_cron）。建在 2026-08-12「庫存變動單一來源」之上，不衝突。
 
 `InventoryTab.jsx` 的「庫存總值」卡片**刻意不讀這份帳本**——現在庫存 × 現在成本即時算
-（`calcInventoryValue`），帳本是稽核用的歷史軌跡，兩者故意脫鉤，見 spec §6。因此這張卡片
-不依賴 migration 是否已套用，先合併/部署不會壞掉；帳本本身要能用，migration 才需要套。
+（`calcInventoryValue`），帳本是稽核用的歷史軌跡，兩者故意脫鉤，見 spec §6。卡片可點擊，
+篩出真正貢獻金額的商品（`productContributesInventoryValue`）。
+
+**順手清出來的資料問題**：上線後盤點發現 Daigogo 56 款限時單裡 54 款是「完全沒有採購憑證」
+的幽靈庫存（根因是限時單建立時沒強制庫存歸零，已在 `7c2dbbc` 修掉，但修復前的舊資料沒回補）。
+用 `consumer_orders.stock_committed` 反推正確庫存（不是整批打成 0——有真實訂單在等的維持
+負庫存，正確標記還欠客人幾件），已用 `20260819100000_cleanup_ghost_collection_stock.sql`
+套上 local+remote。庫存總值從 NT$1,217,976.5 修正為 NT$22,152，167 筆異動都進了 history 帳本。
 
 **已驗過的**：`npm run test:sql:ledger`（含加權平均、期初基準、季度結算）、
-vitest（`pricing.test.js`）全過，local 已套 migration。
+vitest（`pricing.test.js`）全過，local+remote 都已套 migration、數字對齊過
+（`history` 帳本記錄的修正筆數 local/remote 一致，均為 167 筆）。
 
-**沒驗過的**：後台庫存頁的「庫存總值」卡片人眼沒看過（點擊篩選、未列入提示文案）。
-
-**上 remote 前**：四支 migration 用 MCP `apply_migration`，**絕不可 `supabase db push`**
-（`20260818100000`～`20260818130000`）；`20260818120000` 會在套用當下立刻對全部現有商品
-跑一次期初基準查詢，店多、商品多時先確認執行時間可接受。
+**沒驗過的**：後台庫存頁的「庫存總值」卡片人眼沒看過（點擊篩選、未列入提示文案）——
+瀏覽器工具這次一直卡在「無法驗證網站安全分類」，沒能實測，下次接手記得補這步。
 
 ---
 
