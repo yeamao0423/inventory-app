@@ -129,4 +129,15 @@ SELECT pg_temp.assert_eq(
   (SELECT resulting_stock FROM public.history WHERE product_id = -10 AND variant_id IS NULL ORDER BY id DESC LIMIT 1),
   7, 'L11b 退庫後庫存回到入庫前的 7 件');
 
+-- L12 期初基準：對每個現有商品/規格各有一筆起點，數字與 stock×cost 一致
+-- （用一個全新的商品，模擬「migration 上線前就存在、從沒被 trigger 記錄過」的情況）
+INSERT INTO public.products (id, name, quantity, unit, store_id, cost, currency) VALUES
+  (-40, '丁商品（模擬舊資料）', 8, '個', -1, 50, 'TWD');
+SELECT public.seed_inventory_value_opening_balance();
+SELECT pg_temp.assert_eq(pg_temp.latest_avg(-40, NULL), 50::numeric, 'L12 期初基準：平均成本=現在成本');
+SELECT pg_temp.assert_eq(pg_temp.latest_value(-40, NULL), 400::numeric, 'L12 期初基準：價值=8×50');
+SELECT pg_temp.assert_eq(
+  (SELECT reason FROM public.history WHERE product_id = -40 ORDER BY id DESC LIMIT 1),
+  '期初基準：庫存價值追蹤上線', 'L12b reason 正確標註');
+
 ROLLBACK;
