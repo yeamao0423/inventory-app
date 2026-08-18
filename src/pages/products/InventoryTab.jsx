@@ -8,7 +8,7 @@ import CustomSelect from '../../components/CustomSelect'
 import { buildCatOptions } from '../../lib/catOptions'
 import { compressImage, uploadImages, deleteProductStorage, removeImageByUrl } from '../../lib/imageUtils'
 import { revalidateShop } from '../../lib/revalidateShop'
-import { toTwdCost, getEffectivePrices, getEffectiveCosts, getRawCosts, calcMarginRange, fmtRange, fmtMarginRate, fmtMarginAmount } from '../../lib/pricing'
+import { toTwdCost, getEffectivePrices, getEffectiveCosts, getRawCosts, calcMarginRange, fmtRange, fmtMarginRate, fmtMarginAmount, calcInventoryValue } from '../../lib/pricing'
 import { cmpNum, cmpStr, cmpDate } from '../../lib/sortUtils'
 import { Pill } from '../../components/MenuPopover'
 import ListToolbar from '../../components/ListToolbar'
@@ -174,6 +174,7 @@ export default function InventoryTab() {
   const safePage = Math.min(page, totalPages)
   const pagedProducts = allFiltered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
   const existingSources = [...new Set(products.map(p => p.source).filter(Boolean))].sort()
+  const { totalTwd: inventoryValueTwd, excludedCount: inventoryValueExcluded } = calcInventoryValue(products, exchangeRates)
 
   return (
     <>
@@ -189,6 +190,10 @@ export default function InventoryTab() {
         >
           <div className="stat-val text-red">{products.filter(isLowStock).length}</div>
           <div className="stat-lbl"><span className="dot" style={{background:'var(--red)'}} />低庫存{filterLowStock ? '（點擊取消篩選）' : ''}</div>
+        </div>
+        <div className="stat">
+          <div className="stat-val">NT$ {inventoryValueTwd.toLocaleString()}</div>
+          <div className="stat-lbl">庫存總值{inventoryValueExcluded > 0 ? `（${inventoryValueExcluded} 項未列入，缺成本／匯率）` : ''}</div>
         </div>
       </div>
 
