@@ -8,7 +8,8 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:sql": "psql \"postgresql://postgres:postgres@127.0.0.1:54332/postgres\" -v ON_ERROR_STOP=1 -f supabase/tests/stock_reconcile.sql",
-    "test:sql:batch": "psql \"postgresql://postgres:postgres@127.0.0.1:54332/postgres\" -v ON_ERROR_STOP=1 -f supabase/tests/batch_inventory.sql"
+    "test:sql:batch": "psql \"postgresql://postgres:postgres@127.0.0.1:54332/postgres\" -v ON_ERROR_STOP=1 -f supabase/tests/batch_inventory.sql",
+    "test:sql:ledger": "psql \"postgresql://postgres:postgres@127.0.0.1:54332/postgres\" -v ON_ERROR_STOP=1 -f supabase/tests/inventory_value_ledger.sql"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.43.0",

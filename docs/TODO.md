@@ -8,6 +8,29 @@
 
 ---
 
+## 庫存價值總覽（2026-08-18）：程式碼與 migration 只套 local，UI 未驗收
+
+設計見 `docs/superpowers/specs/2026-08-18-inventory-value-ledger-design.md`。
+
+擴建既有 `history` 表（加 `variant_id`／成本欄位），用 trigger 保證庫存不管在哪裡被改
+（訂單、批次入庫、後台手動）都自動留下帶移動加權平均成本的異動記錄，每季自動打包封存
+（`history_archive`＋pg_cron）。建在 2026-08-12「庫存變動單一來源」之上，不衝突。
+
+`InventoryTab.jsx` 的「庫存總值」卡片**刻意不讀這份帳本**——現在庫存 × 現在成本即時算
+（`calcInventoryValue`），帳本是稽核用的歷史軌跡，兩者故意脫鉤，見 spec §6。因此這張卡片
+不依賴 migration 是否已套用，先合併/部署不會壞掉；帳本本身要能用，migration 才需要套。
+
+**已驗過的**：`npm run test:sql:ledger`（含加權平均、期初基準、季度結算）、
+vitest（`pricing.test.js`）全過，local 已套 migration。
+
+**沒驗過的**：後台庫存頁的「庫存總值」卡片人眼沒看過（點擊篩選、未列入提示文案）。
+
+**上 remote 前**：四支 migration 用 MCP `apply_migration`，**絕不可 `supabase db push`**
+（`20260818100000`～`20260818130000`）；`20260818120000` 會在套用當下立刻對全部現有商品
+跑一次期初基準查詢，店多、商品多時先確認執行時間可接受。
+
+---
+
 ## 行程費用代墊（2026-08-13）：程式碼與 migration 都已上 local+remote，UI 未驗收
 
 `trip_expenses` 補上 `paid_by`／`settled`，員工代墊機票、住宿等費用比照進貨代墊
