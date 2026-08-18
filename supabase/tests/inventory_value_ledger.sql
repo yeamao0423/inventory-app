@@ -140,4 +140,36 @@ SELECT pg_temp.assert_eq(
   (SELECT reason FROM public.history WHERE product_id = -40 ORDER BY id DESC LIMIT 1),
   '期初基準：庫存價值追蹤上線', 'L12b reason 正確標註');
 
+-- L13 打包：結算後主表只剩期初列＋新異動，history_archive 有完整舊明細，餘額對得起來。
+-- 整個測試檔在同一個交易裡，now() 是凍結的（回傳交易開始時間），沒辦法讓真實時間流逝來
+-- 製造「新舊資料」的落差，所以先把測試資料的 created_at 往前調一天，模擬「這些是上一期的舊資料」，
+-- 只調測試店（store_id=-1）的列，不影響其他資料。
+UPDATE public.history SET created_at = created_at - interval '1 day' WHERE store_id = -1;
+
+DO $$
+DECLARE
+  v_stock_before numeric;
+  v_avg_before   numeric;
+BEGIN
+  SELECT resulting_stock, avg_cost_twd INTO v_stock_before, v_avg_before
+    FROM public.history WHERE product_id = -10 AND variant_id IS NULL ORDER BY id DESC LIMIT 1;
+  PERFORM set_config('pg_temp.stock_before', v_stock_before::text, true);
+  PERFORM set_config('pg_temp.avg_before', v_avg_before::text, true);
+END $$;
+
+SELECT public.close_inventory_history_period();
+
+SELECT pg_temp.assert_eq(
+  (SELECT count(*)::integer FROM public.history WHERE product_id = -10 AND variant_id IS NULL), 1,
+  'L13 結算後甲商品主表只剩 1 筆期初餘額列');
+SELECT pg_temp.assert_eq(
+  (SELECT resulting_stock FROM public.history WHERE product_id = -10 AND variant_id IS NULL ORDER BY id DESC LIMIT 1)::text,
+  current_setting('pg_temp.stock_before'), 'L13b 新期初列的庫存跟結算前最後一筆一致');
+SELECT pg_temp.assert_eq(
+  (SELECT avg_cost_twd FROM public.history WHERE product_id = -10 AND variant_id IS NULL ORDER BY id DESC LIMIT 1)::text,
+  current_setting('pg_temp.avg_before'), 'L13c 新期初列的平均成本跟結算前最後一筆一致');
+SELECT pg_temp.assert_eq(
+  (SELECT count(*)::integer FROM public.history_archive WHERE product_id = -10 AND variant_id IS NULL) >= 3, true,
+  'L13d 舊明細（至少 L1/L2/L3 那 3 筆）搬進了封存表');
+
 ROLLBACK;
