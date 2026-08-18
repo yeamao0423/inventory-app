@@ -35,7 +35,7 @@ import { loadMemory } from "../_shared/assistant/memory.ts";
 import { buildSystemPrompt } from "../_shared/assistant/prompt.ts";
 import { askAssistant } from "../_shared/assistant/engine.ts";
 import type { BoundConsumer, ToolContext } from "../_shared/assistant/types.ts";
-import { broadcast, notifyStore } from "./notify.ts";
+import { broadcast, notifyStore } from "../_shared/notify.ts";
 
 const RATE_PER_MIN = Number(Deno.env.get("CHAT_RATE_PER_MIN") ?? "6");
 const RATE_PER_DAY = Number(Deno.env.get("CHAT_RATE_PER_DAY") ?? "300");
