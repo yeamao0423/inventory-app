@@ -123,3 +123,26 @@ export function calcMarginRange(pricesTwd, costTwd) {
   }
   return { min, max }
 }
+
+// 庫存總值：現在庫存 × 現在成本，即時算——不讀異動帳本（帳本是稽核用，這裡是給人看的
+// 當下數字，兩者故意脫鉤，見 docs/superpowers/specs/2026-08-18-inventory-value-ledger-design.md §6）。
+// products 需帶 product_variants(stock, variant_cost)；無規格商品用商品層 quantity/cost。
+// 回傳 { totalTwd, excludedCount }：excludedCount 是「有正庫存、但缺成本或缺匯率、沒被算進
+// totalTwd」的庫存單位數，用來在 UI 提示「N 項未列入」，避免顯示一個看起來完整、其實漏算的數字。
+export function calcInventoryValue(products, rates = {}) {
+  let totalTwd = 0
+  let excludedCount = 0
+  ;(products || []).forEach(p => {
+    const variants = p.product_variants || []
+    const rows = variants.length ? variants : [{ stock: p.quantity, variant_cost: null }]
+    rows.forEach(v => {
+      const stock = Math.max(Number(v.stock) || 0, 0)
+      if (stock === 0) return
+      const cost = v.variant_cost != null ? v.variant_cost : p.cost
+      const twd = toTwdCost(cost, p.currency, rates)
+      if (twd == null) { excludedCount += 1; return }
+      totalTwd += stock * twd
+    })
+  })
+  return { totalTwd, excludedCount }
+}
