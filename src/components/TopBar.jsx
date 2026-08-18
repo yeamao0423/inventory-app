@@ -9,7 +9,7 @@ import ShopSyncNotice from './ShopSyncNotice'
 // 全域置頂欄：跨頁常駐的動作（快速上架 / 批量上架 / 登出），不論停在哪個分頁都能用。
 // 左側在手機補顯示店名（側欄的 .side-brand 只在桌機出現），桌機留白避免與側欄品牌重複。
 export default function TopBar() {
-  const { store, storeId, can, signOut } = useAuth()
+  const { store, storeId, stores, switchStore, can, signOut } = useAuth()
   const { bump } = useProductRefresh()
   const [quickList, setQuickList] = useState(false)
   const [bulkList, setBulkList] = useState(false)
@@ -31,6 +31,19 @@ export default function TopBar() {
           )}
           {brandDisplay !== 'logo' && <span>{store?.name ?? '平台'}</span>}
         </div>
+
+        {/* 身兼多店角色才出現：單店使用者看不到這顆，行為與過去一致 */}
+        {stores.length > 1 && (
+          <select
+            className="topbar-store-switch"
+            value={storeId ?? ''}
+            onChange={e => switchStore(Number(e.target.value))}
+          >
+            {stores.map(s => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </select>
+        )}
 
         {can('add') && (
           <>

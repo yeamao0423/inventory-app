@@ -113,6 +113,16 @@ html, body, #root {
   background: var(--amber, #e67e22); color: #fff;
   white-space: nowrap; pointer-events: none;
 }
+.topbar-store-switch {
+  padding: 6px 10px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  max-width: 120px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
 .topbar-signout {
   background: none; border: none;
   font-size: 13px; color: var(--text-3);
