@@ -30,6 +30,14 @@ export function repImageFor(images, typeId, valueId) {
   }) || null
 }
 
+/** 某規格值的代表圖在指定圖片陣列中的 index（通常傳 visibleImages 進來），用來讓 gallery 預覽直接切過去；找不到回 -1。 */
+export function indexOfRepImage(images, typeId, valueId) {
+  return (images || []).findIndex(img => {
+    const allowed = img?.tag_filter?.[String(typeId)]
+    return Array.isArray(allowed) && allowed.map(Number).includes(Number(valueId))
+  })
+}
+
 /**
  * 目前該顯示哪幾張圖。
  * 過濾後為空就退回全部 —— 該規格沒有專屬圖也沒有共用圖時不能開天窗。

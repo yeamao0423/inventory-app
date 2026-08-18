@@ -7,7 +7,7 @@ import Reveal from '../../Reveal'
 import { getActivePrice } from '../../../lib/salePrice'
 import { trackPixel } from '../../../lib/metaPixel'
 import { useBuyBar } from '../../../lib/useBuyBar'
-import { repImageFor, visibleImages } from '../../../lib/variantImages'
+import { repImageFor, visibleImages, indexOfRepImage } from '../../../lib/variantImages'
 import { useFreshStock, mergeStock, mergeQuantity } from '../../../lib/useFreshStock'
 import { isValueSoldOut as valueSoldOut, initialOptions, valuesForType } from '../../../lib/variantStock'
 
@@ -51,6 +51,9 @@ export default function ProductDetail({ sp, variants: rawVariants, customOptions
   const [selectedOptions, setSelectedOptions] = useState(
     () => initialOptions(rawVariants, activeTypes, skipStock),
   )
+  // 圖庫預覽目前顯示第幾張，跟著 pickOption 連動跳到該規格對應的圖 —— 不能放在 ImageGallery
+  // 元件內部，元件重畫時會被沖掉。
+  const [galleryIndex, setGalleryIndex] = useState(0)
 
   const name = lang === 'en' && sp.name_en ? sp.name_en : p.name
   const desc = lang === 'en' ? sp.desc_en : sp.desc_zh
@@ -59,6 +62,8 @@ export default function ProductDetail({ sp, variants: rawVariants, customOptions
 
   // 依目前選到的規格過濾 gallery；若過濾後為空（該規格無專屬圖且無共用圖）則退回全部，避免開天窗
   const visible = visibleImages(sortedImages, selectedOptions)
+  // galleryIndex 是靠上次選規格算出來的，若換規格後圖片變少可能會超出範圍 —— 退回第一張，不要炸掉。
+  const galleryIndexSafe = galleryIndex >= 0 && galleryIndex < visible.length ? galleryIndex : 0
 
   // Meta Pixel：瀏覽商品事件（每次進入詳情頁發一次）
   useEffect(() => {
@@ -117,7 +122,12 @@ export default function ProductDetail({ sp, variants: rawVariants, customOptions
     // 客人自己動手挑之後，「已幫你改成…」那句就過期了
     setAutoSwitched(null)
     setAddError(null)
-    setSelectedOptions(s => ({ ...s, [String(typeId)]: valueId }))
+    const next = { ...selectedOptions, [String(typeId)]: valueId }
+    setSelectedOptions(next)
+    // 篩選規格的同時，把預覽跳到該規格真正對應的那一張，而不是靠 remount 巧合停在第一張。
+    const nextVisible = visibleImages(sortedImages, next)
+    const idx = indexOfRepImage(nextVisible, typeId, valueId)
+    setGalleryIndex(idx >= 0 ? idx : 0)
   }
 
   async function handleAddToCart() {
@@ -186,9 +196,9 @@ export default function ProductDetail({ sp, variants: rawVariants, customOptions
       </div>
 
       <div className="detail-wrap">
-        {/* Image gallery（規格切換時 remount，current 歸 0，不會停在已消失的圖）*/}
+        {/* Image gallery：current 由 pickOption 連動控制，換規格會跳到該規格對應的那張圖 */}
         <Reveal>
-          <ImageGallery key={visible.map(i => i.id).join('-')} images={visible} name={name} />
+          <ImageGallery images={visible} name={name} current={galleryIndexSafe} setCurrent={setGalleryIndex} />
         </Reveal>
 
         {/* Info */}
@@ -365,9 +375,7 @@ export default function ProductDetail({ sp, variants: rawVariants, customOptions
   )
 }
 
-function ImageGallery({ images, name }) {
-  const [current, setCurrent] = useState(0)
-
+function ImageGallery({ images, name, current, setCurrent }) {
   if (images.length === 0) {
     return <div className="bundle-empty-hero">{name ? '這件商品還沒有照片' : ''}</div>
   }
@@ -387,12 +395,12 @@ function ImageGallery({ images, name }) {
             <button
               className="gallery-arrow prev"
               aria-label="上一張"
-              onClick={() => setCurrent(i => (i - 1 + images.length) % images.length)}
+              onClick={() => setCurrent((current - 1 + images.length) % images.length)}
             >‹</button>
             <button
               className="gallery-arrow next"
               aria-label="下一張"
-              onClick={() => setCurrent(i => (i + 1) % images.length)}
+              onClick={() => setCurrent((current + 1) % images.length)}
             >›</button>
           </>
         )}

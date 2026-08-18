@@ -13,7 +13,7 @@ import { createContext, useContext, useEffect, useState } from 'react'
 import { useI18n, useCart } from '../../layout'
 import { getActivePrice } from '../../../lib/salePrice'
 import { trackPixel } from '../../../lib/metaPixel'
-import { visibleImages } from '../../../lib/variantImages'
+import { visibleImages, indexOfRepImage } from '../../../lib/variantImages'
 import { useFreshStock, mergeStock, mergeQuantity } from '../../../lib/useFreshStock'
 import { isValueSoldOut as valueSoldOut, initialOptions, valuesForType } from '../../../lib/variantStock'
 
@@ -62,6 +62,9 @@ export default function ProductStateProvider({
   const [selectedOptions, setSelectedOptions] = useState(
     () => initialOptions(rawVariants, activeTypes, skipStock),
   )
+  // 圖庫預覽目前顯示第幾張，跟著 setOption 連動跳到該規格對應的圖 —— 不能放在 Gallery
+  // 元件內部，元件重畫時會被沖掉。
+  const [galleryIndex, setGalleryIndex] = useState(0)
 
   const name = lang === 'en' && sp.name_en ? sp.name_en : p.name
   const desc = lang === 'en' ? sp.desc_en : sp.desc_zh
@@ -70,6 +73,8 @@ export default function ProductStateProvider({
 
   // 依目前選到的規格過濾 gallery；若過濾後為空（該規格無專屬圖且無共用圖）則退回全部，避免開天窗
   const visible = visibleImages(sortedImages, selectedOptions)
+  // galleryIndex 是靠上次選規格算出來的，若換規格後圖片變少可能會超出範圍 —— 退回第一張，不要炸掉。
+  const galleryIndexSafe = galleryIndex >= 0 && galleryIndex < visible.length ? galleryIndex : 0
 
   // Meta Pixel：瀏覽商品事件（每次進入詳情頁發一次）
   useEffect(() => {
@@ -140,7 +145,12 @@ export default function ProductStateProvider({
     // 客人自己動手挑之後，「已幫你改成…」那句就過期了
     setAutoSwitched(null)
     setAddError(null)
-    setSelectedOptions(s => ({ ...s, [String(typeId)]: valueId }))
+    const next = { ...selectedOptions, [String(typeId)]: valueId }
+    setSelectedOptions(next)
+    // 篩選規格的同時，把預覽跳到該規格真正對應的那一張，而不是靠 remount 巧合停在第一張。
+    const nextVisible = visibleImages(sortedImages, next)
+    const idx = indexOfRepImage(nextVisible, typeId, valueId)
+    setGalleryIndex(idx >= 0 ? idx : 0)
   }
 
   async function addToCart() {
@@ -200,6 +210,8 @@ export default function ProductStateProvider({
     markedSoldOut, stockSoldOut, isSoldOut, isUnavailable,
     // context 的 key 維持 visibleImages（ProductGalleryBlock 在讀它），值換成本地的 visible
     price, sale, variantLabel, sortedImages, visibleImages: visible, ctaLabel,
+    // 圖庫預覽目前該停在第幾張（ProductGalleryBlock 讀這個，不再自己管 current）
+    galleryIndex: galleryIndexSafe, setGalleryIndex,
     // 動作
     setOption, setQty, setCustomNote, addToCart, isValueSoldOut,
   })
