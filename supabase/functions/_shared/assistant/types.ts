@@ -28,7 +28,9 @@ export interface ToolContext {
   admin: SupabaseClient;
   storeId: number;
   channel: ChannelName;
-  conversationId: number;
+  // null＝這次互動沒有對應的 conversations 列（目前只有「LINE 未綁定使用者」這一種情況：
+  // 一般問題仍可即時回答，但沒有身分可歸屬、不落地儲存，見 line-webhook/index.ts）
+  conversationId: number | null;
   // 尚未識別身分的訪客識別碼（已認領的對話為 null）
   visitorToken: string | null;
   consumer: BoundConsumer | null;
