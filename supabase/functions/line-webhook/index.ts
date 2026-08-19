@@ -52,9 +52,10 @@ interface ConversationRow {
   status: ConversationStatus;
   consumer_id: string | null;
   unread_for_store: number;
+  last_message_at: string;
 }
 
-const CONV_COLS = "id, store_id, status, consumer_id, unread_for_store";
+const CONV_COLS = "id, store_id, status, consumer_id, unread_for_store, last_message_at";
 
 // ── LINE 回覆（純文字，reply token 限用一次）─────────────────
 async function lineReply(replyToken: string, text: string) {
@@ -206,7 +207,12 @@ async function handleTextMessage(userId: string, text: string, replyToken: strin
     conv = await findOrCreateLineConversation(consumer.id);
 
     const lastStaff = conv.status === "human" ? await lastStaffAt(conv.id) : null;
-    const status = nextStatusOnConsumerMessage({ status: conv.status, lastStaffAt: lastStaff, aiEnabled: true });
+    const status = nextStatusOnConsumerMessage({
+      status: conv.status,
+      lastStaffAt: lastStaff,
+      lastMessageAt: conv.last_message_at,
+      aiEnabled: true,
+    });
     const consumerMsg = await insertMessage(conv, "consumer", text);
     await admin.from("conversations").update({
       status,

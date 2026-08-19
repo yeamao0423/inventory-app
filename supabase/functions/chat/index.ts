@@ -73,6 +73,7 @@ interface ConversationRow {
   consumer_id: string | null;
   visitor_token: string | null;
   unread_for_store: number;
+  last_message_at: string;
 }
 
 interface StoreRow {
@@ -189,7 +190,7 @@ async function lastStaffAt(conversationId: number): Promise<string | null> {
 // 對話屬於「人」，裝置只是他從哪裡連進來。找對話的順序因此變成
 // 「登入身分優先、訪客識別碼次之」，而存取權也不能再靠 visitor_token 一個條件擋。
 
-const CONV_COLS = "id, store_id, status, consumer_id, visitor_token, unread_for_store";
+const CONV_COLS = "id, store_id, status, consumer_id, visitor_token, unread_for_store, last_message_at";
 
 // JWT 的 payload 只拿來當「不必問了」的快篩，不當憑據 —— 真正的驗證一律走 getUser()。
 // 商城未登入時送的是 anon key（role=anon），格式也是 JWT；沒有這道快篩的話，
@@ -480,11 +481,12 @@ async function handlePost(req: Request) {
   }
 
   // ── 寫入消費者訊息 ──
-  // 接管後閒置逾時會自動交還給助理；已關閉的對話由消費者重新開啟。
-  // AI 關著的店不會落到 bot，一律進 waiting_human 等真人。
+  // 接管後閒置逾時會自動交還給助理；等真人超過 12 小時沒人接手視為冷掉；
+  // 已關閉的對話由消費者重新開啟。AI 關著的店不會落到 bot，一律進 waiting_human 等真人。
   const status = nextStatusOnConsumerMessage({
     status: conv.status,
     lastStaffAt: conv.status === "human" ? await lastStaffAt(conv.id) : null,
+    lastMessageAt: conv.last_message_at,
     aiEnabled,
   });
 

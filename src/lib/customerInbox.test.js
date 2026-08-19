@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   IDLE_HANDBACK_MS,
+  WAITING_TIMEOUT_MS,
   shouldRunAssistant,
   initialStatus,
   nextStatusOnConsumerMessage,
@@ -67,6 +68,29 @@ describe('狀態機', () => {
     const now = Date.parse('2026-08-02T10:00:00Z')
     const lastStaffAt = new Date(now - IDLE_HANDBACK_MS).toISOString()
     expect(nextStatusOnConsumerMessage({ status: 'human', lastStaffAt, now })).toBe('human')
+  })
+
+  it('等真人：沒帶 lastMessageAt 就沒有依據，維持 waiting_human（不猜）', () => {
+    const now = Date.parse('2026-08-02T10:00:00Z')
+    expect(nextStatusOnConsumerMessage({ status: 'waiting_human', lastStaffAt: null, now })).toBe('waiting_human')
+  })
+
+  it('等真人：超過 12 小時沒人接手 → 視為冷掉，重新評估回 bot', () => {
+    const now = Date.parse('2026-08-02T10:00:00Z')
+    const lastMessageAt = new Date(now - WAITING_TIMEOUT_MS - 1000).toISOString()
+    expect(nextStatusOnConsumerMessage({ status: 'waiting_human', lastMessageAt, now })).toBe('bot')
+  })
+
+  it('等真人：還沒超過 12 小時 → 維持 waiting_human', () => {
+    const now = Date.parse('2026-08-02T10:00:00Z')
+    const lastMessageAt = new Date(now - 60 * 60 * 1000).toISOString()
+    expect(nextStatusOnConsumerMessage({ status: 'waiting_human', lastMessageAt, now })).toBe('waiting_human')
+  })
+
+  it('閒置判斷剛好踩在 12 小時上不重評（要「超過」）', () => {
+    const now = Date.parse('2026-08-02T10:00:00Z')
+    const lastMessageAt = new Date(now - WAITING_TIMEOUT_MS).toISOString()
+    expect(nextStatusOnConsumerMessage({ status: 'waiting_human', lastMessageAt, now })).toBe('waiting_human')
   })
 })
 

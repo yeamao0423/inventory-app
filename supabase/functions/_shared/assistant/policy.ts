@@ -7,7 +7,11 @@
 // AI 自動回覆可以整店關掉（stores.settings.ai_reply，預設關）。關掉時 bot 是「不可能狀態」——
 // 標著助理在服務、實際上沒有任何人會回話。所以每一條原本會落到 bot 的路徑都得吃 aiEnabled，
 // 一律改落 waiting_human。詳見 src/lib/customerInbox.js 的同段註解。
+//
+// waiting_human 原本沒有逃生門，跟 human 早就有的 30 分鐘閒置自動交還不對稱——
+// 2026-08-19 補上：沒人接手超過 12 小時視為冷掉，消費者下次發話重新評估 aiEnabled。
 export const IDLE_HANDBACK_MS = 30 * 60 * 1000;
+export const WAITING_TIMEOUT_MS = 12 * 60 * 60 * 1000;
 
 export type ConversationStatus = "bot" | "waiting_human" | "human" | "closed";
 
@@ -27,14 +31,17 @@ export function initialStatus({ aiEnabled = true }: { aiEnabled?: boolean } = {}
 
 /**
  * 消費者發話時對話該落到什麼狀態。
- * 只有兩種會變：真人接管後閒置太久自動交還、已關閉的對話被重新開啟。
+ * 會變的情況：真人接管後閒置太久自動交還、等真人太久沒人接手視為冷掉、
+ * 已關閉的對話被重新開啟。
  */
 export function nextStatusOnConsumerMessage(
-  { status, lastStaffAt, now = Date.now(), idleMs = IDLE_HANDBACK_MS, aiEnabled = true }: {
+  { status, lastStaffAt, lastMessageAt, now = Date.now(), idleMs = IDLE_HANDBACK_MS, waitingTimeoutMs = WAITING_TIMEOUT_MS, aiEnabled = true }: {
     status: ConversationStatus;
     lastStaffAt?: string | null;
+    lastMessageAt?: string | null;
     now?: number;
     idleMs?: number;
+    waitingTimeoutMs?: number;
     aiEnabled?: boolean;
   },
 ): ConversationStatus {
@@ -44,6 +51,11 @@ export function nextStatusOnConsumerMessage(
     const last = lastStaffAt ? new Date(lastStaffAt).getTime() : null;
     if (last !== null && now - last > idleMs) return idle;
     return "human";
+  }
+  if (status === "waiting_human") {
+    const last = lastMessageAt ? new Date(lastMessageAt).getTime() : null;
+    if (last !== null && now - last > waitingTimeoutMs) return idle;
+    return "waiting_human";
   }
   // AI 關掉之前建立的對話還停在 bot，這時候要把它接回真人佇列
   if (status === "bot" && !aiEnabled) return "waiting_human";

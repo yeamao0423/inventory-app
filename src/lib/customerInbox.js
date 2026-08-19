@@ -10,7 +10,13 @@
 //   bot →（助理舉手／消費者要求）→ waiting_human
 //   waiting_human →（店主接手）→ human
 //   human →（交還／閒置 30 分鐘）→ bot
+//   waiting_human →（沒人接手／閒置 12 小時）→ bot
 //   closed 由店主手動關閉，消費者再次發話會重新開啟
+//
+// waiting_human 原本沒有逃生門：不管店家後來有沒有開 AI，卡住的對話永遠卡著，
+// 只能靠店員手動「接管」再「交還」兩步驟解開。這跟 human 狀態早就有的 30 分鐘
+// 閒置自動交還不對稱——2026-08-19 補上：沒人接手超過 12 小時，視為對話已經冷掉，
+// 消費者下次發話時重新評估 aiEnabled，跟 human 的邏輯對齊。
 //
 // AI 自動回覆可以整店關掉（stores.settings.ai_reply，預設關）。關掉時 bot 是「不可能狀態」——
 // 標著助理在服務、實際上沒有任何人會回話。所以每一條原本會落到 bot 的路徑都得吃 aiEnabled，
@@ -18,6 +24,7 @@
 // aiEnabled 預設 true，呼叫端沒帶就是舊行為。
 
 export const IDLE_HANDBACK_MS = 30 * 60 * 1000
+export const WAITING_TIMEOUT_MS = 12 * 60 * 60 * 1000
 
 /** 助理是否該自動回覆這條對話。接管期間、以及整店關閉 AI 時靜音。 */
 export function shouldRunAssistant(status, { aiEnabled = true } = {}) {
@@ -32,10 +39,12 @@ export function initialStatus({ aiEnabled = true } = {}) {
 
 /**
  * 消費者發話時對話該落到什麼狀態。
- * 只有兩種會變：真人接管後閒置太久自動交還、已關閉的對話被重新開啟。
+ * 會變的情況：真人接管後閒置太久自動交還、等真人太久沒人接手視為冷掉、
+ * 已關閉的對話被重新開啟。
  */
 export function nextStatusOnConsumerMessage({
-  status, lastStaffAt, now = Date.now(), idleMs = IDLE_HANDBACK_MS, aiEnabled = true,
+  status, lastStaffAt, lastMessageAt, now = Date.now(),
+  idleMs = IDLE_HANDBACK_MS, waitingTimeoutMs = WAITING_TIMEOUT_MS, aiEnabled = true,
 }) {
   const idle = aiEnabled ? 'bot' : 'waiting_human'
   if (status === 'closed') return idle
@@ -44,6 +53,12 @@ export function nextStatusOnConsumerMessage({
     // 沒有任何真人訊息就視為剛接管，不算閒置
     if (last !== null && now - last > idleMs) return idle
     return 'human'
+  }
+  if (status === 'waiting_human') {
+    const last = lastMessageAt ? new Date(lastMessageAt).getTime() : null
+    // 沒帶 lastMessageAt（呼叫端沒查）就沒有依據，維持原狀，不猜
+    if (last !== null && now - last > waitingTimeoutMs) return idle
+    return 'waiting_human'
   }
   // AI 關掉之前建立的對話還停在 bot，這時候要把它接回真人佇列
   if (status === 'bot' && !aiEnabled) return 'waiting_human'
